@@ -1,10 +1,10 @@
-//! 从玩家留下的自由位置步行接回拓扑站点。只在同一行走空间内寻路，不穿门或瞬移；屋里没有
-//! 站点时走到门内一侧，就算站在门外画着的到达点上（见 `WalkMap::inside_door`）。
-//! 寻路和沿路线推进是行走地图与路线自己的规则；World 只取人物位置、障碍，再装上活动。
+//! 从玩家留下的自由位置步行接回拓扑站点。只在同一行走空间内寻路，不穿门或瞬移；屋里没�?
+//! 站点时走到门内一侧，就算站在门外画着的到达点上（�?`WalkMap::inside_door`）�?
+//! 寻路和沿路线推进是行走地图与路线自己的规则；World 只取人物位置、障碍，再装上活动�?
 //!
-//! 站的地方本身走不通（贴着可走地面的边、挨着道具）时，先迈到附近最近的走得通的一点再找路，
-//! 迈出去的那一小步不查通不通（`nearest_clear`）。大逃杀第二局里有人站在新放的道具跟前、
-//! 落在可走格子外面，之后每个动作都被拒，三个人卡到渴死。
+//! 站的地方本身走不通（贴着可走地面的边、挨着道具）时，先迈到附近最近的走得通的一点再找路�?
+//! 迈出去的那一小步不查通不通（`nearest_clear`）。大逃杀第二局里有人站在新放的道具跟前�?
+//! 落在可走格子外面，之后每个动作都被拒，三个人卡到渴死�?
 use crate::{
     avatar::{distance, Obstacle, Point, Spot, WalkMap, RADIUS},
     error::{KernelError, Result},
@@ -14,23 +14,23 @@ use crate::{
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};
 
-/// 网格寻路最多展开的格点数。
+/// 网格寻路最多展开的格点数�?
 const MAX_EXPANSIONS: usize = 20_000;
-/// 读档时接续路线点数的上限：寻路展开的格点数上限，加上起点和终点。
+/// 读档时接续路线点数的上限：寻路展开的格点数上限，加上起点和终点�?
 pub(crate) const MAX_WALK_POINTS: usize = MAX_EXPANSIONS + 2;
-/// 检查一段路线是否通畅时的采样步长（米）。
+/// 检查一段路线是否通畅时的采样步长（米）�?
 const SEGMENT_STEP: f64 = 0.1;
-/// 网格寻路的格距（米）。
+/// 网格寻路的格距（米）�?
 const GRID_STEP: f64 = 0.5;
-/// 只朝最近的这么多个站点寻路。
+/// 只朝最近的这么多个站点寻路�?
 const NEAREST_GOALS: usize = 16;
-/// 网格点离目标站点不超过这个距离（米）且连线通畅时，直接走过去。
+/// 网格点离目标站点不超过这个距离（米）且连线通畅时，直接走过去�?
 const GOAL_REACH: f64 = 2.0;
-/// 站的地方走不通时，往外找走得通的一点：每圈往外多这么多米，最远找到这么远。
+/// 站的地方走不通时，往外找走得通的一点：每圈往外多这么多米，最远找到这么远�?
 const ESCAPE_STEP: f64 = 0.25;
 const ESCAPE_REACH: f64 = 3.0;
-/// 网格代价：直走一格 1000、斜走一格 1414（约 1000 × √2），即每米 2000；
-/// 启发值按同一比例把到最近目标的直线距离折成代价。
+/// 网格代价：直走一�?1000、斜走一�?1414（约 1000 × �?），即每�?2000�?
+/// 启发值按同一比例把到最近目标的直线距离折成代价�?
 const STRAIGHT_COST: u64 = 1000;
 const DIAGONAL_COST: u64 = 1414;
 const COST_PER_METRE: f64 = STRAIGHT_COST as f64 / GRID_STEP;
@@ -45,7 +45,7 @@ pub struct FreeWalk {
 type Cell = (i32, i32);
 
 impl WalkMap {
-    /// 两点之间整段通畅：同一空间，按采样步长逐点检查人物半径内没有阻挡。
+    /// 两点之间整段通畅：同一空间，按采样步长逐点检查人物半径内没有阻挡�?
     pub(crate) fn segment_clear(&self, a: &Spot, b: &Spot, obstacles: &[Obstacle]) -> bool {
         if a.space != b.space {
             return false;
@@ -67,8 +67,8 @@ impl WalkMap {
         })
     }
 
-    /// 离 start 最近的一个走得通的点（同一空间、人物半径内没有阻挡、在某个区域里），由近到远一圈圈找，
-    /// 最远 ESCAPE_REACH 米；`same_locale` 时只要和 start 同一处所的点。找不到时为 None。
+    /// �?start 最近的一个走得通的点（同一空间、人物半径内没有阻挡、在某个区域里），由近到远一圈圈找，
+    /// 最�?ESCAPE_REACH 米；`same_locale` 时只要和 start 同一处所的点。找不到时为 None�?
     pub(crate) fn nearest_clear(
         &self,
         start: &Spot,
@@ -103,8 +103,8 @@ impl WalkMap {
         None
     }
 
-    /// 可以接回的站点：同一空间、拓扑里也有（`known`）、本身不被挡住；同一处所里有就只取
-    /// 同一处所的。按距离从近到远排好。
+    /// 可以接回的站点：同一空间、拓扑里也有（`known`）、本身不被挡住；同一处所里有就只�?
+    /// 同一处所的。按距离从近到远排好�?
     fn station_goals<'a>(
         &'a self,
         start: &Spot,
@@ -131,9 +131,9 @@ impl WalkMap {
         goals
     }
 
-    /// 屋里没有站点时接回的地方：门外画着的到达点，换到门内那一侧（`inside_door`，到达点上的人
-    /// 本来就画在那里）。跟着别人进了没摆道具的屋子停在门里的人，从这里接回路网（回声湾的灯塔：
-    /// 之前每次想走都报「当前空间没有可接续的导航站点」）。按距离从近到远排好。
+    /// 屋里没有站点时接回的地方：门外画着的到达点，换到门内那一侧（`inside_door`，到达点上的�?
+    /// 本来就画在那里）。跟着别人进了没摆道具的屋子停在门里的人，从这里接回路网（回声湾的灯塔�?
+    /// 之前每次想走都报「当前空间没有可接续的导航站点」）。按距离从近到远排好�?
     fn door_goals(
         &self,
         start: &Spot,
@@ -158,7 +158,7 @@ impl WalkMap {
         goals
     }
 
-    /// 从 start 走回最近能到的站点：通常直线可达；复杂家具之间用网格寻路。
+    /// �?start 走回最近能到的站点：通常直线可达；复杂家具之间用网格寻路�?
     fn route_to_station(
         &self,
         start: Spot,
@@ -177,7 +177,7 @@ impl WalkMap {
         self.grid_route(start, goals, obstacles)
     }
 
-    /// 以起点为原点的网格 A* 寻路，最多展开 MAX_EXPANSIONS 个格点。
+    /// 以起点为原点的网�?A* 寻路，最多展开 MAX_EXPANSIONS 个格点�?
     fn grid_route(
         &self,
         start: Spot,
@@ -247,7 +247,7 @@ impl WalkMap {
     }
 }
 
-/// 八个相邻格点和走过去的代价。
+/// 八个相邻格点和走过去的代价�?
 fn neighbours((x, y): Cell) -> impl Iterator<Item = (Cell, u64)> {
     (-1i32..=1)
         .flat_map(move |dx| (-1i32..=1).map(move |dy| (dx, dy)))
@@ -263,7 +263,7 @@ fn neighbours((x, y): Cell) -> impl Iterator<Item = (Cell, u64)> {
 }
 
 impl FreeWalk {
-    /// 路线总长（米）。
+    /// 路线总长（米）�?
     pub(crate) fn length(&self) -> f64 {
         self.points
             .windows(2)
@@ -271,7 +271,7 @@ impl FreeWalk {
             .sum()
     }
 
-    /// 从 here 沿路线走 metres 米，返回走到的位置；路线被挡住时报错，调用方保留原位置。
+    /// �?here 沿路线走 metres 米，返回走到的位置；路线被挡住时报错，调用方保留原位置�?
     pub(crate) fn advance(
         &mut self,
         map: &WalkMap,
@@ -295,7 +295,7 @@ impl FreeWalk {
                 space: here.space.clone(),
                 position: p,
             };
-            // 站的地方本身走不通时，往外迈的这一步不查（见 nearest_clear）
+            // 站的地方本身走不通时，往外迈的这一步不查（�?nearest_clear�?
             ensure!(
                 map.segment_clear(&here, &target, obstacles)
                     || !map.clear(&here.space, here.position, obstacles, RADIUS),
@@ -312,8 +312,8 @@ impl FreeWalk {
         Ok(here)
     }
 
-    /// 读档校验：点数与进度合法，终点就是拓扑与行走地图里同一个站点（或它门内的那一侧），
-    /// 全程在同一空间的区域内。进度 0 是还在往第一个点走（从走不通的地方迈出来的路线）。
+    /// 读档校验：点数与进度合法，终点就是拓扑与行走地图里同一个站点（或它门内的那一侧）�?
+    /// 全程在同一空间的区域内。进�?0 是还在往第一个点走（从走不通的地方迈出来的路线）�?
     pub(crate) fn validate(&self, topo: &Topology, map: Option<&WalkMap>) -> Result<()> {
         ensure!(
             self.points.len() >= 2
@@ -331,12 +331,12 @@ impl FreeWalk {
                 .is_some_and(|(m, s)| [s.clone(), m.inside_door(s)]
                     .iter()
                     .any(|end| end.space == last.space && end.position == last.position)),
-            KernelError::snapshot("接续路线终点与站点不一致")
+            KernelError::snapshot("接续路线终点与站点不一�?)
         );
         for p in &self.points {
             ensure!(
                 p.space == last.space,
-                KernelError::snapshot("接续路线不能跨空间")
+                KernelError::snapshot("接续路线不能跨空�?)
             );
             ensure!(
                 p.position.iter().all(|v| v.is_finite())
@@ -349,7 +349,7 @@ impl FreeWalk {
 }
 
 impl World {
-    /// 人物从当前自由位置走回最近能到的拓扑站点的路线。
+    /// 人物从当前自由位置走回最近能到的拓扑站点的路线�?
     pub(crate) fn free_route(&self, actor: &str) -> Result<FreeWalk> {
         let map = self
             .walk_map
@@ -374,7 +374,7 @@ impl World {
         map.route_to_station(start.clone(), &goals, &obstacles)
             .or_else(|| {
                 // 站的地方本身走不通：先迈到最近走得通的一点，再从那里找路。路线从那一点开始，
-                // 进度停在 0（先走到第一个点）；站的地方不进路线，存档里的路线点都在区域里。
+                // 进度停在 0（先走到第一个点）；站的地方不进路线，存档里的路线点都在区域里�?
                 if map.clear(&start.space, start.position, &obstacles, RADIUS) {
                     return None;
                 }
@@ -412,7 +412,7 @@ impl World {
         Ok(())
     }
 
-    /// 接续行走推进 minutes 分钟；被挡住时报错，位置不变。
+    /// 接续行走推进 minutes 分钟；被挡住时报错，位置不变�?
     pub(crate) fn advance_free_walk(&mut self, actor: &str, minutes: f64) -> Result<()> {
         if self.actors[actor].free_walk.is_none() {
             return Ok(());
