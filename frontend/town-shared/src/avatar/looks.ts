@@ -114,10 +114,18 @@ export function lookChoice(looks: readonly AvatarLook[] | null) {
     initial: (hasLooks && rememberedLookColor()) || looks?.[0]?.color || PRESET_COLORS[0],
     picker: (initial: string, onChange: (color: string) => void) =>
       hasLooks && looks ? lookPicker(looks, initial, onChange) : colorPicker(initial, onChange),
-    /** 进入小镇或保存形象的命令；挑的是外观时记住它，下次默认选中 */
-    command(kind: 'enter' | 'profile', name: string, color: string): AvatarCommand {
+    /** 进入小镇或保存形象的命令；挑的是外观时记住它，下次默认选中。
+     *  avatar：接着当上次那个化身（离开小镇后再回来），不带就由内核分配 */
+    command(
+      kind: 'enter' | 'profile',
+      name: string,
+      color: string,
+      avatar?: string
+    ): AvatarCommand {
       if (hasLooks) rememberLookColor(color)
-      return { kind, name: name.trim() || '旅人', appearance: { marker: '我', color } }
+      const profile = { name: name.trim() || '旅人', appearance: { marker: '我', color } }
+      if (kind === 'profile') return { kind, ...profile }
+      return avatar ? { kind, avatar, ...profile } : { kind, ...profile }
     },
     paintDot: (dot: HTMLElement, color: string) => paintLookDot(dot, looks, color),
   }

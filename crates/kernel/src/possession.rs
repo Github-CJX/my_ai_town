@@ -151,32 +151,71 @@ impl World {
         }
     }
 
+    /// 世界上第一个被附身的村民：单人玩法唯一，多人玩法只作兜底（宿主按连接指定目标）。
     pub fn possessed(&self) -> Option<&Actor> {
         self.actors.values().find(|a| a.possession.is_some())
     }
+    /// 这个演员被附身时的本体；没有被附身返回 None。
+    pub fn possessed_actor(&self, id: &str) -> Option<&Actor> {
+        self.actors.get(id).filter(|a| a.possession.is_some())
+    }
+    /// 单人玩法的控制目标编号：有附身就是那个村民，否则是化身。多人玩法不走这里。
     pub fn player_id(&self) -> &str {
-        self.possessed().map_or(avatar::ID, |a| a.id.as_str())
+        if let Some(a) = self.possessed() {
+            return a.id.as_str();
+        }
+        self.avatar().map_or(avatar::ID, |a| a.id.as_str())
     }
     pub fn player_control(&self) -> Option<&Control> {
         self.actors.get(self.player_id())?.control()
     }
-    pub(crate) fn player_control_mut(&mut self) -> Option<&mut Control> {
+    /// 按演员编号取控制账本：化身和附身的村民各有一份。
+    pub fn actor_control(&self, id: &str) -> Option<&Control> {
+        self.actors.get(id)?.control()
+    }
+    pub(crate) fn actor_control_mut(&mut self, id: &str) -> Option<&mut Control> {
+        self.actors.get_mut(id)?.control_mut()
+    }
+    /// 单人玩法的控制账本：与 `player_control` 对应的可写版本。
+    pub fn player_control_mut(&mut self) -> Option<&mut Control> {
         let id = self.player_id().to_owned();
         self.actors.get_mut(&id)?.control_mut()
     }
+    /// 所有正被附身的村民编号：重启后连接都没了，要把这些身体交还给 AI。
+    pub fn possessed_ids(&self) -> Vec<String> {
+        self.actors
+            .values()
+            .filter(|a| a.possession.is_some())
+            .map(|a| a.id.clone())
+            .collect()
+    }
+    /// 这个演员是不是正被某个页面附身（化身不带附身）。
+    pub fn is_possessed(&self, id: &str) -> bool {
+        self.actors.get(id).is_some_and(|a| a.possession.is_some())
+    }
+    /// 单人玩法：世界里只允许一个控制者，且要等在场化身都退出。
     pub fn possess(&mut self, id: &str) -> Result<()> {
         ensure!(
             self.possessed().is_none(),
             KernelError::action("请先交还当前村民")
         );
         ensure!(
-            !self.avatar().is_some_and(|a| a.present()),
+            !self.avatars().any(|a| a.present()),
             KernelError::action("请先退出化身")
         );
+        self.possess_actor(id)
+    }
+    /// 多人玩法：按演员编号接管村民，和别的页面控制什么无关。
+    /// 同一个村民不能同时被两处控制：抢占由宿主先争，这里是最后一道。
+    pub fn possess_actor(&mut self, id: &str) -> Result<()> {
         let a = self
             .actors
             .get(id)
             .ok_or_else(|| KernelError::NoSuchActor(id.into()))?;
+        ensure!(
+            a.possession.is_none(),
+            KernelError::action("这个村民正在别的页面手里")
+        );
         a.check_possessable()?;
         ensure!(
             self.walk_map.is_some(),
@@ -194,32 +233,56 @@ impl World {
         self.sync_walk_member(id);
         Ok(())
     }
-    /// 附身等待到达的村民已经走到可以交给玩家的位置：`activate_possession` 会生效。
-    pub fn possession_arrived(&self) -> bool {
-        self.possessed()
+    /// 这个附身目标已经走到能交给玩家的位置：`activate_possession_of` 会生效。
+    pub fn possession_arrived_of(&self, id: &str) -> bool {
+        self.actors
+            .get(id)
             .filter(|a| a.possession.as_ref().is_some_and(|c| c.awaiting_arrival))
             .is_some_and(|a| self.actor_spot(&a.id).is_some())
     }
-    pub fn activate_possession(&mut self) -> bool {
-        if !self.possession_arrived() {
+    pub fn activate_possession_of(&mut self, id: &str) -> bool {
+        if !self.possession_arrived_of(id) {
             return false;
         }
-        let id = self.possessed().expect("刚确认有附身目标").id.clone();
-        let spot = self.actor_spot(&id).expect("刚确认有位置");
-        let a = self.actor_mut(&id);
+        let spot = self.actor_spot(id).expect("刚确认有位置");
+        let a = self.actor_mut(id);
         a.locus = spot.locus();
-        a.possession.as_mut().unwrap().awaiting_arrival = false;
+        a.possession
+            .as_mut()
+            .expect("刚确认有附身目标")
+            .awaiting_arrival = false;
         a.actions.bump_revision();
         true
     }
-    pub fn release_possession(&mut self) -> Option<String> {
-        let id = self.possessed()?.id.clone();
+    /// 单人玩法口径：世界里唯一那个附身还在路上的判断。
+    pub fn possession_arrived(&self) -> bool {
+        self.possessed()
+            .is_some_and(|a| self.possession_arrived_of(&a.id))
+    }
+    pub fn activate_possession(&mut self) -> bool {
+        match self.possessed().map(|a| a.id.clone()) {
+            Some(id) => self.activate_possession_of(&id),
+            None => false,
+        }
+    }
+    /// 多人玩法：把指定村民交还给 AI。
+    pub fn release_possession_of(&mut self, id: &str) -> Option<String> {
+        let id = self
+            .actors
+            .get(id)
+            .filter(|a| a.possession.is_some())
+            .map(|a| a.id.clone())?;
         let a = self.actor_mut(&id);
         a.possession = None;
         a.actions.bump_revision();
         // 交还的同行跟随者重新由世界带着走
         self.sync_walk_member(&id);
         Some(id)
+    }
+    /// 单人玩法口径：把世界里唯一那个村民交还给 AI。
+    pub fn release_possession(&mut self) -> Option<String> {
+        let id = self.possessed()?.id.clone();
+        self.release_possession_of(&id)
     }
     /// 读档校验：玩家行为记录、附身状态、接续行走与自由位置。
     pub(crate) fn validate_player_actor(&self, a: &Actor) -> Result<()> {

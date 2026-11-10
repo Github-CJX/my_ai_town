@@ -40,8 +40,8 @@ pub use actions::{
 pub use avatar::{
     ApproachPerson, AvatarActor, AvatarChatItem, AvatarCommand, AvatarGoal, AvatarInteraction,
     AvatarLease, AvatarMode, AvatarPairItem, AvatarPose, AvatarPropView, AvatarResultCode,
-    AvatarSession, AvatarSight, AvatarState, AvatarView, AvatarWalk, MiracleKind, NearbyPerson,
-    PortalView, PositionAck, RecentEvent,
+    AvatarSession, AvatarState, AvatarView, AvatarWalk, MiracleKind, NearbyPerson, PortalView,
+    PositionAck, RecentEvent,
 };
 pub use chat::{
     ChatEntry, ChatEntryKind, ChatObservation, ChatPresence, ChatProposal, ChatState, ChatSummary,

@@ -10,6 +10,8 @@ dist-ssr/
 # --- Rust ---
 # Cargo.lock 入库：host 是二进制。
 target/
+# 验证用的构建目录（cargo test --target-dir target-verify），不入库
+target-verify/
 **/*.rs.bk
 
 # --- 本地运行状态 ---

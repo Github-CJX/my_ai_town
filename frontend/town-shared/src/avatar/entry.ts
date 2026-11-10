@@ -1,13 +1,14 @@
 // 化身入口：观察模式底部居中的入口按钮，和进入小镇的对话框。
-import type { AvatarCommand, AvatarState } from './types'
+import type { AvatarCommand } from './types'
 import type { LookChoice } from './looks'
 import { field, keycap, markerSvg } from './view'
 import { isTouch } from '../platform'
 import { button, el } from '../dom'
 
-type Actor = NonNullable<AvatarState['actor']>
+/** 入口和对话框要知道的「我」：还认得的话带编号，再回来就是同一个人 */
+export type EntrySelf = { id?: string; name: string; color: string }
 
-function entryPill(openDialog: () => void) {
+function entryPill(continueEntry: () => void) {
   const pill = el('button')
   pill.type = 'button'
   pill.className = 'avatar-enter'
@@ -18,7 +19,7 @@ function entryPill(openDialog: () => void) {
     sub = el('small')
   dot.className = 'avatar-dot'
   pill.append(dot, text, sub)
-  pill.onclick = () => openDialog()
+  pill.onclick = () => continueEntry()
   return { pill, dot, text, sub }
 }
 
@@ -50,6 +51,8 @@ function entryDialog(
   name.value = '旅人'
   name.required = true
   name.setAttribute('aria-label', '化身名字')
+  // 还认得自己时带上编号：提交后接着当上次那个化身，回到上次的位置
+  let avatarId: string | undefined
   const refreshPreview = () => {
     if (!choice.hasLooks) previewMark.replaceChildren(markerSvg(picker.value, 56))
   }
@@ -72,9 +75,28 @@ function entryDialog(
   backdrop.append(dialog)
   dialog.onsubmit = (e) => {
     e.preventDefault()
-    void execute(choice.command('enter', name.value, picker.value))
+    const send = (id: string | undefined) =>
+      execute(choice.command('enter', name.value, picker.value, id))
+    void send(avatarId).then((ok) => {
+      if (ok || avatarId === undefined) return
+      // 记着的编号已经不归我们（复制了标签页、或另一个页面正握着它）：别再卡着报同样的错
+      avatarId = undefined
+      void send(undefined)
+    })
   }
-  return { backdrop, title, name, picker, refreshPreview, hint, enter }
+  return {
+    backdrop,
+    title,
+    name,
+    picker,
+    refreshPreview,
+    hint,
+    enter,
+    /** 提交时带着这个编号进场：接着当上次那个化身 */
+    setAvatar(id: string | undefined) {
+      avatarId = id
+    },
+  }
 }
 
 /** 对话框里的说明：从哪里出现、怎样走动和互动。 */
@@ -107,11 +129,13 @@ export function createAvatarEntry(
   choice: LookChoice,
   handlers: {
     openDialog: () => void
+    /** 入口按钮：还认得自己就直接回去，认不出才打开对话框 */
+    continueEntry: () => void
     closeDialog: () => void
     execute: (command: AvatarCommand) => Promise<boolean>
   }
 ) {
-  const pill = entryPill(handlers.openDialog)
+  const pill = entryPill(handlers.continueEntry)
   const dialog = entryDialog(choice, handlers.closeDialog, handlers.execute)
   const { backdrop, picker } = dialog
   // 游戏界面快捷栏上的「进入小镇」跟着入口是否可用
@@ -129,16 +153,17 @@ export function createAvatarEntry(
       listeners.add(listener)
       listener(available)
     },
-    /** 打开对话框；回到小镇时填上次的名字和颜色 */
-    open(actor: Actor | null | undefined) {
-      if (actor) {
-        dialog.name.value = actor.name
-        picker.set(actor.appearance.color)
+    /** 打开对话框；回到小镇时填上次的名字和外观（记得自己就带编号，回来还是同一个人） */
+    open(self: EntrySelf | null) {
+      dialog.setAvatar(self?.id)
+      dialog.name.value = self?.name || '旅人'
+      if (self) {
+        picker.set(self.color)
         dialog.refreshPreview()
       }
-      dialog.title.textContent = actor ? '回到小镇' : '进入小镇'
-      dialog.enter.textContent = actor ? '回到上次的位置' : '进入小镇'
-      showHint(dialog.hint, !!actor)
+      dialog.title.textContent = self ? '回到小镇' : '进入小镇'
+      dialog.enter.textContent = self ? '回到上次的位置' : '进入小镇'
+      showHint(dialog.hint, !!self)
       backdrop.hidden = false
       pill.pill.hidden = true
       // 触屏上聚焦会弹出键盘盖住半屏，等玩家自己点名字框
@@ -148,31 +173,34 @@ export function createAvatarEntry(
       }
     },
     /** 入口按钮跟着控制与连接状态变；进入控制后对话框自动关掉。
-     *  supported：这个世界开放了化身控制 */
+     *  supported：这个世界开放了化身控制；actor：本页自己的化身（控制中或记得的自己） */
     render(view: {
       supported: boolean
       controlling: boolean
       online: boolean
       occupied: boolean
-      actor?: Actor | null
+      /** 别的页面正在玩的化身有几个：本页只是围观时写在入口按钮上 */
+      watching?: number
+      actor?: EntrySelf | null
     }) {
       if (view.controlling && !backdrop.hidden) backdrop.hidden = true
       pill.pill.hidden = view.controlling || !backdrop.hidden
-      pill.pill.disabled = !view.online || view.occupied
-      pill.text.textContent = !view.online
-        ? '等小镇连上…'
-        : view.occupied
-          ? '已有页面控制人物'
-          : view.actor
-            ? '继续化身'
-            : '进入化身'
-      pill.sub.textContent = view.actor && view.online && !view.occupied ? view.actor.name : ''
+      // 别的页面在玩不再挡住本页：一个世界可以有多个化身，本页另开一个自己的。
+      pill.pill.disabled = !view.online
+      pill.text.textContent = !view.online ? '等小镇连上…' : view.actor ? '继续化身' : '进入化身'
+      const watching = view.controlling ? 0 : (view.watching ?? 0)
+      pill.sub.textContent =
+        view.actor && view.online
+          ? watching > 0
+            ? `围观中 · ${watching} 人在玩`
+            : view.actor.name
+          : ''
       const next = view.supported && !pill.pill.disabled
       if (next !== available) {
         available = next
         for (const listener of listeners) listener(next)
       }
-      choice.paintDot(pill.dot, view.actor?.appearance.color ?? picker.value)
+      choice.paintDot(pill.dot, view.actor?.color ?? picker.value)
     },
   }
 }

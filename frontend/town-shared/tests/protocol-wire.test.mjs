@@ -44,7 +44,7 @@ test('Rust 发出的每种消息样本都符合 protocol.ts 的类型', () => {
       files: ['samples.ts'],
     })
   )
-  // Windows 的 .bin/tsc 是给 cmd 用的包装脚本，Node 直接 spawn 会 ENOENT。
+  // 直接跑 typescript 的 JS 入口：Windows 的 .bin/tsc 是 sh 脚本，.cmd 又需要 shell:true 才能 spawn。
   const tsc = path.join(root, 'frontend/town-shared/node_modules/typescript/bin/tsc')
   const result = spawnSync(process.execPath, [tsc, '-p', dir], { encoding: 'utf8' })
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)

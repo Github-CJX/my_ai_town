@@ -13,12 +13,16 @@ use crate::{
 use command::{AvatarFailure, AvatarRequest};
 use lease::Lease;
 use protocol::{ClientMsg, ServerMsg};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-/// 每个世界一份：谁在控制、最近的方向输入、交谈轮到玩家后等了多久。不存档。
-#[derive(Clone, Default)]
+/// 一个连接的控制账本：控制谁、最近的方向输入、交谈轮到玩家后等了多久。不存档。
+/// 一个连接最多控制一个目标；多个连接各控各的化身，见 `Runtime::avatar_controls`。
+#[derive(Clone)]
 pub(crate) struct Control {
     lease: Option<Lease>,
+    /// 这个连接操控的演员编号：自己的化身（`player_avatar`、`player_avatar@2`…）或附身的村民。
+    avatar: String,
     direction: [f64; 2],
     /// 最近的方向输入按住了奔跑键。
     run: bool,
@@ -29,6 +33,22 @@ pub(crate) struct Control {
     /// 轮到玩家发言的聊天、当时的动作版本与已等待的时长。
     turn: Option<(String, u64, Duration)>,
     last_tick: Option<Instant>,
+}
+
+impl Default for Control {
+    fn default() -> Self {
+        Control {
+            lease: None,
+            avatar: kernel::avatar::ID.into(),
+            direction: [0., 0.],
+            run: false,
+            input_sequence: 0,
+            input_at: None,
+            moved_at: None,
+            turn: None,
+            last_tick: None,
+        }
+    }
 }
 
 impl Control {
@@ -42,17 +62,47 @@ impl Control {
 }
 
 impl Runtime {
+    /// 这个连接当前的租约；没有控制权时为空。
+    fn lease(&self, connection: u64) -> Option<&Lease> {
+        self.avatar_controls
+            .get(&connection)
+            .and_then(|c| c.lease.as_ref())
+    }
+
+    /// 这个连接操控的演员编号。
+    pub(crate) fn controlled_avatar(&self, connection: u64) -> Option<String> {
+        self.avatar_controls
+            .get(&connection)
+            .filter(|c| c.lease.is_some())
+            .map(|c| c.avatar.clone())
+    }
+
+    /// 还有没有别的连接在控制世界里的谁。
+    pub(crate) fn anyone_controlled(&self) -> bool {
+        self.avatar_controls.values().any(Control::held)
+    }
+
+    /// 这个化身是不是正握在别的连接手里（复制标签页会把 sessionStorage 一起带过去）。
+    /// 只算在线的租约：页面关掉后还在恢复窗口里的旧连接不该继续占着这具身体。
+    pub(crate) fn avatar_held_by_other(&self, connection: u64, avatar: &str) -> bool {
+        self.avatar_controls.iter().any(|(id, c)| {
+            *id != connection && c.avatar == avatar && c.lease.as_ref().is_some_and(|l| l.online())
+        })
+    }
+
     pub(crate) fn network_command(&mut self, event: NetworkEvent, clients: &Clients) {
         match event {
             NetworkEvent::Disconnected(id) => {
                 if let Some(lease) = self
-                    .avatar_control
-                    .lease
-                    .as_mut()
+                    .avatar_controls
+                    .get_mut(&id)
+                    .and_then(|c| c.lease.as_mut())
                     .filter(|l| l.connection == id)
                 {
                     lease.disconnect(Instant::now());
-                    self.avatar_control.halt();
+                    if let Some(control) = self.avatar_controls.get_mut(&id) {
+                        control.halt();
+                    }
                     // 存盘失败由检查点自己记日志；断线本身不需要回执。
                     let _ = self.checkpoint(true);
                 }
@@ -89,9 +139,7 @@ impl Runtime {
     /// 命令或输入带的控制代次必须是这个连接当前在线的租约。
     fn check_control(&self, connection: u64, epoch: &str) -> Result<(), AvatarFailure> {
         if self
-            .avatar_control
-            .lease
-            .as_ref()
+            .lease(connection)
             .is_some_and(|l| l.admits(connection, epoch))
         {
             Ok(())
@@ -101,23 +149,38 @@ impl Runtime {
     }
 
     /// 授予新租约：之前的输入、位置上报与交谈等待都清掉，内核记下新的控制代次。
-    fn grant_control(&mut self, connection: u64) {
+    fn grant_control(&mut self, connection: u64, avatar: String) {
         let lease = Lease::grant(connection);
-        self.world.avatar_control_epoch(lease.epoch.clone());
-        self.avatar_control = Control {
-            lease: Some(lease),
-            ..Default::default()
-        };
+        self.world
+            .avatar_control_epoch_of(&avatar, lease.epoch.clone());
+        self.avatar_controls.insert(
+            connection,
+            Control {
+                lease: Some(lease),
+                avatar,
+                ..Default::default()
+            },
+        );
     }
 
-    /// 每拍给在线的控制者发一次化身状态。
+    /// 每拍给每个在线的控制者发一次他自己的化身状态。
     pub(crate) fn avatar_publish(&self, clients: &Clients) {
-        if let Some(lease) = self.avatar_control.lease.as_ref().filter(|l| l.online()) {
+        let online: BTreeMap<u64, _> = self
+            .avatar_controls
+            .iter()
+            .filter_map(|(connection, c)| {
+                c.lease
+                    .as_ref()
+                    .filter(|l| l.online())
+                    .map(|l| (*connection, l.connection))
+            })
+            .collect();
+        for connection in online.into_values() {
             network::send_to(
                 clients,
-                lease.connection,
+                connection,
                 &ServerMsg::AvatarState {
-                    state: self.avatar_session(lease.connection),
+                    state: self.avatar_session(connection),
                 },
             );
         }

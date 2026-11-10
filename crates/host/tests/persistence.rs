@@ -3,11 +3,7 @@ use crate::{
     avatar::{command, state},
     support::*,
 };
-use host::{
-    clock::ClockSave,
-    persistence::{Checkpoint, SaveStore},
-    world_settings::WorldSettings,
-};
+use host::{persistence::SaveStore, world_settings::WorldSettings};
 use serde_json::{json, Value};
 use std::{fs, net::TcpStream, time::Instant};
 use tungstenite::WebSocket;
@@ -132,34 +128,6 @@ fn tiny_world() -> kernel::World {
 }
 
 #[test]
-fn clock_anchor_and_timezone_survive_restart_without_advancing_world_time() {
-    let _no_spawns = hold_spawns();
-    let town = Town::empty();
-    let path = town.dir.join("world-clock.json");
-    let mut store = SaveStore::open(&path, "fixture-v1".into()).unwrap();
-    let mut w = tiny_world();
-    let clock = ClockSave::new(Some("Europe/Berlin".into())).stamped(w.minutes());
-    store
-        .checkpoint_bundle(
-            Checkpoint {
-                world: &w,
-                speed: 0.0,
-                world_settings: &WorldSettings::default(),
-                clock: &clock,
-                population: None,
-            },
-            || None,
-            true,
-        )
-        .unwrap();
-    let restored = store.restore_bundle(&mut w).unwrap().unwrap();
-    assert_eq!(restored.clock.timezone, "Europe/Berlin");
-    assert_eq!(restored.clock.last_saved_minutes, 420.0);
-    assert!(restored.clock.restart_gap_seconds < 5);
-    assert_eq!(w.minutes(), 420.0);
-}
-
-#[test]
 fn bad_or_incompatible_save_is_preserved_and_exclusive_lock_is_released() {
     let _no_spawns = hold_spawns();
     let town = Town::empty();
@@ -170,34 +138,14 @@ fn bad_or_incompatible_save_is_preserved_and_exclusive_lock_is_released() {
     w.note_thought("r1", "这件事要记得。", "测试");
     let settings = WorldSettings::default();
     store
-        .checkpoint_bundle(
-            Checkpoint {
-                world: &w,
-                speed: 0.0,
-                world_settings: &settings,
-                clock: &Default::default(),
-                population: None,
-            },
-            || None,
-            true,
-        )
+        .checkpoint_bundle(&w, 0.0, &settings, None, || None, true)
         .unwrap();
     let original = fs::read(&path).unwrap();
     let blocked_temp = town.dir.join("world.tmp.tmp");
     fs::create_dir(&blocked_temp).unwrap();
     w.note_thought("r1", "这次写入会失败。", "测试");
     assert!(store
-        .checkpoint_bundle(
-            Checkpoint {
-                world: &w,
-                speed: 0.0,
-                world_settings: &settings,
-                clock: &Default::default(),
-                population: None,
-            },
-            || None,
-            true,
-        )
+        .checkpoint_bundle(&w, 0.0, &settings, None, || None, true)
         .is_err());
     assert_eq!(fs::read(&path).unwrap(), original);
     fs::remove_dir(&blocked_temp).unwrap();

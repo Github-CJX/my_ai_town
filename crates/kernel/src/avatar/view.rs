@@ -18,8 +18,12 @@ impl World {
     /// 玩家操控的人的步速（见 WALK_PACE、RUN_PACE）；没有行走地图时为空。
     /// 带人走时放慢、按奔跑也不加快（见 World::player_pace）。
     pub fn avatar_walk(&self) -> Option<protocol::AvatarWalk> {
+        self.avatar_walk_of(self.player_id())
+    }
+
+    /// 指定化身的步速：多人同镇时每个页面按自己的化身收走速。
+    pub fn avatar_walk_of(&self, actor: &str) -> Option<protocol::AvatarWalk> {
         let map = self.walk_map.as_ref()?;
-        let actor = self.player_id();
         let walk = self.player_pace(actor, WALK_PACE);
         Some(protocol::AvatarWalk {
             metres_per_minute: map.metres_per_minute * walk,
@@ -28,10 +32,28 @@ impl World {
     }
 
     pub fn avatar_view(&self) -> AvatarView {
+        self.avatar_view_of(self.player_id())
+    }
+
+    /// 观察者（没有控制任何人的连接）看到的化身视图：只说地图支不支持化身、一格几米。
+    /// 别人的个人视图（够得着的人、互动、背包）一概不给——观察者只能看世界，不能借用别人的眼睛。
+    pub fn watching_view(&self) -> AvatarView {
+        match &self.walk_map {
+            None => AvatarView::Unsupported { supported: false },
+            Some(map) => AvatarView::Empty {
+                actor: (),
+                supported: true,
+                units: map.svg_units_per_metre,
+            },
+        }
+    }
+
+    /// 指定化身的个人视图：谁在看世界，就只给他看自己够得着的东西。
+    pub fn avatar_view_of(&self, actor: &str) -> AvatarView {
         let Some(map) = &self.walk_map else {
             return AvatarView::Unsupported { supported: false };
         };
-        let Some(a) = self.actor(self.player_id()) else {
+        let Some(a) = self.actor(actor) else {
             return AvatarView::Empty {
                 actor: (),
                 supported: true,
@@ -47,7 +69,7 @@ impl World {
         AvatarView::Present(Box::new(AvatarState {
             actor: b.actor(awaiting),
             awaiting_arrival: awaiting,
-            can_drop: b.reach.drop_station().is_some(),
+            can_drop: b.reach.drop_station_of(&a.id).is_some(),
             feedback: feedback(a),
             interactions: self
                 .interactions

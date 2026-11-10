@@ -6,7 +6,9 @@ import type { Speech } from './types'
 import './style.css'
 type Line = { actor: string; name: string; speech: Speech }
 type Bubble = { line: Line; button: HTMLButtonElement; left: number; choice?: number }
-/** 显示实际台词，连续发言时保留最新一句，完整顺序见历史；暂停后保留最后一句。 */
+/** 一个人在这场聊天里的位置：同一场聊天每个人各占一个气泡，谁说话都看得见。 */
+const slotOf = (line: Line) => `${line.speech.chat_id}#${line.actor}`
+/** 显示实际台词，同一人连续发言时保留最新一句，完整顺序见历史；暂停后保留最后一句。 */
 export class ChatBubbles {
   private seen = new Map<string, string>()
   private queue: Line[] = []
@@ -38,11 +40,11 @@ export class ChatBubbles {
     }
     added.sort((a, b) => a.speech.at - b.speech.at || a.speech.seq - b.speech.seq)
     for (const line of added) {
-      const id = line.speech.chat_id
-      this.queue = this.queue.filter((v) => v.speech.chat_id !== id)
+      const slot = slotOf(line)
+      this.queue = this.queue.filter((v) => slotOf(v) !== slot)
       this.queue.push(line)
-      const current = this.active.get(id)
-      if (current) current.left = Math.min(current.left, 1800)
+      const current = this.active.get(slot)
+      if (current) current.left = Math.min(current.left, 2400)
     }
   }
   private tick(now: number) {
@@ -60,13 +62,13 @@ export class ChatBubbles {
       const pos = this.map.getScreenPos?.(actor)
       return pos && { x: pos[0], feet: pos[1], top: pos[1] - 40, half: 20 }
     }
-    for (const [id, bubble] of this.active) {
+    for (const [slot, bubble] of this.active) {
       // 暂停时先显示已经收到的最后一句，再冻结阅读，避免停在积压的旧台词上。
-      if (showing && (this.speed > 0 || this.queue.some((v) => v.speech.chat_id === id)))
+      if (showing && (this.speed > 0 || this.queue.some((v) => slotOf(v) === slot)))
         bubble.left -= dt
       if (bubble.left <= 0) {
         bubble.button.remove()
-        this.active.delete(id)
+        this.active.delete(slot)
         continue
       }
       const actor = bubble.line.actor
@@ -105,8 +107,9 @@ export class ChatBubbles {
     if (showing)
       for (let i = 0; i < this.queue.length && this.active.size < 4;) {
         const line = this.queue[i],
+          slot = slotOf(line),
           id = line.speech.chat_id
-        if (this.active.has(id)) {
+        if (this.active.has(slot)) {
           i++
           continue
         }
@@ -128,7 +131,7 @@ export class ChatBubbles {
           this.open(line.actor, id)
         }
         document.body.append(button)
-        this.active.set(id, {
+        this.active.set(slot, {
           line,
           button,
           left: Math.max(3500, Math.min(6000, 1800 + [...line.speech.text].length * 65)),

@@ -4,6 +4,7 @@
 import { createAvatarCommands } from './commands'
 import { createInvitations } from './invitations'
 import { resumeLease } from './lease'
+import { storedAvatar, type RememberedAvatar } from './identity'
 import { createAvatarNavigation } from './navigation'
 import { createAvatarUI, escapeKey, guardPointer, type AvatarUI } from './ui'
 import { createAvatarPanels, panelSignature, type AvatarPanelState } from './panels'
@@ -37,7 +38,7 @@ export interface AvatarDeps {
   sounds?: Pick<GameAudio, 'updateMovement' | 'playDescend'>
   /** 游戏界面 */
   game: boolean
-  /** 游戏界面打开化身面板时收起右栏的居民卡 */
+  /** 游戏界面打开化身面板时收起右栏的居民。 */
   collapseInfo: () => void
   /** 面板里「查看消耗」「设定」等链接 */
   openUsage: () => void
@@ -89,7 +90,7 @@ export function createAvatar(deps: AvatarDeps) {
     /** 隐藏地图前清掉移动输入 */
     stopMoving: () => avatar.stopMoving(),
     /** 打开进入小镇的对话框 */
-    openEntry: () => avatar.openDialog(),
+    openEntry: () => avatar.enterAgain(),
     /** 关掉进入小镇的对话框；原来开着就返回 true（返回键） */
     closeEntry: () => avatar.closeEntry(),
     onEntryChange: ui.entry.onAvailable,
@@ -116,6 +117,10 @@ export function createAvatar(deps: AvatarDeps) {
     nearest: (ids: string[]) => avatar.nearest(ids),
     onReset: () => avatar.reset(),
     active: () => avatar.owned(),
+    /** 别的页面正在玩的化身有几个；观察者的「围观中」标记据此显示 */
+    watching: () => avatar.watching(),
+    /** 化身通道通不通：通了才在顶栏挂「化身在场 / 围观中」的标记 */
+    supported: () => avatar.channelReady(),
     dispose: () => avatar.dispose(),
   }
 }
@@ -127,6 +132,8 @@ class AvatarController {
   private readonly listeners = new AbortController()
   private readonly invitations = createInvitations()
   private readonly lease: ReturnType<typeof resumeLease>
+  /** 这个标签页在这个世界里的化身：退出化身、离开小镇再回来时接着当同一个人 */
+  private readonly identity: ReturnType<typeof storedAvatar>
   private readonly footsteps: ReturnType<typeof movementSound>
   private readonly navigation: ReturnType<typeof createAvatarNavigation>
   private readonly commands: ReturnType<typeof createAvatarCommands>
@@ -147,7 +154,7 @@ class AvatarController {
   private state: AvatarState | null = null
   private world = ''
   private online = false
-  /** 化身命令的序号，换租约时从服务端给的值接着计 */
+  /** 化身命令的序号，换租约时从服务端给的值接着用 */
   private sequence = 0
   private tab: AvatarTab | null = null
   /** 面板上次重绘时的内容签名 */
@@ -188,7 +195,7 @@ class AvatarController {
         this.render()
       }
     })
-    // 跟随时滚轮围着化身缩放，人不会被缩到画面一边
+    // 跟随时滚轮围着化身缩放，人不会被缩到画面一角
     deps.map.setZoomAnchor?.(() => {
       const id = this.state?.actor?.id
       return id && this.owned() && this.following ? this.map.getScreenPos?.(id) : undefined
@@ -207,6 +214,7 @@ class AvatarController {
       () => this.world,
       (command) => this.execute(command)
     )
+    this.identity = storedAvatar(() => this.world)
     this.footsteps = movementSound(
       deps.sounds,
       () => this.state,
@@ -253,6 +261,7 @@ class AvatarController {
   private createActions(): AvatarActions {
     return {
       openDialog: () => this.openDialog(),
+      continueEntry: () => this.enterAgain(),
       closeDialog: () => this.closeDialog(),
       execute: (command) => this.execute(command),
       toggleTab: (tab) => this.toggleTab(tab),
@@ -302,7 +311,7 @@ class AvatarController {
     })
   }
 
-  /** 镜头重新跟上化身。按 C、点「回到化身」：把人慢慢挪回画面中间；
+  /** 镜头重新跟上化身。按 C、点「回到化身」：把人慢慢挪回画面中间。
    *  拖开地图后一开始走（centre 为 false）：只是重新跟着，人走出取景框才挪，离得太远才挪回中间 */
   private resumeFollowing(centre = true) {
     if (!this.owned() || (this.following && !centre)) return
@@ -387,7 +396,7 @@ class AvatarController {
     )
   }
 
-  /** Tab 在附近的对象间轮换当前对象，E 执行它 */
+  /** Tab 在附近的对象间轮换当前对象，E 执行。 */
   private cycleTarget(step: 1 | -1): boolean {
     if (!this.owned() || !mapVisible()) return false
     const list = this.targets()
@@ -409,7 +418,8 @@ class AvatarController {
 
   private async leave() {
     this.stopMoving()
-    if (!this.state?.controlled) return !this.state?.occupied
+    // 没有控制权也没有要交还的东西：别的页面在玩不影响本页离开；附身的村民归他，本页照样能走。
+    if (!this.state?.controlled) return true
     const ok = await this.execute({ kind: 'leave' })
     if (ok) {
       this.lease.store()
@@ -466,8 +476,61 @@ class AvatarController {
 
   openDialog() {
     const { state } = this
-    if (!this.online || state?.occupied) return
-    this.ui.entry.open(state?.actor)
+    if (!this.online) return
+    // 控制中用的是世界里的本人；没在控制就看本页记着自己是谁，都不认识就当作第一次来
+    const live =
+      state?.controlled && state.actor
+        ? { id: state.actor.id, name: state.actor.name, color: state.actor.appearance.color }
+        : null
+    this.ui.entry.open(live ?? this.me())
+  }
+
+  /** 本页记着的自己；没记过为 null */
+  private me(): RememberedAvatar | null {
+    return this.identity.read()
+  }
+
+  /** 这个世界的化身通道通不通：地图支持、世界也说支持。顶栏标记与半透明界面都看它 */
+  channelReady(): boolean {
+    return !!this.map.avatarSupported && !!this.state?.supported
+  }
+
+  /** 世界里有几个化身在场、而本页并没有控制：观察者页面用它说「围观中 · N 人在玩」。
+   *  名册只出现在场的演员，所以数化身就是数「别的页面正在玩的人」；不按编号排除自己——
+   *  本页记着的那个化身也可能正被别的页面控着。 */
+  watching(): number {
+    if (this.owned()) return 0
+    let count = 0
+    for (const m of this.members.values()) if (m.kind === 'avatar') count++
+    return count
+  }
+
+  /** 入口按钮：还认得自己就直接回到上次的位置，认不出才打开对话框选样子。
+   *  回不去（附身还没交还、这个化身已在场）时退回对话框，让玩家看到真正的原因 */
+  enterAgain() {
+    const { state } = this
+    if (!this.online || !state?.supported || !this.map.avatarSupported) return
+    if (this.owned()) return
+    const me = this.me()
+    if (!me) return this.openDialog()
+    this.reenter(me)
+  }
+
+  /** 回到自己上次的化身。编号已经不在我们手里（复制了标签页）就以新人的身份进场，别卡住 */
+  private reenter(me: RememberedAvatar) {
+    const look = { marker: '我', color: me.color }
+    void this.execute({
+      kind: 'enter',
+      avatar: me.id,
+      name: me.name,
+      appearance: look,
+    }).then((ok) => {
+      if (ok) return
+      this.identity.forget()
+      void this.execute({ kind: 'enter', name: me.name, appearance: look }).then((fresh) => {
+        if (!fresh) this.openDialog()
+      })
+    })
   }
 
   private closeDialog() {
@@ -517,18 +580,21 @@ class AvatarController {
     return true
   }
 
-  /** 进入化身：来过的直接回到上次的位置，第一次先选样子。进不去（断线、被别的页面占着）返回 false */
+  /** 进入化身：来过的直接回到上次的位置，第一次先选样子。进不去（断线、地图不支持）返回 false */
   private enterFirst() {
     const { state } = this
-    if (!this.online || state?.occupied || !this.map.avatarSupported || !state?.supported)
-      return false
-    const actor = state.actor
+    if (!this.online || !this.map.avatarSupported || !state?.supported) return false
+    // 只有控制中的 actor 才是本页的自己：没控制权时视图里的 actor 可能是别的页面的
+    const actor = state.controlled ? state.actor : null
+    const me = this.me()
     if (actor)
       void this.execute({
         kind: 'enter',
+        avatar: actor.id,
         name: actor.name,
         appearance: { marker: '我', color: actor.appearance.color },
       })
+    else if (me) this.reenter(me)
     else this.openDialog()
     return true
   }
@@ -701,7 +767,7 @@ class AvatarController {
     const a = state?.actor
     const controlling = this.owned()
     const possessing = state?.mode === 'possession'
-    // 退出化身常驻在操作条上（原来藏在「⋯」里）；游戏界面另有「离开小镇」槽钮
+    // 退出化身常驻在操作条上（原来藏在「⋯」里）；游戏界面另有「离开小镇」槽。
     ui.releaseBtn.hidden = !controlling || (!possessing && this.deps.game)
     const releaseLabel = possessing ? '交还 AI' : '退出化身'
     if (ui.releaseBtn.textContent !== (isTouch() ? '' : 'Esc') + releaseLabel)
@@ -709,15 +775,35 @@ class AvatarController {
     ui.profileMenu.hidden = possessing
     ui.leaveMenu.textContent = possessing ? '交还 AI' : '退出化身'
     const flag = document.getElementById('avatar-flag')
-    if (flag) flag.textContent = possessing && a ? `正在附身 · ${a.name}` : '化身在场'
+    const watching = this.watching()
+    if (flag) {
+      // 没有控制权就是观察者：别说「化身在场」（那是别人的），只说自己正在围观谁
+      if (possessing && a) flag.textContent = `正在附身 · ${a.name}`
+      else if (controlling) flag.textContent = '化身在场'
+      else flag.textContent = watching > 0 ? `围观中 · ${watching} 人在玩` : '围观中'
+      flag.title =
+        possessing || controlling
+          ? '这个页面在控制化身；这时世界按正常速度走，不自动快进'
+          : '这个页面还没有控制权，只看得到世界；点地图上的人或「进入化身」就能自己玩'
+    }
     const controlled = controlling
     map.setAvatarState?.(state ? { ...state, controlled } : null)
     map.setAvatarActive?.(controlling)
-    // 手机布局据此收起底部入口和最新事件那一行
+    // 手机布局据此收起底部入口和最新事件那一栏
     document.documentElement.classList.toggle('avatar-controlling', controlling)
     const occupied = !!state?.occupied
     const online = this.online
-    ui.entry.render({ supported: !ui.root.hidden, controlling, online, occupied, actor: a })
+    // 入口按钮上的「自己」：控制中是世界里的本人，否则是本页记着的那位（视图里的 actor
+    // 在没控制权时可能是别的页面的化身，不能拿来当自己的
+    const self = controlling && a ? { name: a.name, color: a.appearance.color } : this.me()
+    ui.entry.render({
+      supported: !ui.root.hidden,
+      controlling,
+      online,
+      occupied,
+      watching,
+      actor: self,
+    })
     ui.hud.hidden = !controlling
     if (this.deps.game) document.body.classList.toggle('player-mode', controlling)
     if (!controlling) ui.menu.hidden = true
@@ -763,6 +849,8 @@ class AvatarController {
       this.stopMoving()
     }
     if (next.resume_token) this.lease.store(next.resume_token)
+    // 记着自己是谁：退出化身或离开小镇再回来，用这个编号接着当同一个人
+    if (next.controlled && next.actor) this.identity.remember(next.actor)
     const { ui } = this
     if (next.actor && !ui.profile.contains(document.activeElement)) {
       ui.profileName.value = next.actor.name
@@ -781,7 +869,7 @@ class AvatarController {
     this.render()
   }
 
-  /** 刚拿到控制：放开输入框的焦点，记下原来的镜头，提示操作方法 */
+  /** 刚拿到控制：放开输入框的焦点，记下原来的镜头，提示操作方式 */
   private takeControl() {
     // 对话框里的输入框还握着焦点会被当成「正在输入」，方向键就发不出去
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()

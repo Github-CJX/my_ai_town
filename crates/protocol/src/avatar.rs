@@ -20,7 +20,11 @@ pub struct AvatarPose {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AvatarCommand {
     View,
+    /// 进入化身。带上编号就是接着当上次那个化身（同一标签页离开小镇后再回来，
+    /// 回到上次的位置、沿用名字与外观）；不带就由内核分配一个新编号。
     Enter {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        avatar: Option<String>,
         name: String,
         appearance: Appearance,
     },
@@ -255,8 +259,9 @@ pub struct AvatarPairItem {
 /// 线上按字段名字母序输出（`ServerMsg` 里经 `crate::sorted`），与改成结构体之前一致。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AvatarSession {
+    /// 本连接能看到什么：只有持有控制租约的连接拿到 `Present`，其余一律是 `Empty`（观察者）。
     #[serde(flatten)]
-    pub view: AvatarSight,
+    pub view: AvatarView,
     pub world_id: String,
     /// 化身走路的速度：正常速度的模拟分钟 / 现实秒，0 为暂停。
     pub speed: f64,
@@ -284,16 +289,8 @@ pub struct AvatarSession {
     pub position: Option<PositionAck>,
 }
 
-/// 本连接能看到什么。
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum AvatarSight {
-    /// 内核给出的化身视图。
-    Own(AvatarView),
-    /// 化身或附身目标正被另一个页面控制：只说明地图支持化身，不给视图。
-    Occupied { actor: (), supported: bool },
-}
-
+/// 本连接能看到什么。持有控制租约的连接拿到 `AvatarView::Present`；没有控制权的一律是
+/// `AvatarView::Empty`（观察者：能看到世界与别人在玩，但拿不到任何人的私人视图）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecentEvent {
     pub at: f64,

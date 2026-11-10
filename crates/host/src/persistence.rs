@@ -2,7 +2,6 @@
 use crate::HostError;
 use crate::{
     agent_worker::AgentSave,
-    clock::ClockSave,
     fnv::{fnv1a, FNV_OFFSET},
     population::Population,
     world_settings::{valid_speed, WorldSettings},
@@ -31,9 +30,6 @@ pub const SAVE_FILE_NAME: &str = "world.json";
 struct SaveFile {
     #[serde(default)]
     world_settings: WorldSettings,
-    /// v5 存档没有时钟锚点；读入时按默认时区、无锚点处理。
-    #[serde(default)]
-    clock: ClockSave,
     schema_version: u32,
     world_key: String,
     speed: f64,
@@ -54,18 +50,8 @@ struct SaveFile {
 pub struct Restored {
     pub speed: f64,
     pub world_settings: WorldSettings,
-    pub clock: ClockSave,
     pub agent: Option<AgentSave>,
     pub population: Option<Population>,
-}
-
-/// 一次检查点要写入的世界状态；时钟和速度一起落盘，避免出现“世界走了、锚点没走”的半份状态。
-pub struct Checkpoint<'a> {
-    pub world: &'a World,
-    pub speed: f64,
-    pub world_settings: &'a WorldSettings,
-    pub clock: &'a ClockSave,
-    pub population: Option<&'a Population>,
 }
 
 pub struct SaveStore {
@@ -249,12 +235,10 @@ impl SaveStore {
             self.residents.publish(&saved.resident_files)?;
         }
         saved.world_settings.validate()?;
-        saved.clock.validate()?;
         self.previous = bytes;
         Ok(Some(Restored {
             speed: saved.speed,
             world_settings: saved.world_settings,
-            clock: saved.clock.after_restart(),
             agent: saved.resident_agent,
             population: saved.population,
         }))
@@ -317,25 +301,20 @@ impl SaveStore {
     /// Agent 会话要整份克隆，`resident_agent` 在节流判断之后才调用。
     pub fn checkpoint_bundle(
         &mut self,
-        checkpoint: Checkpoint<'_>,
+        world: &World,
+        speed: f64,
+        world_settings: &WorldSettings,
+        population: Option<&Population>,
         resident_agent: impl FnOnce() -> Option<AgentSave>,
         force: bool,
     ) -> Result<bool, HostError> {
         if !force && self.last_check.elapsed() < AUTOSAVE_INTERVAL {
             return Ok(false);
         }
-        let Checkpoint {
-            world,
-            speed,
-            world_settings,
-            clock,
-            population,
-        } = checkpoint;
         let mut resident_agent = resident_agent();
         let resident_files = self.residents.stage(world, &mut resident_agent)?;
         let saved = SaveFile {
             world_settings: world_settings.clone(),
-            clock: clock.clone(),
             schema_version: SCHEMA_VERSION,
             resident_files,
             world_key: self.world_key.clone(),

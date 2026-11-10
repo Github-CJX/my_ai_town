@@ -117,7 +117,10 @@ export function createPanels(input: ShellInputs) {
     onOpenMemory: withSelected((r) => {
       if (!session.inSettings()) pages.memory.open(r)
     }),
-    onSelectResident: (id) => send({ type: 'get_agent_config', resident: id }),
+    // 只问居民：名册里的化身（自己的、别人页面的）没有 Agent 设定，问下去只会得到「查无此人」
+    onSelectResident: (id) => {
+      if (observed.has(id)) send({ type: 'get_agent_config', resident: id })
+    },
     onSelectionChange: () => chatHistory.residentChanged(),
     onSelected: () => strip.select(),
     avatarActive: () => avatar.active(),
@@ -249,7 +252,7 @@ export function createPanels(input: ShellInputs) {
   })
   worldSettings.subscribe(emptyTown.sync)
   models.subscribe(emptyTown.refresh)
-  installBackToMaps(selectedMap, () => avatar.release())
+  installBackToMaps(selectedMap, events, () => avatar.release())
   // 信息栏按世界生理开关补画关掉的项
   worldSettings.subscribe(() => {
     const switches = worldSettings.state()?.physiology
@@ -496,7 +499,9 @@ function register(input: ShellInputs, p: RegisteredParts) {
   }
   registry.add(
     observedPanel,
-    topbarPanel(p.speeds, p.pauseHint, () => p.avatar.active()),
+    // 自己控制着，或者别的页面正在玩（本页在围观）时，顶栏都挂「化身在场 / 围观中」的标记
+    // 顶栏的化身标记：通道通了就一直挂着，观察者也要看得见「围观中」
+    topbarPanel(p.speeds, p.pauseHint, () => p.avatar.supported()),
     p.modelWait.panel,
     {
       roster: ({ msg, residents }) => {

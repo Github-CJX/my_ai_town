@@ -4,7 +4,6 @@
 pub mod application;
 pub mod builtin;
 pub mod builtin_store;
-pub mod clock;
 pub mod config;
 mod error;
 pub mod fnv;

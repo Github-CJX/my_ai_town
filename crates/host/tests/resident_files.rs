@@ -9,10 +9,7 @@ use agent::{
     runtime::{AgentRequest, ResidentRuntime},
     session::Session,
 };
-use host::{
-    agent_worker::AgentSave,
-    persistence::{Checkpoint, SaveStore},
-};
+use host::{agent_worker::AgentSave, persistence::SaveStore};
 use kernel::{Topology, World};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
@@ -173,17 +170,7 @@ fn bundle(r: &ResidentRuntime) -> Option<AgentSave> {
 }
 fn checkpoint(store: &mut SaveStore, w: &World, r: &ResidentRuntime) {
     store
-        .checkpoint_bundle(
-            Checkpoint {
-                world: w,
-                speed: 0.0,
-                world_settings: &Default::default(),
-                clock: &Default::default(),
-                population: None,
-            },
-            || bundle(r),
-            true,
-        )
+        .checkpoint_bundle(w, 0.0, &Default::default(), None, || bundle(r), true)
         .unwrap();
 }
 
@@ -310,17 +297,7 @@ fn failed_world_commit_cannot_publish_future_memory_and_restore_repairs_projecti
         .consolidate(&w, "r1");
     let future = ResidentRuntime::restore(state, &w).unwrap();
     assert!(store
-        .checkpoint_bundle(
-            Checkpoint {
-                world: &w,
-                speed: 0.0,
-                world_settings: &Default::default(),
-                clock: &Default::default(),
-                population: None,
-            },
-            || bundle(&future),
-            true,
-        )
+        .checkpoint_bundle(&w, 0.0, &Default::default(), None, || bundle(&future), true)
         .is_err());
     assert_eq!(fs::read(d.save()).unwrap(), committed);
     assert_eq!(

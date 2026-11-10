@@ -667,9 +667,11 @@ fn miracles_need_the_switch_and_bystanders_see_them() {
     w.set_miracles(true);
     assert!(cast(&mut w, "a", MiracleKind::Heal)
         .unwrap_err()
+        .to_string()
         .contains("先复活"));
     assert!(cast(&mut w, "c", MiracleKind::Revive)
         .unwrap_err()
+        .to_string()
         .contains("还活着"));
     assert!(
         cast(&mut w, "b", MiracleKind::Refill).is_err(),
@@ -698,12 +700,14 @@ fn miracles_need_the_switch_and_bystanders_see_them() {
     assert!(!saw(&w, "b"));
     assert!(cast(&mut w, "a", MiracleKind::Refill)
         .unwrap_err()
+        .to_string()
         .contains("都是满的"));
     w.set_body_values("a", Some(20.), None, None, None).unwrap();
     cast(&mut w, "a", MiracleKind::Refill).unwrap();
     assert_eq!(w.actor("a").unwrap().needs.fullness.value, 100.);
     assert!(cast(&mut w, "a", MiracleKind::Heal)
         .unwrap_err()
+        .to_string()
         .contains("身体无恙"));
     let mut restored = town();
     restored.restore_snapshot(w.snapshot()).unwrap();
@@ -712,5 +716,232 @@ fn miracles_need_the_switch_and_bystanders_see_them() {
     w.possess("c").unwrap();
     assert!(cast(&mut w, "a", MiracleKind::Refill)
         .unwrap_err()
+        .to_string()
         .contains("附身"));
+}
+
+fn look(color: &str) -> Appearance {
+    Appearance {
+        marker: "我".into(),
+        color: color.into(),
+        profile: None,
+        look: None,
+    }
+}
+
+/// 两个真人化身同在一个小镇：各自进场得到自己的编号，各走各的路，存档读档后都还在，
+/// 而且彼此的位置、回执与控制代次互不影响。
+#[test]
+fn two_avatars_share_one_town_without_stepping_on_each_other() {
+    let mut w = world();
+    assert_eq!(w.avatar_enter("aya", look("#387963")).unwrap(), ID);
+    assert_eq!(
+        w.avatar_enter("小满", look("#a15338")).unwrap(),
+        "player_avatar@2"
+    );
+    assert_eq!(w.avatars().count(), 2);
+    // 第二个化身不能用居民的名字，也不能和另一个化身重名。
+    assert!(w
+        .avatar_enter("阿树", look("#387963"))
+        .unwrap_err()
+        .to_string()
+        .contains("名字与居民重复"));
+    assert!(w
+        .avatar_enter("aya", look("#387963"))
+        .unwrap_err()
+        .to_string()
+        .contains("名字与其他化身重复"));
+    // 编号只认 player_avatar 或 player_avatar@N。
+    assert!(w
+        .avatar_enter_as("someone", "路人", look("#387963"))
+        .unwrap_err()
+        .to_string()
+        .contains("化身编号"));
+
+    let second = "player_avatar@2";
+    let first_at = w.avatar_of(ID).unwrap().locus.clone();
+    let second_at = w.avatar_of(second).unwrap().locus.clone();
+    // 第一个人往右走，第二个人的位置不动。
+    w.avatar_move_of(ID, [1., 0.], false, 0.2).unwrap();
+    assert_ne!(w.avatar_of(ID).unwrap().locus, first_at);
+    assert_eq!(w.avatar_of(second).unwrap().locus, second_at);
+    // 控制代次与回执也各记各的：重置第一个人的代次不影响第二个人。
+    w.avatar_control_epoch_of(ID, "epoch-first".into());
+    w.avatar_remember_of(ID, 7, json!({"kind":"stop"}));
+    assert!(w
+        .actor_control(ID)
+        .is_some_and(|c| c.epoch == "epoch-first" && c.last_sequence == 7));
+    assert!(w
+        .actor_control(second)
+        .is_some_and(|c| c.epoch.is_empty() && c.last_sequence == 0));
+    // 存档里两个化身都在，读档后各自的位置与编号不变。
+    let saved = w.snapshot();
+    let first_moved = w.avatar_of(ID).unwrap().locus.clone();
+    let mut restored = world_of(
+        json!([{"id":"flower","definition":"test:flower@1","locale":"loc_a"}]),
+        &[("a", "阿树", "loc_a"), ("b", "远处的人", "loc_b")],
+    );
+    restored.restore_snapshot(saved).unwrap();
+    assert_eq!(restored.avatars().count(), 2);
+    assert_eq!(restored.avatar_of(ID).unwrap().locus, first_moved);
+    assert_eq!(restored.avatar_of(second).unwrap().locus, second_at);
+    // 一个人离场不影响另一个人。
+    restored.avatar_leave_of(ID).unwrap();
+    assert!(!restored.avatar_of(ID).unwrap().present());
+    assert!(restored.avatar_of(second).unwrap().present());
+    // 走掉的化身不再占名字：新来的人可以用同一个名字进场（不然开关一次页面就把名字钉死了）。
+    assert_eq!(
+        restored
+            .avatar_enter_as("player_avatar@3", "aya", look("#387963"))
+            .unwrap(),
+        "player_avatar@3"
+    );
+    // 改名不换人：离场后带着新名字、新样子回来，编号还是同一个，名字与外观换掉。
+    let renamed = restored
+        .avatar_enter_as(ID, "改名的旅人", look("#a3572b"))
+        .unwrap();
+    assert_eq!(renamed, ID);
+    let me = restored.avatar_of(ID).unwrap();
+    assert_eq!(me.name, "改名的旅人");
+    assert_eq!(
+        me.avatar.as_ref().expect("化身有资料").appearance.color,
+        "#a3572b"
+    );
+    assert!(me.present());
+    // 人在场、这具身体没人握着（页面关了）：再进场就留在原地，不把人挪到入口。
+    let stayed = me.locus.clone();
+    assert_eq!(
+        restored
+            .avatar_enter_as(ID, "又改一次", look("#387963"))
+            .unwrap(),
+        ID
+    );
+    let back = restored.avatar_of(ID).unwrap();
+    assert_eq!(back.locus, stayed);
+    assert_eq!(back.name, "又改一次");
+    // 单人玩法的附身仍然不允许：化身在场时不能接管村民。
+    assert!(restored
+        .possess("a")
+        .unwrap_err()
+        .to_string()
+        .contains("请先退出化身"));
+}
+
+#[test]
+fn possession_and_avatars_live_side_by_side() {
+    let mut w = world();
+    enter(&mut w);
+    // 多人玩法：化身在场也能接管村民（各页面控制各的）。
+    w.possess_actor("a").unwrap();
+    assert!(w.is_possessed("a"));
+    assert!(w.avatar_of(ID).unwrap().present());
+    // 同一个村民不能被两处同时控制。
+    assert!(w
+        .possess_actor("a")
+        .unwrap_err()
+        .to_string()
+        .contains("这个村民正在别的页面手里"));
+    // 附身期间再进化身：别的页面有自己的化身，不影响这里。
+    assert_eq!(
+        w.avatar_join("阿波", look("#a3572b")).unwrap(),
+        "player_avatar@2"
+    );
+    assert_eq!(w.avatars().count(), 2);
+    // 附身的村民照常走路，化身也照常走路，两人各走各的。
+    let resident_at = w.actor("a").unwrap().locus.clone();
+    let second = "player_avatar@2";
+    let second_at = w.avatar_of(second).unwrap().locus.clone();
+    w.avatar_move_of("a", [0., 1.], false, 0.2).unwrap();
+    assert_ne!(w.actor("a").unwrap().locus, resident_at);
+    assert_eq!(w.avatar_of(second).unwrap().locus, second_at);
+    // 附身控制账本与化身控制账本互不干扰。
+    w.avatar_control_epoch_of("a", "epoch-resident".into());
+    assert!(w
+        .actor_control("a")
+        .is_some_and(|c| c.epoch == "epoch-resident"));
+    assert!(w.actor_control(second).is_some_and(|c| c.epoch.is_empty()));
+    // 交还附身不把别人的化身带走。
+    assert_eq!(w.release_possession_of("a").as_deref(), Some("a"));
+    assert!(!w.is_possessed("a"));
+    assert!(w.avatar_of(second).unwrap().present());
+    // 交还之后再附身别的村民：两个页面各控制一个村民也成立。
+    w.possess_actor("b").unwrap();
+    assert!(w.release_possession().as_deref() == Some("b"));
+    // 附身与在场化身并存可以存档、读档。
+    w.possess_actor("a").unwrap();
+    let saved = w.snapshot();
+    let mut restored = world();
+    restored.restore_snapshot(saved).unwrap();
+    assert!(restored.is_possessed("a"));
+    assert_eq!(restored.avatars().count(), 2);
+    assert!(restored.avatar_of(ID).unwrap().present());
+}
+
+/// 两个化身真的互相说话：名册里两个人名后都挂着各自最近一句，镇上才看得到对方开口。
+#[test]
+fn two_avatars_talking_both_show_their_lines_in_the_roster() {
+    let mut w = world();
+    enter(&mut w);
+    let second = w.avatar_join("阿波", look("#a3572b")).unwrap();
+    let rev = |w: &World, id: &str| w.actor(id).unwrap().actions.revision;
+    let (first_rev, second_rev) = (rev(&w, ID), rev(&w, &second));
+    w.avatar_interact_of(
+        ID,
+        "chat",
+        first_rev,
+        &Chat::Offer {
+            partner_id: second.clone(),
+            interaction: InteractionKind::Talk,
+            message: "聊聊？".into(),
+        },
+    )
+    .unwrap();
+    w.avatar_interact_of(
+        &second,
+        "accept",
+        second_rev,
+        &Chat::Reply {
+            interaction_id: "chat".into(),
+            accept: true,
+            message: "好呀".into(),
+        },
+    )
+    .unwrap();
+    // 聊起来以后两个人都说一句（各自轮到自己时；转两圈保证两个人都轮到）。
+    for _ in 0..2 {
+        for (actor, line) in [(ID, "今天广场上有人唱歌"), (second.as_str(), "我也听见了")] {
+            if !w.chat_turn(actor) {
+                continue;
+            }
+            let r = rev(&w, actor);
+            w.avatar_interact_of(
+                actor,
+                "say",
+                r,
+                &Chat::Say {
+                    interaction_id: "chat".into(),
+                    message: line.into(),
+                    to: None,
+                },
+            )
+            .unwrap();
+        }
+    }
+    // 名册里两个化身都带台词，台词内容各是各的。
+    let roster = serde_json::to_value(w.roster(1.0)).unwrap();
+    let member = |id: &str| -> Value {
+        roster["locales"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|l| l["members"].as_array().unwrap())
+            .find(|m| m["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("名册里没有 {id}"))
+    };
+    let me = member(ID);
+    let other = member(&second);
+    assert_eq!(me["speech"]["text"], "今天广场上有人唱歌");
+    assert_eq!(other["speech"]["text"], "我也听见了");
+    assert_eq!(me["speech"]["chat_id"], other["speech"]["chat_id"]);
 }

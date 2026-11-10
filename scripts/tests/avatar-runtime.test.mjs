@@ -212,7 +212,9 @@ test('actual WASD input adapter drives a generated world and saves its stopped p
       (v) => v.type === 'avatar_result' && v.request_id === 'leave'
     )
     assert.ok(leave.ok)
-    assert.equal(leave.state.actor.present, false)
+    // 退出化身以后本页没有控制目标：视图里不再有演员（离场状态看下面的存档）
+    assert.equal(leave.state.actor, null)
+    assert.equal(leave.state.controlled, false)
     input.abort.abort()
     ws.close()
     await api(`/${saved.id}/close`, {})

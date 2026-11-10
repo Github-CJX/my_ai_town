@@ -76,6 +76,21 @@ impl World {
         recipient: &str,
         kind: MiracleKind,
     ) -> Result<String> {
+        let id = self
+            .avatar()
+            .map_or(avatar::ID, |a| a.id.as_str())
+            .to_owned();
+        self.avatar_miracle_of(&id, revision, recipient, kind)
+    }
+
+    /// 指定化身施展神力：多人同镇时谁施展就算谁的。
+    pub fn avatar_miracle_of(
+        &mut self,
+        id: &str,
+        revision: u64,
+        recipient: &str,
+        kind: MiracleKind,
+    ) -> Result<String> {
         ensure!(
             self.miracles,
             KernelError::action("这个世界没有打开化身神力")
@@ -85,7 +100,7 @@ impl World {
             KernelError::action("附身村民时不能施展神力")
         );
         let me = self
-            .avatar()
+            .avatar_of(id)
             .filter(|a| a.present())
             .ok_or_else(|| KernelError::action("化身不在小镇里"))?;
         ensure!(
@@ -99,7 +114,7 @@ impl World {
             .filter(|a| !a.is_avatar() && a.present())
             .ok_or_else(|| KernelError::action("对方不在小镇里"))?;
         let plan = Plan::of(target, kind)?;
-        Reach::new(self).pair(avatar::ID, recipient)?;
+        Reach::new(self).pair(id, recipient)?;
         let name = target.name.clone();
         let locale = target.locus.locale.clone();
         let was = target.needs.abilities();

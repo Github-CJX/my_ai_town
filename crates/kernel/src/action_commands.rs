@@ -142,18 +142,6 @@ impl World {
         }
     }
 
-    /// 把一位村民暂存在原地：中断当前安排和行走，回到空等。
-    /// 模型服务故障时 host 用它隔离单个村民，其他村民继续生活。
-    pub fn suspend_actor(&mut self, actor: &str, reason: &str) {
-        self.interrupt_actions(actor, reason);
-        let now = self.minutes;
-        if let Some(a) = self.actors.get_mut(actor) {
-            a.free_walk = None;
-            a.plan.clear();
-            a.reset_idle(now, true);
-        }
-    }
-
     /// 记下村民随决定留下的想法（自述）。不校验、不动世界、不清记忆；空白文本不记。
     pub fn note_thought(
         &mut self,

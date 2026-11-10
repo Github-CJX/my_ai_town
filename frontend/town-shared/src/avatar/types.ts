@@ -57,7 +57,9 @@ export interface ChatProposal {
 export type MiracleKind = 'revive' | 'heal' | 'refill'
 export type AvatarCommand =
   | { kind: 'view' | 'heartbeat' | 'leave' | 'stop' }
-  | { kind: 'enter' | 'profile'; name: string; appearance: Appearance }
+  /** avatar：接着当上次那个化身（离开小镇后再回来），不带就由内核分配一个新编号 */
+  | { kind: 'enter'; name: string; appearance: Appearance; avatar?: string }
+  | { kind: 'profile'; name: string; appearance: Appearance }
   | { kind: 'possess'; resident: string }
   | { kind: 'resume'; token: string }
   | { kind: 'portal'; id: string }
@@ -177,14 +179,13 @@ interface PresentView {
 }
 type PresentOnly = Omit<PresentView, 'actor' | 'supported' | 'units'>
 /**
- * 本连接能看到的化身视图：有控制目标、支持化身但还没有目标、地图不支持化身，
- * 以及目标正被另一个页面控制（只说明地图支持化身）。
+ * 本连接能看到的化身视图：有控制目标时是完整视图；没有控制目标时只说明地图支不支持化身、
+ * 一格几米（观察者页面），拿不到任何人的私人视图。
  */
 type AvatarSight =
   | PresentView
   | (Absent<PresentOnly> & { actor: null; supported: boolean; units: number })
   | (Absent<PresentOnly> & { actor?: undefined; supported: boolean; units?: undefined })
-  | (Absent<PresentOnly> & { actor: null; supported: boolean; units?: undefined })
 /** 本连接持有控制租约时才有：控制代次、断线恢复凭据、已处理到的操作序号 */
 type Lease =
   | { epoch: string; resume_token: string; sequence: number }
@@ -201,7 +202,7 @@ export type AvatarState = AvatarSight &
     speed: number
     /** 本连接持有控制且在线 */
     controlled: boolean
-    /** 化身或附身目标已被某个连接控制 */
+    /** 别的页面正在控制某人：只用于显示「有人在玩」，不挡本页进场，也不影响本页能看到什么 */
     occupied: boolean
     /** 附身时本人最近的日志，新的在前 */
     recent?: { at: number; text: string }[]

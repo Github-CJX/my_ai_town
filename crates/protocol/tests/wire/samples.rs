@@ -420,7 +420,7 @@ pub fn server_samples() -> Vec<ServerMsg> {
         },
         ServerMsg::AvatarState {
             state: AvatarSession {
-                view: AvatarSight::Own(AvatarView::Unsupported { supported: false }),
+                view: AvatarView::Unsupported { supported: false },
                 world_id: "w1".into(),
                 speed: 1.0,
                 controlled: true,
@@ -449,9 +449,10 @@ pub fn server_samples() -> Vec<ServerMsg> {
             code: AvatarResultCode::Ok,
             message: String::new(),
             state: AvatarSession {
-                view: AvatarSight::Occupied {
+                view: AvatarView::Empty {
                     actor: (),
                     supported: true,
+                    units: 1.0,
                 },
                 world_id: "w1".into(),
                 speed: 1.0,
@@ -1147,7 +1148,7 @@ fn avatar_state() -> AvatarState {
     }
 }
 
-fn avatar_session(view: AvatarSight) -> AvatarSession {
+fn avatar_session(view: AvatarView) -> AvatarSession {
     AvatarSession {
         view,
         world_id: "w1".into(),
@@ -1204,9 +1205,7 @@ pub fn shape_samples() -> (Vec<ServerMsg>, Vec<ClientMsg>) {
     (
         vec![
             ServerMsg::AvatarState {
-                state: avatar_session(AvatarSight::Own(AvatarView::Present(Box::new(
-                    avatar_state(),
-                )))),
+                state: avatar_session(AvatarView::Present(Box::new(avatar_state()))),
             },
             ServerMsg::Props {
                 catalog: PropsCatalog {

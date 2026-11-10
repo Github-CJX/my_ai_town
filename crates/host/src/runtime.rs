@@ -10,18 +10,16 @@ use crate::{
 };
 use agent::AgentError;
 use host::{
-    clock::ClockSave, library::Library, population::Population, tasks::TaskPool,
-    world_settings::valid_speed, HostError,
+    library::Library, population::Population, tasks::TaskPool, world_settings::valid_speed,
+    HostError,
 };
 use kernel::World;
-use protocol::{Alert, ClientMsg, ContentCommand, EventInfo, PauseKind, ServerMsg, WeatherCode};
-use std::collections::BTreeSet;
+use protocol::{Alert, ClientMsg, ContentCommand, EventInfo, ServerMsg, WeatherCode};
 
 pub(crate) struct Runtime {
     /// 建新世界的地图数据与规则；重置时用它再建一次。
     pub setup: WorldSetup,
-    pub avatar_control: crate::avatar::Control,
-    pub clock: ClockSave,
+    pub avatar_controls: std::collections::BTreeMap<u64, crate::avatar::Control>,
     pub world_settings: host::world_settings::WorldSettings,
     pub world: World,
     /// 玩家选定的速度：正常速度（见 base_pace）的倍数，0 为暂停，界面上只有 0 和 1；随存档保存。
@@ -39,8 +37,6 @@ pub(crate) struct Runtime {
     pub tasks: TaskPool,
     /// 上一次存盘是否失败；只在状态变化时写日志，避免每秒刷屏。
     pub save_failed: bool,
-    /// 因模型故障暂存在原地的村民：世界继续走，但他们的活动与身体需求不再推进。
-    pub suspended: BTreeSet<String>,
 }
 
 /// 一条消息发给谁。
@@ -450,7 +446,7 @@ impl Runtime {
         let result = self.transact(|rt| {
             rt.driver.runtime.clear_world()?;
             rt.world = fresh;
-            rt.avatar_control = Default::default();
+            rt.avatar_controls.clear();
             rt.population = population;
             rt.world_settings = Default::default();
             rt.speed = 0.0;
@@ -483,19 +479,13 @@ impl Runtime {
         let inventory_before = self.world.inventory().revision();
         let missing = self.driver.missing_models(&self.population, &self.settings);
         self.driver.runtime.wait_for_models(&self.world, &missing);
-        let holds = self.town_holds();
-        self.sync_suspended(&holds);
-        // 谁都还不能思考（都在等模型或停在故障上）时时间停着，化身照样能走：
-        // 世界照走的话他们只会一路饿着。额度用尽、回复过时仍按原来的规则停全镇。
-        let global_hold = holds.iter().any(|hold| hold.kind != PauseKind::Fault);
+        // 谁都还不能思考（都在等模型）时时间停着，化身照样能走：世界照走的话他们只会一路饿着
         let running = self.speed > 0.0
             && self.world_settings.ready()
-            && !global_hold
             && !self.driver.runtime.nobody_can_think(&self.world);
         self.pace = if running { self.next_pace() } else { 0.0 };
         let events = if running {
-            self.world
-                .step_with_frozen(0.1 * self.pace, &self.suspended)
+            self.world.step(0.1 * self.pace)
         } else {
             Vec::new()
         };
@@ -544,7 +534,7 @@ impl Runtime {
     /// 有人还没有能用的模型时也不快进。
     fn next_pace(&self) -> f64 {
         let normal = self.normal_pace();
-        let calm = !self.avatar_control.held()
+        let calm = !self.anyone_controlled()
             && !self.world.anyone_collapsed()
             && !self.driver.runtime.thinking(&self.world)
             && !self.driver.runtime.waiting_for_model();
@@ -580,8 +570,7 @@ impl Runtime {
         WALK_UNITS_PER_SECOND / units_per_minute
     }
 
-    /// 额度用尽、回复接连过时时全镇停表并保留位置、活动和用量；
-    /// 单个村民的模型故障只把他暂存在原地，其他人继续。
+    /// 额度用尽、故障或回复接连过时：全镇停表并保留位置、活动和用量。
     fn hold_if_needed(&mut self, clients: &Clients) -> bool {
         if self.speed == 0.0 {
             return false;
@@ -590,27 +579,14 @@ impl Runtime {
         if holds.is_empty() {
             return false;
         }
-        self.sync_suspended(&holds);
-        let global = holds.iter().any(|hold| hold.kind != PauseKind::Fault);
-        if global {
-            self.speed = 0.0;
-        }
+        self.speed = 0.0;
         for hold in holds {
-            let text = if hold.kind == PauseKind::Fault {
-                format!(
-                    "{}暂时停在原地（{}）：{}；其他村民继续生活",
-                    hold.resident,
-                    hold.kind.label(),
-                    hold.reason
-                )
-            } else {
-                format!(
-                    "全镇已暂停 · {}（{}）：{}",
-                    hold.resident,
-                    hold.kind.label(),
-                    hold.reason
-                )
-            };
+            let text = format!(
+                "全镇已暂停 · {}（{}）：{}",
+                hold.resident,
+                hold.kind.label(),
+                hold.reason
+            );
             println!("[host] {text}");
             let info =
                 EventInfo::about(&hold.resident_id, &hold.resident).with_alert(Some(Alert::Hold {
@@ -622,20 +598,6 @@ impl Runtime {
             broadcast_event(clients, &self.world, text, info);
         }
         true
-    }
-
-    /// 模型故障的村民进入/离开暂存：进入时中断安排，离开后由下一轮请求自然继续。
-    fn sync_suspended(&mut self, holds: &[protocol::WorldHold]) {
-        let next: BTreeSet<_> = holds
-            .iter()
-            .filter(|hold| hold.kind == PauseKind::Fault)
-            .map(|hold| hold.resident_id.clone())
-            .collect();
-        for id in next.difference(&self.suspended) {
-            self.world
-                .suspend_actor(id, "模型服务故障，暂时停在原地，其他村民继续");
-        }
-        self.suspended = next;
     }
 
     /// 全镇暂停的原因，补上每位村民用的模型服务名，提示卡据此写「DeepSeek 的密钥用不了了」。
@@ -659,21 +621,14 @@ impl Runtime {
         let Some(store) = &mut self.store else {
             return Ok(());
         };
-        let next_clock = self.clock.stamped(self.world.minutes());
         let result = store.checkpoint_bundle(
-            host::persistence::Checkpoint {
-                world: &self.world,
-                speed: self.speed,
-                world_settings: &self.world_settings,
-                clock: &next_clock,
-                population: Some(&self.population),
-            },
+            &self.world,
+            self.speed,
+            &self.world_settings,
+            Some(&self.population),
             || Some(self.driver.save()),
             force,
         );
-        if matches!(result, Ok(true)) {
-            self.clock = next_clock;
-        }
         match &result {
             Ok(true) if self.save_failed => {
                 self.save_failed = false;

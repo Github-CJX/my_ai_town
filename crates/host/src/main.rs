@@ -24,9 +24,9 @@ mod weather_commands;
 mod world_commands;
 
 use host::{
-    agent_worker::AgentSave, application::Application, clock::ClockSave,
-    maps::placement::ScenePlacer, persistence::SaveStore, population::Population,
-    props::PropLibrary, world_settings::WorldSettings, HostError,
+    agent_worker::AgentSave, application::Application, maps::placement::ScenePlacer,
+    persistence::SaveStore, population::Population, props::PropLibrary,
+    world_settings::WorldSettings, HostError,
 };
 use kernel::World;
 use resident_driver::ResidentDriver;
@@ -117,7 +117,6 @@ fn load_weather_rules(path: &str) -> Result<kernel::weather::WeatherRules, HostE
 struct Saved {
     speed: Option<f64>,
     world_settings: WorldSettings,
-    clock: Option<ClockSave>,
     agent: Option<AgentSave>,
     population: Option<Population>,
 }
@@ -130,7 +129,6 @@ fn restore(store: &mut Option<SaveStore>, world: &mut World) -> Result<Saved, Ho
     let mut saved = Saved::default();
     if let Some(restored) = store.restore_bundle(world)? {
         saved.speed = Some(restored.speed);
-        saved.clock = Some(restored.clock);
         saved.agent = restored.agent;
         saved.population = Some(restored.population.unwrap_or_else(|| {
             startup::migrate_population(
@@ -185,21 +183,6 @@ fn build_runtime(
     }
     world.bind_weather_world(&population.world_id);
     let world_settings = saved.world_settings;
-    let clock = saved
-        .clock
-        .unwrap_or_else(|| ClockSave::new(args.timezone.clone()));
-    clock.validate()?;
-    println!(
-        "[host] 时区 {} · 当前 {}",
-        clock.timezone,
-        clock.local_now()?
-    );
-    if let Some(saved_at) = &clock.last_saved_utc {
-        println!(
-            "[host] 上次保存 {saved_at}（模拟 {} 分钟），重启缺口 {} 秒；不补算离线时间",
-            clock.last_saved_minutes, clock.restart_gap_seconds
-        );
-    }
     let settings = Settings::load(app)?;
     let driver = start_driver(
         &mut world,
@@ -238,10 +221,9 @@ fn build_runtime(
     };
     Ok(Runtime {
         setup,
-        avatar_control: avatar::Control::default(),
+        avatar_controls: Default::default(),
         speed,
         pace: 0.0,
-        clock,
         world_settings,
         world,
         settings,
@@ -252,7 +234,6 @@ fn build_runtime(
         prop_library,
         tasks: host::tasks::TaskPool::new(2, 4),
         save_failed: false,
-        suspended: Default::default(),
     })
 }
 
@@ -273,8 +254,16 @@ fn start_driver(
         settings,
         saved,
     )?;
-    if let Some(id) = world.release_possession() {
-        driver.runtime.player_handover(world, &id)?;
+    // 重启后没有连接还握着这些身体：把残留的附身全部交还给 AI，村民接着自己过日子。
+    for id in world.possessed_ids() {
+        if world.release_possession_of(&id).is_some() {
+            driver.runtime.player_handover(world, &id)?;
+        }
+    }
+    // 重启后也没有页面还控着化身：让残留的化身先离场，页面进场时按编号或名字接回原位。
+    // 留在场里没人控的化身会以「我」的牌子站在地图上，谁都认领不了。
+    for id in world.avatars().map(|a| a.id.clone()).collect::<Vec<_>>() {
+        world.avatar_leave_of(&id)?;
     }
     Ok(driver)
 }

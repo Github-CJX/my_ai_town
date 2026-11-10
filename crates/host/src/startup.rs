@@ -26,8 +26,6 @@ pub(crate) struct Args {
     pub town_id: Option<String>,
     pub ready_file: Option<PathBuf>,
     pub connection_token: Option<String>,
-    /// IANA 时区；新世界取命令行或 `TOWN_TIMEZONE`，旧档以存档里的时区为准。
-    pub timezone: Option<String>,
     /// 管理进程启动时传入：stdin 关闭即视为父进程退出，保存后退出。
     pub stop_on_stdin_close: bool,
 }
@@ -47,7 +45,6 @@ impl Args {
             town_id: None,
             ready_file: None,
             connection_token: None,
-            timezone: std::env::var("TOWN_TIMEZONE").ok(),
             stop_on_stdin_close: false,
         };
         let mut save_enabled = true;
@@ -64,7 +61,6 @@ impl Args {
                 "--town-id" => a.town_id = Some(value()?),
                 "--ready-file" => a.ready_file = Some(PathBuf::from(value()?)),
                 "--connection-token" => a.connection_token = Some(value()?),
-                "--timezone" => a.timezone = Some(value()?),
                 "--port" => a.port = parse_number(&arg, &value()?)?,
                 "--speed" => {
                     let speed: f64 = parse_number(&arg, &value()?)?;

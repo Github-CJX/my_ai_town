@@ -3,6 +3,7 @@
 //! 恢复不了的部分一并报告。
 use crate::{avatar::Control, runtime::Runtime};
 use host::{population::Population, world_settings::WorldSettings, HostError};
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// 改动前的全部可变状态。
@@ -10,7 +11,7 @@ struct Checkpoint {
     world: kernel::WorldCheckpoint,
     population: Population,
     agent: agent::runtime::ControlCheckpoint,
-    avatar_control: Control,
+    avatar_controls: BTreeMap<u64, Control>,
     world_settings: WorldSettings,
     speed: f64,
 }
@@ -79,7 +80,7 @@ impl Runtime {
             world: self.world.checkpoint(),
             population: self.population.clone(),
             agent: self.driver.runtime.control_checkpoint(),
-            avatar_control: self.avatar_control.clone(),
+            avatar_controls: self.avatar_controls.clone(),
             world_settings: self.world_settings.clone(),
             speed: self.speed,
         }
@@ -93,7 +94,7 @@ impl Runtime {
         }
         self.population = before.population;
         self.driver.runtime.rollback_control(before.agent);
-        self.avatar_control = before.avatar_control;
+        self.avatar_controls = before.avatar_controls;
         self.world_settings = before.world_settings;
         self.speed = before.speed;
         leftovers

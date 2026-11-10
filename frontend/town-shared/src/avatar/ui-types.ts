@@ -19,6 +19,8 @@ export interface BulletinTargets {
 /** 界面按钮、菜单和面板里的操作，由控制器实现 */
 export interface AvatarActions {
   openDialog: () => void
+  /** 入口按钮：还认得自己就直接回到上次的位置，认不出才打开对话框选样子 */
+  continueEntry: () => void
   closeDialog: () => void
   execute: (command: AvatarCommand) => Promise<boolean>
   toggleTab: (tab: AvatarTab) => void

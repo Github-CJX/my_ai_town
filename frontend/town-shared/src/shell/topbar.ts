@@ -1,10 +1,12 @@
 // 顶栏：开始/暂停钮、回到地图选择、连接状态、全镇暂停标记，以及地图里的道具入口。
 import { $, button, el } from '../dom'
 import { countBadge } from '../design/ui'
+import type { EventsHandle } from '../events'
 import { displayClock } from '../format'
 import { gameIcon, iconLabel } from '../game/icons'
 import { groupHolds, namesOf } from '../holds'
 import type { MapEntry } from '../mapDocument'
+import { closeTown } from '../townApi'
 import type { ClientMsg } from '../protocol'
 import type { PauseHint } from '../pauseHint'
 import type { RosterMsg, ShellPanel } from './panel'
@@ -96,21 +98,34 @@ export function installSpeedBar(
 export type SpeedBar = ReturnType<typeof installSpeedBar>
 
 /**
- * 「← 地图选择」：先交还化身控制，再离开；世界继续运行。
- * 直接关掉网页也只断开观看连接，村民和 Agent 不会跟着停。
+ * 「← 地图选择」：先交还化身控制，再保存并关闭小镇，然后离开。同时只运行一个小镇，退出就关；
+ * 直接关掉网页也发一下关闭（刷新页面时新页面会重新打开它），从浏览器的后退缓存回来就重新载入。
  */
 export function installBackToMaps(
   selectedMap: MapEntry,
+  events: EventsHandle,
   release: () => Promise<boolean>
 ) {
   const back = $('back-to-maps')
   if (!(back instanceof HTMLButtonElement)) return
+  let closed = false
   back.onclick = async () => {
     if (!(await release())) return
     back.disabled = true
-    back.textContent = '返回中…'
-    location.assign(`./?map=${encodeURIComponent(selectedMap.id)}`)
+    back.textContent = '保存中…'
+    try {
+      await closeTown(selectedMap.id, selectedMap.lease)
+      closed = true
+      location.assign(`./?map=${encodeURIComponent(selectedMap.id)}`)
+    } catch (error) {
+      back.disabled = false
+      back.textContent = '← 选择小镇'
+      events.pushLocal(`没能保存并关闭小镇：${(error as Error).message}`, true)
+    }
   }
+  window.addEventListener('pagehide', () => {
+    if (!closed) void closeTown(selectedMap.id, selectedMap.lease, true).catch(() => {})
+  })
   window.addEventListener('pageshow', (event) => {
     if (event.persisted) location.reload()
   })

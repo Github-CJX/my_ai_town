@@ -42,24 +42,27 @@ test('built app creates and runs a map with a read-only resource tree and no pre
       await fs.cp(path.join(root, file), p, { recursive: true })
     }
     await fs.mkdir(path.join(bundle, 'target/debug'), { recursive: true })
+    // Windows 未开开发者模式时普通用户建不了符号链接（EPERM），退回复制可执行文件。
     const exe = process.platform === 'win32' ? '.exe' : ''
     for (const bin of ['host', 'town-map']) {
-      const source = path.join(root, 'target/debug', bin + exe)
-      const target = path.join(bundle, 'target/debug', bin + exe)
+      const from = path.join(root, 'target/debug', bin + exe)
+      const to = path.join(bundle, 'target/debug', bin + exe)
       try {
-        await fs.symlink(source, target)
-      } catch (error) {
-        // Windows 没有开发者模式时创建符号链接会 EPERM；跨盘也不能硬链接。
-        if (!['EPERM', 'EACCES', 'EXDEV'].includes(error.code)) throw error
-        await fs.copyFile(source, target)
+        await fs.symlink(from, to)
+      } catch (e) {
+        if (e.code !== 'EPERM') throw e
+        await fs.copyFile(from, to)
       }
     }
-    await permissions(bundle, 0o555)
-    // Windows 的只读属性只挡文件，不挡在目录里新建文件；下面的启动后检查仍会确认没写进包内。
-    if (process.platform !== 'win32')
-      await assert.rejects(fs.writeFile(path.join(bundle, 'data/maps/another-map.json'), '{}'), (e) =>
-        ['EACCES', 'EPERM'].includes(e.code)
+    // Windows 的 chmod 只切换只读属性、改不动目录权限，这段只在类 Unix 上有意义；
+    // 包内不被写入这件事仍由后面的 data/maps 目录清单核对。
+    if (process.platform !== 'win32') {
+      await permissions(bundle, 0o555)
+      await assert.rejects(
+        fs.writeFile(path.join(bundle, 'data/maps/another-map.json'), '{}'),
+        (e) => ['EACCES', 'EPERM'].includes(e.code)
       )
+    }
     let output = ''
     child = spawn(process.execPath, [path.join(bundle, 'scripts/town-manager.mjs')], {
       cwd: bundle,
@@ -68,8 +71,6 @@ test('built app creates and runs a map with a read-only resource tree and no pre
         AI_TOWN_HOME: data,
         TOWN_MANAGER_PORT: '0',
         TOWN_MOCK_LLM: '1',
-        TOWN_HOST_BINARY: path.join(bundle, 'target/debug/host' + exe),
-        TOWN_MAP_BINARY: path.join(bundle, 'target/debug/town-map' + exe),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

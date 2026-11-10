@@ -19,24 +19,32 @@ impl Runtime {
         else {
             return;
         };
-        if world_id != self.population.world_id
-            || self.check_control(connection, &epoch).is_err()
-            || sequence <= self.avatar_control.input_sequence
-        {
+        if world_id != self.population.world_id || self.check_control(connection, &epoch).is_err() {
             return;
         }
-        self.avatar_control.input_sequence = sequence;
-        self.advance_avatar(received);
+        {
+            let Some(control) = self.avatar_controls.get_mut(&connection) else {
+                return;
+            };
+            if sequence <= control.input_sequence {
+                return;
+            }
+            control.input_sequence = sequence;
+        }
+        self.advance_avatar(connection, received);
         // 旧 3D 客户端的位姿请求仍可解析，但不能改变世界位置。
-        if pose.is_some()
+        let invalid = pose.is_some()
             || navigation_revision != self.world.topo.navigation_revision().unwrap_or(1)
-            || direction.iter().any(|v| !v.is_finite() || v.abs() > 1.)
-        {
-            self.avatar_control.halt();
+            || direction.iter().any(|v| !v.is_finite() || v.abs() > 1.);
+        let Some(control) = self.avatar_controls.get_mut(&connection) else {
+            return;
+        };
+        if invalid {
+            control.halt();
             return;
         }
-        self.avatar_control.direction = direction;
-        self.avatar_control.run = run;
-        self.avatar_control.input_at = Some(received);
+        control.direction = direction;
+        control.run = run;
+        control.input_at = Some(received);
     }
 }

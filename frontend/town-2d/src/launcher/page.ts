@@ -261,7 +261,9 @@ async function buildPrefab(prefab: Prefab) {
   showPreview('')
   document
     .querySelectorAll<HTMLElement>('[data-map-id]')
-    .forEach((el) => el.setAttribute('aria-pressed', String(el.dataset.mapId === prefabTownId(prefab))))
+    .forEach((el) =>
+      el.setAttribute('aria-pressed', String(el.dataset.mapId === prefabTownId(prefab)))
+    )
   const detail = document.querySelector<HTMLElement>('.map-detail')
   if (detail) detail.hidden = false
   $('selected-map-name').textContent = prefab.name
@@ -314,6 +316,7 @@ enter.onclick = async () => {
   enter.disabled = true
   $('pause-status').textContent = '正在打开小镇…'
   try {
+    // 不再先停住世界：镇上没人看的时候也照常走，进游戏页直接用宿主现在的速度。
     await openMap(map.id)
     if (selected === map) location.assign(gameUrl(map))
   } catch (error) {
@@ -473,10 +476,10 @@ initCreator(
   },
   () => maps.map((m) => m.name),
   () => homeSettings.connect(),
-  // 保存并进镇：和「进入游戏」一样先打开，世界按存档速度继续，再进游戏页
+  // 保存并进镇：打开小镇就直接进游戏页，世界保持宿主当前的速度（不再先停住）
   async (id) => {
-    const runtime = await openMap(id)
-    location.assign(gameUrl(runtime))
+    const town = await openMap(id)
+    location.assign(gameUrl(town))
   }
 )
 // 安卓返回键：先收起「更多操作」，其余交给应用壳（再按一次退出）

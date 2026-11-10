@@ -18,10 +18,7 @@ if (mode === 'preview') {
 exitOnCrash()
 if (mode === 'preview') await verifyClientBuild(root)
 console.log(`[town-client] ${mode} · ${root}`)
-const manager = await createManager({
-  port,
-  alwaysOn: process.env.TOWN_ALWAYS_ON !== '0',
-})
+const manager = await createManager({ port })
 if (mode === 'dev')
   client = spawn(
     process.execPath,

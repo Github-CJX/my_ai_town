@@ -182,9 +182,8 @@ impl<'a> Reach<'a> {
         (from.space == to.space).then(|| distance(from.position, to.position))
     }
 
-    /// 玩家放下物品的落脚点：够得着的站点里最近的一个。
-    pub(crate) fn drop_station(&self) -> Option<String> {
-        let actor = self.w.player_id();
+    /// 指定演员放下物品的落脚点：够得着的站点里最近的一个。
+    pub(crate) fn drop_station_of(&self, actor: &str) -> Option<String> {
         let map = self.w.walk_map.as_ref()?;
         let here = self.w.actor_spot(actor)?;
         map.stations

@@ -680,11 +680,10 @@ impl ResidentRuntime {
         }
     }
 
-    /// 没有一个村民能自己做决定（死去、失能、被附身的不算）：都在等模型或停在别的原因上。
+    /// 有人停在等模型上，而且没有一个村民能自己做决定（死去、失能、被附身的不算）。
     /// host 据此让时间停着：谁都不会思考时世界照走，他们只会一路饿着。
-    /// 只要还有一个人能思考就返回 false，单个村民的模型故障不该拖住其他人。
     pub fn nobody_can_think(&self, world: &World) -> bool {
-        let mut paused = false;
+        let mut waiting = false;
         for s in self.state.sessions.values() {
             let Some(a) = world.actor(&s.actor_id) else {
                 continue;
@@ -696,13 +695,13 @@ impl ResidentRuntime {
             {
                 continue;
             }
-            if s.pause_reason().is_some() {
-                paused = true;
+            if s.waiting_for_model() {
+                waiting = true;
             } else {
                 return false;
             }
         }
-        paused
+        waiting
     }
 
     /// 空等着的村民过多少分钟再想：等待工具到点或推迟到的时刻，取早的。现在就该想、
