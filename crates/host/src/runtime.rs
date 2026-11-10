@@ -10,8 +10,8 @@ use crate::{
 };
 use agent::AgentError;
 use host::{
-    library::Library, population::Population, tasks::TaskPool, world_settings::valid_speed,
-    HostError,
+    clock::ClockSave, library::Library, population::Population, tasks::TaskPool,
+    world_settings::valid_speed, HostError,
 };
 use kernel::World;
 use protocol::{Alert, ClientMsg, ContentCommand, EventInfo, PauseKind, ServerMsg, WeatherCode};
@@ -21,6 +21,7 @@ pub(crate) struct Runtime {
     /// 建新世界的地图数据与规则；重置时用它再建一次。
     pub setup: WorldSetup,
     pub avatar_control: crate::avatar::Control,
+    pub clock: ClockSave,
     pub world_settings: host::world_settings::WorldSettings,
     pub world: World,
     /// 玩家选定的速度：正常速度（见 base_pace）的倍数，0 为暂停，界面上只有 0 和 1；随存档保存。
@@ -658,14 +659,21 @@ impl Runtime {
         let Some(store) = &mut self.store else {
             return Ok(());
         };
+        let next_clock = self.clock.stamped(self.world.minutes());
         let result = store.checkpoint_bundle(
-            &self.world,
-            self.speed,
-            &self.world_settings,
-            Some(&self.population),
+            host::persistence::Checkpoint {
+                world: &self.world,
+                speed: self.speed,
+                world_settings: &self.world_settings,
+                clock: &next_clock,
+                population: Some(&self.population),
+            },
             || Some(self.driver.save()),
             force,
         );
+        if matches!(result, Ok(true)) {
+            self.clock = next_clock;
+        }
         match &result {
             Ok(true) if self.save_failed => {
                 self.save_failed = false;

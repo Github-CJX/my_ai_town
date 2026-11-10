@@ -43,6 +43,8 @@ export async function createManager({
   port = Number(process.env.TOWN_MANAGER_PORT ?? 8788),
   mockLlm = false,
   maxRunning,
+  // 管理服务启动后自己拉起上次在玩的小镇；页面关掉、重启管理服务都不等于停世界。
+  alwaysOn = false,
 } = {}) {
   const storage = new Storage(root, source)
   await storage.init()
@@ -138,6 +140,28 @@ export async function createManager({
     throw e
   }
   console.log(`[town-manager] http://127.0.0.1:${server.address().port} · ${root}`)
+  if (alwaysOn) {
+    try {
+      const towns = (await storage.list()).filter((town) => town.available),
+        wanted = process.env.TOWN_ALWAYS_ON_TOWN,
+        chosen =
+          towns.find((town) => town.id === wanted) ??
+          towns
+            .filter((town) => town.progress)
+            .sort(
+              (a, b) =>
+                b.progress.day - a.progress.day ||
+                b.progress.residents - a.progress.residents
+            )[0] ??
+          towns[0]
+      if (chosen) {
+        await hosts.open(chosen.id)
+        console.log(`[town-manager] 常驻世界已启动：${chosen.name}（${chosen.id}）`)
+      }
+    } catch (e) {
+      console.error('[town-manager] 常驻世界启动失败：', e.message)
+    }
+  }
   async function stop() {
     if (stopping) return
     stopping = true
@@ -177,6 +201,9 @@ export function stopOnSignal(stop) {
 }
 if (process.argv[1] && (await fs.realpath(process.argv[1])) === fileURLToPath(import.meta.url)) {
   exitOnCrash()
-  const manager = await createManager({ mockLlm: process.env.TOWN_MOCK_LLM === '1' })
+  const manager = await createManager({
+    mockLlm: process.env.TOWN_MOCK_LLM === '1',
+    alwaysOn: process.env.TOWN_ALWAYS_ON !== '0',
+  })
   stopOnSignal(() => manager.stop())
 }

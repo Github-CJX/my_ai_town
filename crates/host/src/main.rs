@@ -24,9 +24,9 @@ mod weather_commands;
 mod world_commands;
 
 use host::{
-    agent_worker::AgentSave, application::Application, maps::placement::ScenePlacer,
-    persistence::SaveStore, population::Population, props::PropLibrary,
-    world_settings::WorldSettings, HostError,
+    agent_worker::AgentSave, application::Application, clock::ClockSave,
+    maps::placement::ScenePlacer, persistence::SaveStore, population::Population,
+    props::PropLibrary, world_settings::WorldSettings, HostError,
 };
 use kernel::World;
 use resident_driver::ResidentDriver;
@@ -117,6 +117,7 @@ fn load_weather_rules(path: &str) -> Result<kernel::weather::WeatherRules, HostE
 struct Saved {
     speed: Option<f64>,
     world_settings: WorldSettings,
+    clock: Option<ClockSave>,
     agent: Option<AgentSave>,
     population: Option<Population>,
 }
@@ -129,6 +130,7 @@ fn restore(store: &mut Option<SaveStore>, world: &mut World) -> Result<Saved, Ho
     let mut saved = Saved::default();
     if let Some(restored) = store.restore_bundle(world)? {
         saved.speed = Some(restored.speed);
+        saved.clock = Some(restored.clock);
         saved.agent = restored.agent;
         saved.population = Some(restored.population.unwrap_or_else(|| {
             startup::migrate_population(
@@ -183,6 +185,21 @@ fn build_runtime(
     }
     world.bind_weather_world(&population.world_id);
     let world_settings = saved.world_settings;
+    let clock = saved
+        .clock
+        .unwrap_or_else(|| ClockSave::new(args.timezone.clone()));
+    clock.validate()?;
+    println!(
+        "[host] 时区 {} · 当前 {}",
+        clock.timezone,
+        clock.local_now()?
+    );
+    if let Some(saved_at) = &clock.last_saved_utc {
+        println!(
+            "[host] 上次保存 {saved_at}（模拟 {} 分钟），重启缺口 {} 秒；不补算离线时间",
+            clock.last_saved_minutes, clock.restart_gap_seconds
+        );
+    }
     let settings = Settings::load(app)?;
     let driver = start_driver(
         &mut world,
@@ -224,6 +241,7 @@ fn build_runtime(
         avatar_control: avatar::Control::default(),
         speed,
         pace: 0.0,
+        clock,
         world_settings,
         world,
         settings,

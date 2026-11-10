@@ -19,6 +19,21 @@ const spec = {
   constraints: [],
   resources: 'normal-life',
 }
+test('always-on manager opens a world without a browser page', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-always-on-'))
+  let m
+  try {
+    m = await createManager({ root, port: 0, mockLlm: true, alwaysOn: true })
+    const { towns } = await (
+      await fetch(`http://127.0.0.1:${m.server.address().port}/api/towns`)
+    ).json()
+    assert.equal(towns.filter((town) => town.running).length, 1)
+  } finally {
+    await m?.stop()
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 test('preview/save/open/reopen/reset/isolation work with actual hosts and persistent positions', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-manager-test-'))
   let m
