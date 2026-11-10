@@ -456,8 +456,10 @@ function register(input: ShellInputs, p: RegisteredParts) {
   const observedPanel: ShellPanel = {
     roster({ residents }) {
       p.observed.clear()
+      // 只收居民：化身（自己的、别人页面的）没有 Agent 设定，收进来会让选中时问出「查无此人」
       for (const { member } of residents)
-        p.observed.set(member.id, { id: member.id, name: member.name })
+        if (member.kind !== 'avatar')
+          p.observed.set(member.id, { id: member.id, name: member.name })
     },
   }
   const mapPanel: ShellPanel = {

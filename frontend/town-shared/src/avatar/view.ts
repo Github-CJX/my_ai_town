@@ -136,13 +136,19 @@ export function partnerNames(state: AvatarState, talk: AvatarInteraction) {
   const ids = (talk.members ?? [talk.initiator, talk.partner]).filter((id) => id !== me)
   return ids.map((id) => personName(state, talk, id)).join('、') || '对方'
 }
-/** 一个人的名字：附近的人或交谈记录里有就用，否则叫「对方」；是自己时为「你」 */
+/** 一个人的名字：附近的人或互动里带的名字，都没有就叫「对方」；是自己时为「你」 */
 export function personName(state: AvatarState, talk: AvatarInteraction | undefined, id: string) {
   if (id === state.actor?.id) return '你'
   return (
     state.nearby?.find((n) => n.id === id)?.name ??
     talk?.entries?.find((e) => e.actor === id)?.name ??
     state.interactions?.flatMap((i) => i.entries ?? []).find((e) => e.actor === id)?.name ??
+    state.interactions
+      ?.flatMap((i) => [
+        i.initiator === id ? i.initiator_name : undefined,
+        i.partner === id ? i.partner_name : undefined,
+      ])
+      .find(Boolean) ??
     '对方'
   )
 }

@@ -37,6 +37,8 @@ export type InteractionCommand =
   | { operation: 'reply'; interaction_id: string; accept: boolean; message: string }
   | { operation: 'cancel' | 'listen'; interaction_id: string }
   | { operation: 'join' | 'leave' | 'decline'; interaction_id: string; message: string }
+  /** 给现在不在镇上的人留约定：按名字找化身，locale 是见面的地方，at 是约好的世界分钟 */
+  | { operation: 'reserve'; name: string; locale: string; at: number; message: string }
   | { operation: 'say'; interaction_id: string; message: string; to?: string }
   | {
       operation: 'propose'
@@ -85,7 +87,11 @@ type Absent<T> = { [K in keyof T]?: undefined }
 interface InteractionBase {
   id: string
   initiator: string
+  /** 发起人的名字：对方可能已经离开小镇，只有编号就认不出是谁 */
+  initiator_name?: string
   partner: string
+  /** 对方的名字，同 initiator_name */
+  partner_name?: string
   locale: string
   kind: InteractionKind
   message: string

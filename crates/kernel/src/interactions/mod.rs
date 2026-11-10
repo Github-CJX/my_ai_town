@@ -399,14 +399,16 @@ impl Interactions {
             .map(|i| i.id.clone())
             .collect();
         for id in ids {
-            let minutes = self.items[&id].expires_at - self.items[&id].created_at;
-            self.end(
-                actors,
-                now,
-                &id,
-                Status::Expired,
-                Some(format!("邀请超过 {minutes:.0} 分钟未回应")),
-            );
+            let item = &self.items[&id];
+            let minutes = item.expires_at - item.created_at;
+            // 留给别人的约定没等到回应：不判爽约，直接作废（人不一定在镇上）。
+            let reason = match item.kind {
+                InteractionKind::Appointment { .. } => {
+                    "约定没成：到时间还没等到回应，作废".to_string()
+                }
+                _ => format!("邀请超过 {minutes:.0} 分钟未回应"),
+            };
+            self.end(actors, now, &id, Status::Expired, Some(reason));
         }
     }
 

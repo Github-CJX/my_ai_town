@@ -14,7 +14,7 @@ import type { WaitLine } from './modelWait'
 import type { GameMap, ResidentEntry } from './gameMap'
 import type { RosterFrame } from './shell/panel'
 import type { EventsHandle } from './events'
-import { $, query } from './dom'
+import { $, el, query } from './dom'
 import { displayClock, playerText } from './format'
 import { byJoinOrder, portraitKey } from './portraits'
 import { agentStateLabels } from './labels'
@@ -85,6 +85,9 @@ export function initInfoPanel(deps: InfoPanelDeps) {
   const miracleBtns = [...miracleBox.querySelectorAll<HTMLButtonElement>('button')]
   // 「状态」标题最右边的「调整」：暂停时直接拨身体数值
   const adjustBtn = query<HTMLButtonElement>(panel, '#info-adjust')
+  // 化身卡多一行说明：别人的化身只能看着——没有身体、口袋，也没有能替他做的动作
+  const note = el('div', '', 'info-note')
+  $('info-transit').after(note)
   lineLabel(reviveBtn, 'spark', '复活')
   lineLabel(talkBtn, 'chat', '说话')
   lineLabel(followBtn, 'eye', '跟随')
@@ -260,8 +263,10 @@ export function initInfoPanel(deps: InfoPanelDeps) {
     if (!id) {
       if (following) setFollowing(false)
       setCollapsed(true)
+      delete panel.dataset.kind
+      note.textContent = ''
       $('info-name').textContent = '未选中村民'
-      $('info-place').textContent = '点击地图上的村民查看信息'
+      $('info-place').textContent = '点击地图上的村民或化身查看信息'
       $('info-activity').textContent = ''
       $('info-transit').textContent = ''
       $('info-home').textContent = ''
@@ -339,27 +344,35 @@ export function initInfoPanel(deps: InfoPanelDeps) {
     if (!me) return
     const m = me.member
     current = m
-    possessBtn.hidden = !deps.map.avatarSupported
-    possessBtn.disabled = !canPossess(m)
-    possessBtn.title = possessBtn.disabled
-      ? !deps.avatarAvailable()
-        ? '当前世界尚未开放角色控制'
-        : (m.body?.limitation ?? '村民状态尚未就绪')
-      : '直接接管这名村民；AI 暂停决策'
+    // 别人的化身：卡片只写名字、在哪、在做什么，动作只剩「跟随」——不能替他行动
+    const playing = m.kind === 'avatar'
+    if (playing) panel.dataset.kind = 'avatar'
+    else delete panel.dataset.kind
+    note.textContent = playing ? '别的页面正在玩的化身：你只能看着，不能替他行动' : ''
+    possessBtn.hidden = playing || !deps.map.avatarSupported
+    possessBtn.disabled = playing || !canPossess(m)
+    possessBtn.title = playing
+      ? '这是别的页面正在玩的化身，不能附身'
+      : possessBtn.disabled
+        ? !deps.avatarAvailable()
+          ? '当前世界尚未开放角色控制'
+          : (m.body?.limitation ?? '村民状态尚未就绪')
+        : '直接接管这名村民；AI 暂停决策'
     talkBtn.hidden = !canTalk(m)
     talkBtn.title = `你的化身会走过去，${m.name}会停下来等你`
     renderMiracles(m)
     worldSpeed = speed
     syncAdjust()
 
-    needs.setResidentName(m.name)
     $('info-edit').title = `编辑${m.name}的设定`
-    $('info-name').textContent = m.name
+    $('info-name').textContent = playing ? `${m.name}（玩家）` : m.name
     const at = m.at
     $('info-place').textContent = deps.localeName(me.locale)
     $('info-activity').textContent = m.chat
       ? `正在交谈 · ${m.chat.participants.join('、')}`
-      : m.verb
+      : playing
+        ? '正在这里玩'
+        : m.verb
     renderStop(m, speed)
     // 只在路上时多写一行进度
     $('info-transit').textContent =
@@ -368,14 +381,26 @@ export function initInfoPanel(deps: InfoPanelDeps) {
         : ''
     $('info-transit').hidden = at.kind !== 'transit'
     renderHome()
-    const r = registrations.get(m.id)
-    stage.set(r ? portraitKey(r) : m.id, at.kind === 'transit')
-    if (m.kind === 'resident') needs.render(m.needs ?? [])
-    body.render(m.body, physiology)
-    inventory.render(m.inventory)
-    thought.render(m.thought, minutes)
-    agent.render(m.resident_agent)
-    plan.render(m.plan, m.body)
+    if (playing) {
+      // 化身没有身体、口袋、目标和设定：留着上一次选中的居民内容只会误导
+      needs.clear()
+      body.clear()
+      inventory.clear()
+      thought.clear()
+      agent.clear()
+      plan.clear()
+      stage.clear()
+    } else {
+      needs.setResidentName(m.name)
+      const r = registrations.get(m.id)
+      stage.set(r ? portraitKey(r) : m.id, at.kind === 'transit')
+      if (m.kind === 'resident') needs.render(m.needs ?? [])
+      body.render(m.body, physiology)
+      inventory.render(m.inventory)
+      thought.render(m.thought, minutes)
+      agent.render(m.resident_agent)
+      plan.render(m.plan, m.body)
+    }
     syncFocus()
     // 地图不会逐帧跟时：每次 roster 更新，村民在视野外（带边距）才平移
     if (following && !deps.map.watch) {

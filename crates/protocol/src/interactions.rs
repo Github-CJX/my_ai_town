@@ -108,6 +108,18 @@ pub enum InteractionCommand {
         accept: bool,
         message: String,
     },
+    /// 给现在还不在镇上的人留个约定：按名字找化身，对方上线后看到这条邀请再答应。
+    /// 双方不必在场、也不必同一处所——空约定只是「说好几点在哪见」。
+    Reserve {
+        /// 要约的人的名字：在场或已经离开小镇的化身都行。
+        name: String,
+        /// 约在哪个地方见。
+        locale: String,
+        /// 约在什么时候见（小镇分钟）。
+        at: f64,
+        #[serde(default)]
+        message: String,
+    },
     Cancel {
         interaction_id: String,
     },

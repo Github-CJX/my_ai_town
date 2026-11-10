@@ -784,7 +784,7 @@ class AvatarController {
       flag.title =
         possessing || controlling
           ? '这个页面在控制化身；这时世界按正常速度走，不自动快进'
-          : '这个页面还没有控制权，只看得到世界；点地图上的人或「进入化身」就能自己玩'
+          : '这个页面还没有控制权，只看得到世界；点地图上的化身看他在做什么，点「进入化身」自己玩'
     }
     const controlled = controlling
     map.setAvatarState?.(state ? { ...state, controlled } : null)

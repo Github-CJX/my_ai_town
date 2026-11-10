@@ -162,6 +162,8 @@ function appointments(v: ChatView) {
 // 约时间的选择在重画之间保留：面板每有新话就重画，选到一半不该被清掉
 let appointPlace = ''
 let appointLater = '一小时后'
+// 空约定的对象也留着：离开小镇的人看不见名册，只能按名字写下来
+let reserveName = ''
 
 /** 约时间可选的时刻：一两个钟头以后、明早、明天中午；超出一天的不列（约定最多约到一天以内） */
 function laterChoices(now: number) {
@@ -206,6 +208,50 @@ function appointRow(v: ChatView, talk: AvatarInteraction) {
     })
   }
   row.append(el('span', '约时间'), place, later, panelButton('约好', propose, !v.active))
+}
+
+/** 给现在不在镇上的人留个约定：按名字写下来，对方回来会看到这条邀请，答应了才算约好 */
+function reserveRow(v: ChatView) {
+  const { places, minutes } = v.notices
+  const choices = laterChoices(minutes)
+  if (!places.length || !choices.length) return
+  if (!places.some((p) => p.id === appointPlace)) appointPlace = places[0].id
+  const row = v.block('avatar-textacts avatar-reserve')
+  const name = el('input')
+  name.type = 'text'
+  name.maxLength = 24
+  name.value = reserveName
+  name.placeholder = '写下他的名字'
+  name.setAttribute('aria-label', '要等的人的名字')
+  name.oninput = () => (reserveName = name.value)
+  const place = el('select')
+  place.setAttribute('aria-label', '见面地点')
+  for (const p of places) place.append(new Option(p.name, p.id, false, p.id === appointPlace))
+  place.onchange = () => (appointPlace = place.value)
+  const later = el('select')
+  later.setAttribute('aria-label', '见面时间')
+  for (const c of choices)
+    later.append(
+      new Option(`${c.label}（${clock(c.at).slice(-5)}）`, c.label, false, c.label === appointLater)
+    )
+  later.onchange = () => (appointLater = later.value)
+  const reserve = () => {
+    const c = choices.find((c) => c.label === later.value) ?? choices[0]
+    v.interact({
+      operation: 'reserve',
+      name: reserveName.trim(),
+      locale: place.value,
+      at: c.at,
+      message: `${c.label}在${v.localeName(place.value)}见，你回来我们就见。`,
+    })
+  }
+  row.append(
+    el('span', '给不在镇上的人留个约定'),
+    name,
+    place,
+    later,
+    panelButton('留下约定', reserve, !v.idle || !reserveName.trim())
+  )
 }
 
 /** 聊天记录里的过程条目怎么说 */
@@ -451,6 +497,7 @@ export function renderChat(
     )
   for (const i of state.interactions ?? []) if (i.status === 'offered') inviteCard(view, i)
   appointments(view)
+  reserveRow(view)
   const talk = runningTalk(state)
   if (talk) talkLog(view, talk)
   else nearbyPeople(view)

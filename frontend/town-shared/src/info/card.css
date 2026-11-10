@@ -139,6 +139,27 @@
 #info-home:empty {
   display: none;
 }
+/* 别人的化身只有名字、地点和「正在这里玩」：身体、口袋、目标、设定、动作钮都收起来，
+ * 留给旁观者的动作只有「跟随」（镜头跟着他）。 */
+.info-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+#info-panel[data-kind='avatar'] .card-sprite,
+#info-panel[data-kind='avatar'] #info-body,
+#info-panel[data-kind='avatar'] #info-home,
+#info-panel[data-kind='avatar'] #info-edit,
+#info-panel[data-kind='avatar'] #info-diary,
+#info-panel[data-kind='avatar'] #info-memory,
+#info-panel[data-kind='avatar'] #info-chat,
+#info-panel[data-kind='avatar'] #info-talk,
+#info-panel[data-kind='avatar'] #info-possess,
+#info-panel[data-kind='avatar'] #info-revive,
+#info-panel[data-kind='avatar'] #info-miracles,
+#info-panel[data-kind='avatar'] #info-adjust {
+  display: none;
+}
 
 /* ---------- 正文 ---------- */
 #info-body {

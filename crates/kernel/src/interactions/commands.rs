@@ -213,6 +213,12 @@ impl World {
                 accept,
                 message,
             } => self.reply(actor, interaction_id, *accept, message),
+            InteractionCommand::Reserve {
+                name,
+                locale,
+                at,
+                message,
+            } => self.reserve(actor, command_id, name, locale, *at, message),
             InteractionCommand::Cancel { interaction_id } => self.cancel(actor, interaction_id),
             InteractionCommand::Propose {
                 interaction_id,
@@ -289,6 +295,85 @@ impl World {
         self.interactions
             .record_offer(&mut self.actors, now, &item, message);
         Ok(item)
+    }
+
+    /// 给现在还不在镇上的人留个约定：按名字找化身，对方上线后看到邀请再答应。
+    /// 不查两人是否在场、是否同一处所——约定不占身体，只是「说好几点在哪见」。
+    fn reserve(
+        &mut self,
+        actor: &str,
+        command_id: &str,
+        name: &str,
+        locale: &str,
+        at: f64,
+        message: &str,
+    ) -> Result<Interaction> {
+        check_message(message)?;
+        ensure!(
+            !command_id.is_empty() && command_id.len() <= ID_MAX_BYTES,
+            KernelError::interaction("互动编号无效")
+        );
+        let partner = self.avatar_by_name(name)?;
+        ensure!(
+            partner != actor,
+            KernelError::interaction("不能和自己约时间")
+        );
+        let kind = InteractionKind::Appointment {
+            locale: locale.into(),
+            at,
+        };
+        if let Some(old) = self
+            .interactions
+            .resent_offer(command_id, actor, &partner, &kind, message)?
+        {
+            return Ok(old);
+        }
+        ensure!(
+            self.actors[actor].interaction_available(),
+            KernelError::interaction("请先完成当前活动，再留约定")
+        );
+        self.interactions.check_new_offer(actor, &partner, &kind)?;
+        // 约定不占身体：只查发起人认不认得那个地方、时候还来不来得及
+        let duration_minutes = check_kind(self, actor, &partner, &kind)?;
+        let mut item = Interactions::new_offer(
+            command_id,
+            &self.actors[actor],
+            &partner,
+            kind,
+            message,
+            duration_minutes,
+            self.minutes,
+        );
+        // 留给别人的约定一直有效到约定时刻：对方可能十几个钟头以后才回来，不能按十分钟上限作废
+        item.expires_at = at;
+        let now = self.minutes;
+        self.interactions
+            .record_offer(&mut self.actors, now, &item, message);
+        Ok(item)
+    }
+
+    /// 按名字找一个化身：已经离开小镇的也算，空的约定就是留给他的。
+    fn avatar_by_name(&self, name: &str) -> Result<String> {
+        let name = name.trim();
+        ensure!(
+            !name.is_empty(),
+            KernelError::interaction("请写下要等的人的名字")
+        );
+        let found: Vec<&str> = self
+            .actors
+            .values()
+            .filter(|a| a.is_avatar() && a.name.trim() == name)
+            .map(|a| a.id.as_str())
+            .collect();
+        match found.as_slice() {
+            [] => Err(KernelError::interaction(format!(
+                "镇上还没有叫「{name}」的化身"
+            ))),
+            [one] => Ok((*one).into()),
+            _ => Err(KernelError::interaction(format!(
+                "有两个叫「{name}」的化身，请等其中一个在场时再约"
+            ))),
+        }
     }
 
     fn reply(
@@ -381,8 +466,19 @@ impl World {
     }
 
     /// 接受邀请前再查一遍：双方仍在邀请地点（玩家参与的只看还够不够得着）、能够回应，
-    /// 互动内容本身仍然可行。
+    /// 互动内容本身仍然可行。约定例外：不占身体，也不要求两个人此刻站在同一处。
     fn check_accept(&self, actor: &str, old: &Interaction) -> Result<()> {
+        if let InteractionKind::Appointment { locale, at } = &old.kind {
+            ensure!(
+                self.topo.place_of(locale).is_some(),
+                KernelError::interaction("约定的地点已经不存在了")
+            );
+            // 时刻比较单独写：`ensure!` 里的 `!(a >= b)` 会被 clippy 判成难以阅读的浮点比较
+            if *at < self.minutes {
+                return Err(KernelError::interaction("约定的时间已经过了"));
+            }
+            return Ok(());
+        }
         self.check_not_walking([actor, &old.initiator], &old.kind)?;
         check_pair_here(self, &old.initiator, actor, &old.kind)?;
         ensure!(
@@ -396,8 +492,8 @@ impl World {
                 self.talk_available(actor) && self.talk_available(&old.initiator),
                 KernelError::interaction("双方须能够回应，并先结束已有的共同互动")
             );
-        } else if !matches!(old.kind, InteractionKind::Appointment { .. }) {
-            // 约定答应了照常活动，不要求空闲
+        } else {
+            // 约定在上面单独放行；其余双方活动要两人都空闲
             ensure!(
                 self.actors[actor].interaction_available()
                     && self.actors[&old.initiator].interaction_available(),

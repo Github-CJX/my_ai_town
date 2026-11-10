@@ -210,12 +210,18 @@ pub struct AvatarChatItem {
     pub expires_at: f64,
     pub id: String,
     pub initiator: String,
+    /// 发起人的名字：对方可能已经离开小镇，界面上只有编号就认不出是谁。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiator_name: Option<String>,
     #[serde(serialize_with = "crate::sorted")]
     pub kind: InteractionKind,
     pub locale: String,
     pub members: BTreeSet<String>,
     pub message: String,
     pub partner: String,
+    /// 对方的名字，同 `initiator_name`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partner_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<crate::ChatProposal>,
     pub reason: Option<String>,
@@ -241,11 +247,17 @@ pub struct AvatarPairItem {
     pub expires_at: f64,
     pub id: String,
     pub initiator: String,
+    /// 同 `AvatarChatItem::initiator_name`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiator_name: Option<String>,
     #[serde(serialize_with = "crate::sorted")]
     pub kind: InteractionKind,
     pub locale: String,
     pub message: String,
     pub partner: String,
+    /// 同 `AvatarChatItem::partner_name`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partner_name: Option<String>,
     pub reason: Option<String>,
     pub reply: Option<String>,
     pub started_at: Option<f64>,

@@ -292,48 +292,60 @@ impl Builder<'_> {
             .chat
             .as_ref()
             .is_some_and(|c| c.members.contains(actor) && c.resume_at > self.w.minutes);
+        // 当事人可能已经离开小镇（空的约定就是留给这样的人）：名字一起发下去，界面上才认得出是谁。
+        let name_of = |id: &str| self.w.actors.get(id).map(|a| a.name.clone());
         match Interactions::observation(actor, i) {
-            InteractionObservation::Chat(c) => AvatarInteraction::Chat(AvatarChatItem {
-                can_request_turn,
-                can_speak,
-                entries: c.entries,
-                expires_at: i.expires_at,
-                id: c.id,
-                initiator: c.initiator,
-                kind: c.kind,
-                locale: c.locale,
-                members: c.members,
-                message: i.message.clone(),
-                partner: c.partner,
-                proposal: c.proposal,
-                reason: i.reason.clone(),
-                reply: i.reply.clone(),
-                status: c.status,
-                turn: c.turn,
-                response_error: None,
-            }),
-            InteractionObservation::Pair(p) => AvatarInteraction::Pair(AvatarPairItem {
-                accepted: p.accepted,
-                can_request_turn,
-                can_speak,
-                changes: p.changes,
-                created_at: p.created_at,
-                duration_minutes: p.duration_minutes,
-                ended_at: p.ended_at,
-                event_ids: p.event_ids,
-                expires_at: p.expires_at,
-                id: p.id,
-                initiator: p.initiator,
-                kind: p.kind,
-                locale: p.locale,
-                message: p.message,
-                partner: p.partner,
-                reason: p.reason,
-                reply: p.reply,
-                started_at: p.started_at,
-                status: p.status,
-                response_error: None,
-            }),
+            InteractionObservation::Chat(c) => {
+                let (initiator_name, partner_name) = (name_of(&c.initiator), name_of(&c.partner));
+                AvatarInteraction::Chat(AvatarChatItem {
+                    can_request_turn,
+                    can_speak,
+                    entries: c.entries,
+                    expires_at: i.expires_at,
+                    id: c.id,
+                    initiator: c.initiator,
+                    initiator_name,
+                    kind: c.kind,
+                    locale: c.locale,
+                    members: c.members,
+                    message: i.message.clone(),
+                    partner: c.partner,
+                    partner_name,
+                    proposal: c.proposal,
+                    reason: i.reason.clone(),
+                    reply: i.reply.clone(),
+                    status: c.status,
+                    turn: c.turn,
+                    response_error: None,
+                })
+            }
+            InteractionObservation::Pair(p) => {
+                let (initiator_name, partner_name) = (name_of(&p.initiator), name_of(&p.partner));
+                AvatarInteraction::Pair(AvatarPairItem {
+                    accepted: p.accepted,
+                    can_request_turn,
+                    can_speak,
+                    changes: p.changes,
+                    created_at: p.created_at,
+                    duration_minutes: p.duration_minutes,
+                    ended_at: p.ended_at,
+                    event_ids: p.event_ids,
+                    expires_at: p.expires_at,
+                    id: p.id,
+                    initiator: p.initiator,
+                    initiator_name,
+                    kind: p.kind,
+                    locale: p.locale,
+                    message: p.message,
+                    partner: p.partner,
+                    partner_name,
+                    reason: p.reason,
+                    reply: p.reply,
+                    started_at: p.started_at,
+                    status: p.status,
+                    response_error: None,
+                })
+            }
         }
     }
 }

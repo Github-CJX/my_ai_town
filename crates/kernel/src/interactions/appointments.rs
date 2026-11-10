@@ -99,6 +99,28 @@ impl World {
                 continue;
             }
             if now + 1e-9 >= at + GRACE {
+                // 有人不在镇上（化身离线）：不判爽约，也不等他回来补见，约定直接作废。
+                // 空约定本来就是留给线上的人约的，人不在只是没约成，不是失约。
+                let away: Vec<String> = [&item.initiator, &item.partner]
+                    .iter()
+                    .filter(|p| !self.actors[**p].present())
+                    .map(|p| self.actors[*p].name.clone())
+                    .collect();
+                if !away.is_empty() {
+                    let reason = if away.len() == 2 {
+                        "约定没成：两人那时都不在小镇，作废".to_string()
+                    } else {
+                        format!("约定没成：{}那时不在小镇，作废", away.join("、"))
+                    };
+                    self.interactions.end(
+                        &mut self.actors,
+                        now,
+                        &id,
+                        Status::Expired,
+                        Some(reason),
+                    );
+                    continue;
+                }
                 let missing: Vec<String> = [&item.initiator, &item.partner]
                     .iter()
                     .filter(|p| self.actors[**p].locus.locale != locale)

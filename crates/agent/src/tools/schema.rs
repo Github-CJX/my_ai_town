@@ -99,6 +99,7 @@ pub(crate) fn interaction_commands() -> Vec<InteractionCommand> {
         Leave => InteractionCommand::Leave { interaction_id: s(), message: s() },
         Offer => InteractionCommand::Offer { partner_id: s(), interaction: InteractionKind::Talk, message: s() },
         Reply => InteractionCommand::Reply { interaction_id: s(), accept: false, message: s() },
+        Reserve => InteractionCommand::Reserve { name: s(), locale: s(), at: 0.0, message: s() },
         Cancel => InteractionCommand::Cancel { interaction_id: s() },
         Propose => InteractionCommand::Propose { interaction_id: s(), interaction: InteractionKind::Talk, message: s(), to: None },
         Accept => InteractionCommand::Accept { interaction_id: s(), message: s(), locale: None },
@@ -377,9 +378,12 @@ pub(super) fn run_actions() -> Value {
 }
 pub(super) fn interact() -> Value {
     interaction_operations(|c| {
+        // 给不在镇上的人留约定是玩家页面的事，居民用普通的邀请就够
         !matches!(
             c,
-            InteractionCommand::Offer { .. } | InteractionCommand::Reply { .. }
+            InteractionCommand::Offer { .. }
+                | InteractionCommand::Reply { .. }
+                | InteractionCommand::Reserve { .. }
         )
     })
 }
@@ -421,6 +425,16 @@ fn interaction_operations(keep: impl Fn(&InteractionCommand) -> bool) -> Value {
         }
         InteractionCommand::Offer { .. } => offer_fields(),
         InteractionCommand::Reply { .. } => reply_fields(),
+        InteractionCommand::Reserve { .. } => {
+            // 玩家专用的空约定：这里只为穷举保留字段定义，工具里不会给居民列出
+            let mut fields = json!({
+                "name":{"type":"string","minLength":1},
+                "locale":{"type":"string"},
+                "at":{"type":"number"},
+            });
+            fields["message"] = message();
+            (fields, vec!["name", "locale", "at"])
+        }
         InteractionCommand::Propose { .. } => {
             let mut fields = id();
             fields["interaction"] = interaction();

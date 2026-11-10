@@ -4,8 +4,8 @@ use kernel::{
     World,
 };
 use protocol::{
-    Appearance, BodyEventKind, InteractionCommand as Chat, InteractionKind, InventoryAction,
-    MiracleKind,
+    Appearance, AvatarView, BodyEventKind, InteractionCommand as Chat, InteractionKind,
+    InteractionStatus, InventoryAction, MiracleKind,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -909,7 +909,8 @@ fn two_avatars_talking_both_show_their_lines_in_the_roster() {
     .unwrap();
     // 聊起来以后两个人都说一句（各自轮到自己时；转两圈保证两个人都轮到）。
     for _ in 0..2 {
-        for (actor, line) in [(ID, "今天广场上有人唱歌"), (second.as_str(), "我也听见了")] {
+        for (actor, line) in [(ID, "今天广场上有人唱歌"), (second.as_str(), "我也听见了")]
+        {
             if !w.chat_turn(actor) {
                 continue;
             }
@@ -944,4 +945,150 @@ fn two_avatars_talking_both_show_their_lines_in_the_roster() {
     assert_eq!(me["speech"]["text"], "今天广场上有人唱歌");
     assert_eq!(other["speech"]["text"], "我也听见了");
     assert_eq!(me["speech"]["chat_id"], other["speech"]["chat_id"]);
+}
+
+/// 空约定：给现在不在镇上的人留个约定，对方上线看得见、答应得成；人不回来就作废，不算爽约。
+#[test]
+fn an_empty_appointment_waits_for_someone_who_is_offline() {
+    let mut w = world();
+    enter(&mut w);
+    let second = w.avatar_join("阿波", look("#a3572b")).unwrap();
+    // 阿波下线了：人不在镇上，但名字还认得出。
+    w.avatar_leave_of(&second).unwrap();
+    assert!(!w.actor(&second).unwrap().present());
+    let at = w.minutes() + 120.;
+    let offer = w
+        .avatar_interact(
+            "empty",
+            w.avatar().unwrap().actions.revision,
+            &Chat::Reserve {
+                name: "阿波".into(),
+                locale: "loc_a".into(),
+                at,
+                message: "你回来我们就见一面".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(offer.partner, second);
+    assert_eq!(offer.status, InteractionStatus::Offered);
+    assert_eq!(
+        offer.expires_at, at,
+        "留给别人的约定一直有效到约定时刻，不按十分钟上限提前作废"
+    );
+    // 阿波回来：自己的视图里看得到这条约定，发起人的名字也在（不然只看到一串编号）。
+    w.avatar_enter_as(&second, "阿波", look("#a3572b")).unwrap();
+    let AvatarView::Present(state) = w.avatar_view_of(&second) else {
+        panic!("阿波刚回到镇上，应该拿得到在场视图");
+    };
+    let seen = state
+        .interactions
+        .iter()
+        .find_map(|i| match i {
+            protocol::AvatarInteraction::Pair(p) if p.id == "empty" => Some(p),
+            _ => None,
+        })
+        .expect("阿波应该在自己的视图里看到这条约定");
+    assert_eq!(seen.status, InteractionStatus::Offered);
+    assert_eq!(seen.initiator_name.as_deref(), Some("aya"));
+    // 对方答应时不必两人站在一起：发起人随后离开小镇，约定照样成立。
+    let rev = w.actor(&second).unwrap().actions.revision;
+    let accepted = w
+        .avatar_interact_of(
+            &second,
+            "yes",
+            rev,
+            &Chat::Reply {
+                interaction_id: "empty".into(),
+                accept: true,
+                message: "好，回来就找你".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(accepted.status, InteractionStatus::Running);
+    w.avatar_leave_of(ID).unwrap();
+    // 到点时发起人不在镇上：作废，但不记爽约。
+    w.step(120. + 31.);
+    let done = w.interactions().of(ID, "empty").unwrap();
+    assert_eq!(done.status, InteractionStatus::Expired);
+    let reason = done.reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("不在小镇"),
+        "作废理由要说清是人不在了：{reason}"
+    );
+    assert!(!reason.contains("没有按约"), "人不在镇上不算爽约：{reason}");
+}
+
+/// 空约定没人回应：到点中性作废，不写任何指责；约自己也约不成。
+#[test]
+fn an_unanswered_empty_appointment_expires_without_blame() {
+    let mut w = world();
+    enter(&mut w);
+    let second = w.avatar_join("阿波", look("#a3572b")).unwrap();
+    w.avatar_leave_of(&second).unwrap();
+    let rev = w.avatar().unwrap().actions.revision;
+    assert!(w
+        .avatar_interact(
+            "self",
+            rev,
+            &Chat::Reserve {
+                name: "aya".into(),
+                locale: "loc_a".into(),
+                at: w.minutes() + 60.,
+                message: "".into(),
+            },
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("不能和自己约时间"));
+    assert!(w
+        .avatar_interact(
+            "ghost",
+            rev,
+            &Chat::Reserve {
+                name: "没这个人".into(),
+                locale: "loc_a".into(),
+                at: w.minutes() + 60.,
+                message: "".into(),
+            },
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("还没有叫"));
+    // 十几个钟头以后的约定也留得住：对方明天回来一样看得到、答应得成。
+    let far = w.minutes() + 900.;
+    let kept = w
+        .avatar_interact(
+            "far",
+            rev,
+            &Chat::Reserve {
+                name: "阿波".into(),
+                locale: "loc_a".into(),
+                at: far,
+                message: "明天中午见".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(kept.expires_at, far);
+    assert_eq!(kept.status, InteractionStatus::Offered);
+    let at = w.minutes() + 30.;
+    w.avatar_interact(
+        "later",
+        rev,
+        &Chat::Reserve {
+            name: "阿波".into(),
+            locale: "loc_a".into(),
+            at,
+            message: "有空就见".into(),
+        },
+    )
+    .unwrap();
+    w.step(31.);
+    let done = w.interactions().of(ID, "later").unwrap();
+    assert_eq!(done.status, InteractionStatus::Expired);
+    let reason = done.reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("还没等到回应"),
+        "作废理由要是中性的：{reason}"
+    );
+    assert!(!reason.contains("爽约"), "没人回应不写爽约：{reason}");
 }
