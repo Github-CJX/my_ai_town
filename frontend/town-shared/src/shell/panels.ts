@@ -249,7 +249,7 @@ export function createPanels(input: ShellInputs) {
   })
   worldSettings.subscribe(emptyTown.sync)
   models.subscribe(emptyTown.refresh)
-  installBackToMaps(selectedMap, events, () => avatar.release())
+  installBackToMaps(selectedMap, () => avatar.release())
   // 信息栏按世界生理开关补画关掉的项
   worldSettings.subscribe(() => {
     const switches = worldSettings.state()?.physiology

@@ -108,6 +108,10 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
       /建镇说明无效/
     )
     assert.equal((await api('')).towns.find((town) => town.id === a.id).running, true)
+    // 观看连接（页面 WebSocket）断开只是离开视图，世界进程继续跑。
+    await worldQuery(a.endpoint, null, (msg) => msg.type === 'world_identity')
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    assert.equal((await api('')).towns.find((town) => town.id === a.id).running, true)
     const b = await api('/default-town/open', {})
     assert.notEqual(a.worldId, b.worldId)
     assert.notEqual(a.endpoint, b.endpoint)

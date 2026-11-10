@@ -110,8 +110,7 @@ export class Hosts {
         id,
         '--port',
         '0',
-        '--speed',
-        '0',
+        // 不传 --speed：恢复存档里选定的速度；新世界仍由世界观门槛保持暂停。
         '--save-file',
         path.join(dir, 'world.json'),
         '--ready-file',

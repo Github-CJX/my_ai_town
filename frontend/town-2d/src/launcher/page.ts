@@ -4,7 +4,6 @@ import type { MapEntry } from 'town-shared/mapDocument'
 import type { GameMap } from 'town-shared/gameMap'
 import { $, query } from 'town-shared/dom'
 import { errorText } from 'town-shared/format'
-import { pauseWorld } from 'town-shared/pauseWorld'
 import { loadDocument } from '../assets'
 import { createMapRenderer } from '../mapRenderers'
 import { gameUrl, listMaps, openMap } from './catalog'
@@ -315,8 +314,7 @@ enter.onclick = async () => {
   enter.disabled = true
   $('pause-status').textContent = '正在打开小镇…'
   try {
-    const runtime = await openMap(map.id)
-    await pauseWorld(runtime.endpoint)
+    await openMap(map.id)
     if (selected === map) location.assign(gameUrl(map))
   } catch (error) {
     $('pause-status').textContent = errorText(error)
@@ -475,10 +473,9 @@ initCreator(
   },
   () => maps.map((m) => m.name),
   () => homeSettings.connect(),
-  // 保存并进镇：和「进入游戏」一样先打开、停住世界，再进游戏页
+  // 保存并进镇：和「进入游戏」一样先打开，世界按存档速度继续，再进游戏页
   async (id) => {
     const runtime = await openMap(id)
-    await pauseWorld(runtime.endpoint)
     location.assign(gameUrl(runtime))
   }
 )
