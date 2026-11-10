@@ -42,12 +42,24 @@ test('built app creates and runs a map with a read-only resource tree and no pre
       await fs.cp(path.join(root, file), p, { recursive: true })
     }
     await fs.mkdir(path.join(bundle, 'target/debug'), { recursive: true })
-    for (const bin of ['host', 'town-map'])
-      await fs.symlink(path.join(root, 'target/debug', bin), path.join(bundle, 'target/debug', bin))
+    const exe = process.platform === 'win32' ? '.exe' : ''
+    for (const bin of ['host', 'town-map']) {
+      const source = path.join(root, 'target/debug', bin + exe)
+      const target = path.join(bundle, 'target/debug', bin + exe)
+      try {
+        await fs.symlink(source, target)
+      } catch (error) {
+        // Windows 没有开发者模式时创建符号链接会 EPERM；跨盘也不能硬链接。
+        if (!['EPERM', 'EACCES', 'EXDEV'].includes(error.code)) throw error
+        await fs.copyFile(source, target)
+      }
+    }
     await permissions(bundle, 0o555)
-    await assert.rejects(fs.writeFile(path.join(bundle, 'data/maps/another-map.json'), '{}'), (e) =>
-      ['EACCES', 'EPERM'].includes(e.code)
-    )
+    // Windows 的只读属性只挡文件，不挡在目录里新建文件；下面的启动后检查仍会确认没写进包内。
+    if (process.platform !== 'win32')
+      await assert.rejects(fs.writeFile(path.join(bundle, 'data/maps/another-map.json'), '{}'), (e) =>
+        ['EACCES', 'EPERM'].includes(e.code)
+      )
     let output = ''
     child = spawn(process.execPath, [path.join(bundle, 'scripts/town-manager.mjs')], {
       cwd: bundle,
@@ -56,6 +68,8 @@ test('built app creates and runs a map with a read-only resource tree and no pre
         AI_TOWN_HOME: data,
         TOWN_MANAGER_PORT: '0',
         TOWN_MOCK_LLM: '1',
+        TOWN_HOST_BINARY: path.join(bundle, 'target/debug/host' + exe),
+        TOWN_MAP_BINARY: path.join(bundle, 'target/debug/town-map' + exe),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
