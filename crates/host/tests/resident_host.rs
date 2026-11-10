@@ -20,6 +20,11 @@ struct Endpoint {
 }
 impl Endpoint {
     fn start() -> Self {
+        Self::start_with_failure(None)
+    }
+
+    /// 让指定模型名的请求返回 401，用来验证一个模型坏掉不会拖住其他村民。
+    fn start_with_failure(fail_model: Option<&str>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -27,6 +32,7 @@ impl Endpoint {
         let stopping = stop.clone();
         let models = Arc::new(Mutex::new(Vec::new()));
         let recorded_models = models.clone();
+        let failing = fail_model.map(str::to_string);
         let thread = std::thread::spawn(move || {
             while !stopping.load(Ordering::Relaxed) {
                 let Ok((mut stream, _)) = listener.accept() else {
@@ -62,10 +68,13 @@ impl Endpoint {
                         }
                     }
                 };
-                recorded_models
-                    .lock()
-                    .unwrap()
-                    .push(value["model"].as_str().unwrap_or_default().to_string());
+                let requested = value["model"].as_str().unwrap_or_default().to_string();
+                recorded_models.lock().unwrap().push(requested.clone());
+                if failing.as_deref() == Some(requested.as_str()) {
+                    let body = json!({"error":{"message":"invalid api key","type":"authentication_error"}}).to_string();
+                    write!(stream,"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+                    continue;
+                }
                 let reflection = value["messages"]
                     .as_array()
                     .unwrap()
@@ -344,6 +353,73 @@ fn residents_use_independent_models_and_the_binding_survives_restart() {
     );
     assert_eq!(first_config["model_binding"]["provider"], "fixture-a");
     assert_eq!(first_config["model_binding"]["model"], "resident-a");
+}
+
+/// 一个模型鉴权失败时，只把用它的村民停在原地，其他村民和世界时间继续走。
+#[test]
+fn one_bad_model_does_not_stop_the_other_resident_or_the_world() {
+    let endpoint = Endpoint::start_with_failure(Some("bad-model"));
+    let mut town = Town::new();
+    town.mock_delay = None;
+    town.write(
+        "config/providers.json",
+        json!({
+            "active":null,
+            "providers":[
+                {"id":"fixture","name":"Fixture","base_url":endpoint.url}
+            ]
+        }),
+    );
+    let mut ws = town.start();
+    let bad = join_id(&mut ws, "tpl_a");
+    let good = join_id(&mut ws, "tpl_b");
+    for (id, model) in [(&bad, "bad-model"), (&good, "good-model")] {
+        let saved = reply(
+            &mut ws,
+            json!({"type":"set_resident_model","request_id":"test-set-resident-model","resident":id,"model":{"provider":"fixture","model":model}}),
+            "agent_saved",
+        );
+        assert_eq!(saved["ok"], true, "{saved}");
+    }
+    let current = reply(&mut ws, json!({"type":"get_agent_limits"}), "agent_limits");
+    let mut limits = current["limits"].clone();
+    limits["model_failures_before_pause"] = json!(1);
+    let saved = reply(
+        &mut ws,
+        json!({"type":"set_agent_limits","request_id":"test-set-agent-limits","limits":limits}),
+        "config_saved",
+    );
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    speed(&mut ws, 20.0);
+    let faulted = until(&mut ws, |message| {
+        message["type"] == "roster"
+            && message["speed"] == 20.0
+            && message["holds"].as_array().is_some_and(|holds| {
+                holds
+                    .iter()
+                    .any(|hold| hold["resident_id"] == bad && hold["kind"] == "fault")
+            })
+    });
+    let minutes = faulted["sim_minutes"].as_f64().unwrap();
+    let later = until(&mut ws, |message| {
+        message["type"] == "roster"
+            && message["speed"] == 20.0
+            && message["sim_minutes"].as_f64().unwrap() > minutes + 1.0
+    });
+    assert!(
+        later["holds"].as_array().is_some_and(|holds| {
+            holds
+                .iter()
+                .any(|hold| hold["resident_id"] == bad && hold["kind"] == "fault")
+        }),
+        "{later}"
+    );
+    let healthy = members(&later)
+        .into_iter()
+        .find(|member| member["id"] == good)
+        .unwrap();
+    assert_ne!(healthy["resident_agent"]["state"], "fault", "{healthy}");
 }
 
 /// 没选模型不算故障：不暂停全镇、不发请求，也不悄悄改用小镇的工具模型；谁都还不能思考时时间停着。

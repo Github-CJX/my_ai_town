@@ -11,6 +11,7 @@ use crate::{
     Event, World,
 };
 use protocol::ActionStatus;
+use std::collections::BTreeSet;
 
 /// 同一时刻连续结算零时长动作的上限，防止计划互相触发成死循环。
 const INSTANT_GUARD: usize = 400;
@@ -20,15 +21,28 @@ impl World {
 
     /// 以活动结束、日历和需求阈值切分时间；所有村民共享同一段世界时间。
     pub fn step(&mut self, dt: f64) -> Vec<Event> {
+        self.step_with_frozen(dt, &BTreeSet::new())
+    }
+
+    /// 同 `step`，但 `frozen` 里的村民停在原地：不推进活动，也不消耗身体需求。
+    /// 模型故障的村民靠它隔离，其他村民照常生活，不必为了一个人让全镇停表。
+    pub fn step_with_frozen(&mut self, dt: f64, frozen: &BTreeSet<String>) -> Vec<Event> {
         assert!(dt.is_finite() && dt >= 0.0, "模拟步长须是有限的非负数");
         let until = self.minutes + dt;
-        let ids = self.actor_ids();
+        let ids: Vec<_> = self
+            .actor_ids()
+            .into_iter()
+            .filter(|id| !frozen.contains(id))
+            .collect();
         self.expire_interactions();
         while self.minutes < until - 1e-9 {
             self.check_ongoing_body_actions();
             self.settle_instant_actions(&ids);
             let t0 = self.minutes;
-            let rates = physiology::rates(self);
+            let rates: Vec<_> = physiology::rates(self)
+                .into_iter()
+                .filter(|(id, _)| !frozen.contains(id))
+                .collect();
             let step = (until - t0)
                 .min(self.activity_boundary(&ids, t0))
                 .min(self.interactions.boundary(t0))

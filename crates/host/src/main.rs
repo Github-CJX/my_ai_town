@@ -234,6 +234,7 @@ fn build_runtime(
         prop_library,
         tasks: host::tasks::TaskPool::new(2, 4),
         save_failed: false,
+        suspended: Default::default(),
     })
 }
 
