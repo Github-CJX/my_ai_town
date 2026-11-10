@@ -19,6 +19,21 @@ const spec = {
   constraints: [],
   resources: 'normal-life',
 }
+test('always-on manager opens a world without a browser page', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-always-on-'))
+  let m
+  try {
+    m = await createManager({ root, port: 0, mockLlm: true, alwaysOn: true })
+    const { towns } = await (
+      await fetch(`http://127.0.0.1:${m.server.address().port}/api/towns`)
+    ).json()
+    assert.equal(towns.filter((town) => town.running).length, 1)
+  } finally {
+    await m?.stop()
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 test('preview/save/open/reopen/reset/isolation work with actual hosts and persistent positions', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-manager-test-'))
   let m
@@ -107,6 +122,10 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
       api('/save', { ...body, request_id: 'bad-prefab', creation: { prefab: '../x' } }),
       /建镇说明无效/
     )
+    assert.equal((await api('')).towns.find((town) => town.id === a.id).running, true)
+    // 观看连接（页面 WebSocket）断开只是离开视图，世界进程继续跑。
+    await worldQuery(a.endpoint, null, (msg) => msg.type === 'world_identity')
+    await new Promise((resolve) => setTimeout(resolve, 250))
     assert.equal((await api('')).towns.find((town) => town.id === a.id).running, true)
     const b = await api('/default-town/open', {})
     assert.notEqual(a.worldId, b.worldId)
