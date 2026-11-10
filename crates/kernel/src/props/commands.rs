@@ -9,6 +9,11 @@ impl World {
         self.place_prop_near(placement, None)
     }
 
+    /// 各地点能放东西的格子，给摆道具界面画「哪里能放」；规则和真放时找空位是同一套。
+    pub fn placement_grids(&self) -> Vec<protocol::PlaceGrid> {
+        navigation::placement_grids(self)
+    }
+
     /// 玩家在地图上点了位置再放：near 只决定在哪片空位里挑，校验和留白与自动选点相同。
     pub fn place_prop_near(
         &mut self,
