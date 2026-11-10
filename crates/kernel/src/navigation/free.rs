@@ -1,5 +1,10 @@
-//! 从玩家留下的自由位置步行接回拓扑站点。只在同一行走空间内寻路，不穿门或瞬移。
+//! 从玩家留下的自由位置步行接回拓扑站点。只在同一行走空间内寻路，不穿门或瞬移；屋里没有
+//! 站点时走到门内一侧，就算站在门外画着的到达点上（见 `WalkMap::inside_door`）。
 //! 寻路和沿路线推进是行走地图与路线自己的规则；World 只取人物位置、障碍，再装上活动。
+//!
+//! 站的地方本身走不通（贴着可走地面的边、挨着道具）时，先迈到附近最近的走得通的一点再找路，
+//! 迈出去的那一小步不查通不通（`nearest_clear`）。大逃杀第二局里有人站在新放的道具跟前、
+//! 落在可走格子外面，之后每个动作都被拒，三个人卡到渴死。
 use crate::{
     avatar::{distance, Obstacle, Point, Spot, WalkMap, RADIUS},
     error::{KernelError, Result},
@@ -21,6 +26,9 @@ const GRID_STEP: f64 = 0.5;
 const NEAREST_GOALS: usize = 16;
 /// 网格点离目标站点不超过这个距离（米）且连线通畅时，直接走过去。
 const GOAL_REACH: f64 = 2.0;
+/// 站的地方走不通时，往外找走得通的一点：每圈往外多这么多米，最远找到这么远。
+const ESCAPE_STEP: f64 = 0.25;
+const ESCAPE_REACH: f64 = 3.0;
 /// 网格代价：直走一格 1000、斜走一格 1414（约 1000 × √2），即每米 2000；
 /// 启发值按同一比例把到最近目标的直线距离折成代价。
 const STRAIGHT_COST: u64 = 1000;
@@ -59,6 +67,42 @@ impl WalkMap {
         })
     }
 
+    /// 离 start 最近的一个走得通的点（同一空间、人物半径内没有阻挡、在某个区域里），由近到远一圈圈找，
+    /// 最远 ESCAPE_REACH 米；`same_locale` 时只要和 start 同一处所的点。找不到时为 None。
+    pub(crate) fn nearest_clear(
+        &self,
+        start: &Spot,
+        obstacles: &[Obstacle],
+        same_locale: bool,
+    ) -> Option<Spot> {
+        let mut r = ESCAPE_STEP;
+        while r <= ESCAPE_REACH + 1e-9 {
+            let n = ((std::f64::consts::TAU * r / ESCAPE_STEP).ceil() as usize).max(8);
+            for i in 0..n {
+                let a = i as f64 * std::f64::consts::TAU / n as f64;
+                let p = [
+                    start.position[0] + r * a.cos(),
+                    start.position[1] + r * a.sin(),
+                ];
+                if !self.clear(&start.space, p, obstacles, RADIUS) {
+                    continue;
+                }
+                match self.locale_at(&start.space, p, &start.locale) {
+                    Some(l) if !same_locale || l == start.locale => {
+                        return Some(Spot {
+                            locale: l.into(),
+                            space: start.space.clone(),
+                            position: p,
+                        })
+                    }
+                    _ => {}
+                }
+            }
+            r += ESCAPE_STEP;
+        }
+        None
+    }
+
     /// 可以接回的站点：同一空间、拓扑里也有（`known`）、本身不被挡住；同一处所里有就只取
     /// 同一处所的。按距离从近到远排好。
     fn station_goals<'a>(
@@ -79,6 +123,33 @@ impl WalkMap {
         if goals.iter().any(|(_, s)| s.locale == start.locale) {
             goals.retain(|(_, s)| s.locale == start.locale);
         }
+        goals.sort_by(|a, b| {
+            distance(start.position, a.1.position)
+                .total_cmp(&distance(start.position, b.1.position))
+        });
+        goals.truncate(NEAREST_GOALS);
+        goals
+    }
+
+    /// 屋里没有站点时接回的地方：门外画着的到达点，换到门内那一侧（`inside_door`，到达点上的人
+    /// 本来就画在那里）。跟着别人进了没摆道具的屋子停在门里的人，从这里接回路网（回声湾的灯塔：
+    /// 之前每次想走都报「当前空间没有可接续的导航站点」）。按距离从近到远排好。
+    fn door_goals(
+        &self,
+        start: &Spot,
+        obstacles: &[Obstacle],
+        known: impl Fn(&str) -> bool,
+    ) -> Vec<(String, Spot)> {
+        let mut goals: Vec<_> = self
+            .stations
+            .iter()
+            .filter(|(id, s)| s.space != start.space && known(id))
+            .map(|(id, s)| (id.clone(), self.inside_door(s)))
+            .filter(|(_, inside)| {
+                inside.space == start.space
+                    && self.clear(&inside.space, inside.position, obstacles, RADIUS)
+            })
+            .collect();
         goals.sort_by(|a, b| {
             distance(start.position, a.1.position)
                 .total_cmp(&distance(start.position, b.1.position))
@@ -224,8 +295,10 @@ impl FreeWalk {
                 space: here.space.clone(),
                 position: p,
             };
+            // 站的地方本身走不通时，往外迈的这一步不查（见 nearest_clear）
             ensure!(
-                map.segment_clear(&here, &target, obstacles),
+                map.segment_clear(&here, &target, obstacles)
+                    || !map.clear(&here.space, here.position, obstacles, RADIUS),
                 KernelError::navigation("接续路线被阻挡，保留当前位置")
             );
             here = target;
@@ -239,12 +312,13 @@ impl FreeWalk {
         Ok(here)
     }
 
-    /// 读档校验：点数与进度合法，终点就是拓扑与行走地图里同一个站点，全程在同一空间的区域内。
+    /// 读档校验：点数与进度合法，终点就是拓扑与行走地图里同一个站点（或它门内的那一侧），
+    /// 全程在同一空间的区域内。进度 0 是还在往第一个点走（从走不通的地方迈出来的路线）。
     pub(crate) fn validate(&self, topo: &Topology, map: Option<&WalkMap>) -> Result<()> {
         ensure!(
             self.points.len() >= 2
                 && self.points.len() <= MAX_WALK_POINTS
-                && (1..=self.points.len()).contains(&self.next),
+                && self.next <= self.points.len(),
             KernelError::snapshot("接续行走进度无效")
         );
         let last = self.points.last().expect("上面已确认至少两个点");
@@ -253,8 +327,10 @@ impl FreeWalk {
             KernelError::snapshot("接续站点无效")
         );
         ensure!(
-            map.and_then(|m| m.stations.get(&self.station))
-                .is_some_and(|s| s.space == last.space && s.position == last.position),
+            map.and_then(|m| m.stations.get(&self.station).map(|s| (m, s)))
+                .is_some_and(|(m, s)| [s.clone(), m.inside_door(s)]
+                    .iter()
+                    .any(|end| end.space == last.space && end.position == last.position)),
             KernelError::snapshot("接续路线终点与站点不一致")
         );
         for p in &self.points {
@@ -283,12 +359,30 @@ impl World {
             .actor_spot(actor)
             .ok_or_else(|| KernelError::navigation("自由位置无效"))?;
         let obstacles = self.avatar_obstacles();
-        let goals = map.station_goals(&start, &obstacles, |id| self.topo.stations.contains_key(id));
+        let known = |id: &str| self.topo.stations.contains_key(id);
+        let mut goals = map.station_goals(&start, &obstacles, known);
+        let doors = if goals.is_empty() {
+            map.door_goals(&start, &obstacles, known)
+        } else {
+            Vec::new()
+        };
+        goals.extend(doors.iter().map(|(id, spot)| (id, spot)));
         ensure!(
             !goals.is_empty(),
             KernelError::navigation("当前空间没有可接续的导航站点")
         );
-        map.route_to_station(start, &goals, &obstacles)
+        map.route_to_station(start.clone(), &goals, &obstacles)
+            .or_else(|| {
+                // 站的地方本身走不通：先迈到最近走得通的一点，再从那里找路。路线从那一点开始，
+                // 进度停在 0（先走到第一个点）；站的地方不进路线，存档里的路线点都在区域里。
+                if map.clear(&start.space, start.position, &obstacles, RADIUS) {
+                    return None;
+                }
+                let step = map.nearest_clear(&start, &obstacles, false)?;
+                let mut walk = map.route_to_station(step, &goals, &obstacles)?;
+                walk.next = 0;
+                Some(walk)
+            })
             .ok_or_else(|| KernelError::navigation("当前位置无法接回导航，请移到通路或门口再交还"))
     }
 
