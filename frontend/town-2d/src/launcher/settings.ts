@@ -42,6 +42,15 @@ import './settings.css'
 
 const LATER_KEY = 'town:model-prompt-later'
 
+/** 这台电脑上的账号（管理服务的 /api/towns/users，见 scripts/towns/accounts.mjs） */
+type HomeAccount = {
+  id: string
+  name: string
+  role: 'admin' | 'member'
+  agent_limit: number | null
+}
+type HomeAccounts = { current: HomeAccount; users: HomeAccount[]; max: number; admin: boolean }
+
 function later() {
   try {
     return localStorage.getItem(LATER_KEY) === '1'
@@ -173,10 +182,39 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
   const toolRows = el('div', '', 'set-rows')
   const tool = el('section', '', 'spage')
   tool.append(el('h2', '建镇用的模型'), toolRows)
+  // 账号：这台电脑上的档案。每个账号一份自己的模型密钥，朋友在这台电脑上切过去填自己的
+  const accounts = el('section', '', 'spage')
+  accounts.hidden = true
+  const accountRows = el('div', '', 'set-rows')
+  const accountName = el('input')
+  accountName.type = 'text'
+  accountName.placeholder = '朋友的名字'
+  accountName.maxLength = 16
+  accountName.setAttribute('aria-label', '新账号的名字')
+  const accountCreate = el('div', '', 'account-create')
+  accountCreate.hidden = true
+  accountCreate.append(
+    accountName,
+    button('建账号', () => void createAccount(), 'account-add')
+  )
+  const accountNote = el('p', '', 'page-status')
+  accountNote.setAttribute('role', 'status')
+  accounts.append(
+    el('h2', '账号'),
+    el(
+      'p',
+      '这台电脑上的档案：每个账号有自己的化身、自己创建的一位公共村民，模型密钥也各存各的。',
+      'hint'
+    ),
+    accountRows,
+    accountCreate,
+    accountNote
+  )
   const sound = createSoundPage(false, { music: deps.music, effects: effectsPreference })
   const display = createDisplayPage(undefined, false)
   const body = el('div', '', 'hs-body')
   body.append(
+    accounts,
     builtin,
     models,
     tool,
@@ -193,6 +231,7 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
     sound.onShow?.()
     display.onShow?.()
     renderSettings()
+    void renderAccounts()
     dialog.showModal()
     body.scrollTop = 0
     offBack = onBack(() => {
@@ -200,6 +239,66 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
       dialog.close()
       return true
     })
+  }
+
+  // ---------- 账号 ----------
+  let who: HomeAccounts | null = null
+
+  async function renderAccounts() {
+    try {
+      who = await api<HomeAccounts>('/users')
+    } catch {
+      // 旧的管理服务没有账号接口：这一节不出现，照旧所有人共用一个档案
+      accounts.hidden = true
+      return
+    }
+    accounts.hidden = false
+    accountRows.replaceChildren(
+      ...who.users.map((user) => {
+        const current = user.id === who!.current.id
+        const label = user.role === 'admin' ? `${user.name} · 管理员` : user.name
+        const sub = current
+          ? '正在用这个档案'
+          : user.role === 'admin'
+            ? '可以给这台电脑加账号'
+            : '一位公共村民'
+        return settingRow(
+          label,
+          sub,
+          current ? chip('当前') : button('切换', () => void switchAccount(user.id))
+        )
+      })
+    )
+    accountCreate.hidden = !who.admin || who.users.length >= who.max
+    accountNote.textContent = who.admin
+      ? `最多 ${who.max} 个账号。朋友切到自己的档案后，在「模型服务」里填自己的密钥。`
+      : '管理员可以给这台电脑加账号。'
+  }
+
+  async function switchAccount(id: string) {
+    try {
+      await api('/users/select', { id })
+      await renderAccounts()
+      // 换了档案，模型服务、密钥提示都跟着换
+      await transport.load()
+      renderSettings()
+      render()
+      accountNote.textContent = '已切换，模型密钥也跟着换了档案。'
+    } catch (error) {
+      accountNote.textContent = errorText(error)
+    }
+  }
+
+  async function createAccount() {
+    const name = accountName.value.trim()
+    try {
+      await api('/users', { name })
+      accountName.value = ''
+      await renderAccounts()
+      accountNote.textContent = `已建「${name}」。让朋友在这台电脑上切过去，填自己的模型密钥。`
+    } catch (error) {
+      accountNote.textContent = errorText(error)
+    }
   }
 
   function renderSettings() {

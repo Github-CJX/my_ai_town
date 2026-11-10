@@ -439,3 +439,87 @@ test('home settings save a key only into the data root config, read back only it
   const after = await Promise.all(repoConfig.map((p) => fs.readFile(p, 'utf8').catch(() => null)))
   assert.deepEqual(after, before)
 })
+test('each account keeps its own model keys: the admin creates friends, a friend cannot create accounts and starts with no key of its own', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-accounts-'))
+  let m
+  try {
+    m = await createManager({ root, port: 0, mockLlm: true })
+    const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+    // 不带 Cookie 就是默认管理员；带上 town_user 就是这个账号
+    const api = async (route, body, as) => {
+      const headers =
+        body === undefined ? {} : { 'content-type': 'application/json', 'x-town-client': '1' }
+      if (as) headers.cookie = as
+      const r = await fetch(base + route, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      const data = await r.json()
+      if (!r.ok) throw Error(data.error)
+      return { data, setCookie: r.headers.get('set-cookie') }
+    }
+    const me = (await api('/users')).data
+    assert.equal(me.current.role, 'admin')
+    assert.equal(me.admin, true)
+    assert.equal(me.current.agent_limit, null, '管理员建 agent 的名额不设上限')
+    assert.equal(me.users.length, 1)
+    // 管理员建一个朋友的账号：建完自己还留在管理员这边，不跟着换过去
+    const made = await api('/users', { name: '朋友' })
+    assert.equal(made.data.user.role, 'member')
+    assert.equal(made.data.user.agent_limit, 1, '普通账号只建一个公共 agent')
+    assert.equal(made.setCookie, null)
+    const friend = `town_user=${made.data.user.id}`
+    const seen = (await api('/users', undefined, friend)).data
+    assert.equal(seen.current.name, '朋友')
+    assert.equal(seen.admin, false)
+    assert.equal(seen.users.length, 2)
+    await assert.rejects(api('/users', { name: '第三个' }, friend), /只有管理员/)
+    // 朋友用自己的密钥文件：一开始是空的，管理员存进去的密钥不会漏给他
+    const key = 'sk-friend-private-0123456789'
+    const kept = (await api('/models')).data.providers.map(({ id, name, base_url }) => ({
+      id,
+      name,
+      base_url,
+    }))
+    const added = { id: 'friend-test', name: '朋友测试', base_url: 'http://127.0.0.1:9/v1' }
+    await api('/models', {
+      active: { provider: added.id, model: 'm' },
+      providers: [...kept, added],
+      keys: [{ provider: added.id, api_key: key }],
+    })
+    const friendKeys = path.join(root, 'users', made.data.user.id, 'config/credentials.json')
+    const before = await fs.readFile(friendKeys, 'utf8').catch(() => null)
+    assert.ok(!before || !before.includes(key))
+    const own = (await api('/models', undefined, friend)).data
+    assert.ok(!own.providers.find((p) => p.id === added.id)?.key_mask, '朋友的档案里没有管理员的密钥')
+    // 朋友自己存一份，两边互不影响
+    await api(
+      '/models',
+      {
+        active: { provider: added.id, model: 'm' },
+        providers: own.providers,
+        keys: [{ provider: added.id, api_key: 'sk-other-9876543210' }],
+      },
+      friend
+    )
+    assert.ok((await fs.readFile(friendKeys, 'utf8')).includes('sk-other-9876543210'))
+    assert.ok((await fs.readFile(path.join(root, 'config/credentials.json'), 'utf8')).includes(key))
+    // 切换档案：拿不到就 404，拿到就把 Cookie 换过去
+    const adminId = me.current.id
+    const switched = await api('/users/select', { id: adminId }, friend)
+    assert.equal(switched.data.current.role, 'admin')
+    assert.equal(
+      switched.setCookie,
+      `town_user=${adminId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
+    )
+    await assert.rejects(api('/users/select', { id: 'u-nobody' }), /没有这个账号/)
+    // 账号表里只记身份和归属，不记密钥
+    const saved = JSON.parse(await fs.readFile(path.join(root, 'accounts.json'), 'utf8'))
+    assert.equal(saved.users.length, 2)
+    assert.ok(!JSON.stringify(saved).includes(key))
+  } finally {
+    await m?.stop()
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})

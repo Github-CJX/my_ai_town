@@ -154,6 +154,26 @@ button.model-line {
   font-size: 12px;
   line-height: 1.6;
 }
+/* 账号：名字 + 建账号按钮，和列表同宽 */
+.account-create {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 2px;
+}
+.account-create input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.account-create .account-add {
+  flex: none;
+}
 @media (max-width: 719px) {
   .home-settings {
     width: 100%;

@@ -1,4 +1,5 @@
 import { createAssetRoutes } from './towns/asset-routes.mjs'
+import { Accounts, cookieId, createAccountRoutes, publicUser } from './towns/accounts.mjs'
 import { createCreation } from './towns/creation.mjs'
 import { createModelRoutes } from './towns/models.mjs'
 import { createBuiltinModelRoutes } from './towns/builtin-model.mjs'
@@ -51,6 +52,11 @@ export async function createManager({
   const releaseLock = await acquireLock(root)
   const config = configPath ?? (await setupConfig(root, source)),
     hosts = new Hosts(source, storage, config, { mockLlm, maxRunning })
+  // 这台电脑上的账号：默认管理员 + 管理员给朋友建的普通账号，各自一份密钥
+  const accounts = await new Accounts(root).load()
+  const current = (headers) => publicUser(accounts.current(cookieId(headers)))
+  /** 这次请求该用哪份应用配置：管理员用小镇公共那份，普通账号用自己目录下那份 */
+  const configOf = (headers) => accounts.config(config, accounts.current(cookieId(headers)))
   const [library, contours, definitions] = await Promise.all(
     [
       'data/mapgen/templates.json',
@@ -73,20 +79,21 @@ export async function createManager({
     creation = createCreation({
       source,
       root,
-      config,
+      configOf,
       storage,
       library,
       contours,
       definitions,
       serial,
     })
-  const builtinModel = createBuiltinModelRoutes({ source, config })
+  const builtinModel = createBuiltinModelRoutes({ source, configOf })
   const routes = [
-    ...createModelRoutes({ source, config, serial }),
+    ...createAccountRoutes({ accounts }),
+    ...createModelRoutes({ source, configOf, serial }),
     ...builtinModel.routes,
     ...creation.routes,
     ...assets.routes,
-    ...createTownRoutes({ source, storage, hosts, serial }),
+    ...createTownRoutes({ source, storage, hosts, serial, configOf, current }),
   ]
   async function dispatch(req, signal) {
     if (stopping) throw new HttpError(503, '应用正在退出')
@@ -150,8 +157,7 @@ export async function createManager({
             .filter((town) => town.progress)
             .sort(
               (a, b) =>
-                b.progress.day - a.progress.day ||
-                b.progress.residents - a.progress.residents
+                b.progress.day - a.progress.day || b.progress.residents - a.progress.residents
             )[0] ??
           towns[0]
       if (chosen) {

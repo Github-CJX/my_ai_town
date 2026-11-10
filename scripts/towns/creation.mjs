@@ -95,7 +95,7 @@ export function renamed(document, name) {
 export function createCreation({
   source,
   root,
-  config,
+  configOf,
   storage,
   library,
   contours,
@@ -115,29 +115,29 @@ export function createCreation({
       running--
     }
   }
-  const validate = (document, signal, timeout) =>
+  const validate = (document, signal, timeout, config) =>
     worker(source, config, 'validate', document, { signal, ...(timeout ? { timeout } : {}) })
 
-  async function modelStatus() {
+  async function modelStatus(config) {
     try {
       return await worker(source, config, 'options', {}, { timeout: 5000 })
     } catch (e) {
       return { available: false, error: e.message }
     }
   }
-  async function options() {
+  async function options(config) {
     return {
       templates: library.templates.map(({ kind, name, outdoor }) => ({ kind, name, outdoor })),
       limits,
       resources,
       styles: [{ id: APPEARANCE_SET, name: '海岸乡镇' }],
-      model: await modelStatus(),
+      model: await modelStatus(config),
       uncompleted_drafts: '草稿保留两小时；重新打开创建页时需重新预览，已保存小镇不受影响',
     }
   }
 
   // 自然语言 → 结构化要求。每次调用记一行到数据目录的 map-generation-calls.jsonl。
-  const parse = (body, signal) =>
+  const parse = (body, signal, config) =>
     admit(async () => {
       if (!Number.isInteger(body.seed) || body.seed < 0 || body.seed > MAX_SEED)
         throw Error('随机种子无效')
@@ -169,7 +169,7 @@ export function createCreation({
       return result
     })
 
-  async function preview2d(body, signal) {
+  async function preview2d(body, signal, config) {
     const taskId = tasks.begin(body.request_id ?? randomUUID()),
       stage = (s) => tasks.update(taskId, { stage: s })
     stage('districts')
@@ -186,7 +186,7 @@ export function createCreation({
       })
       // 最终几何由 Rust 校验，错误信息原样返回。
       stage('runtime_validation')
-      await validate(result.document, signal, RUST_VALIDATE_TIMEOUT_MS)
+      await validate(result.document, signal, RUST_VALIDATE_TIMEOUT_MS, config)
       tasks.finish(taskId, { stage: 'complete' })
     } catch (e) {
       tasks.finish(taskId, { stage: 'failed' })
@@ -203,7 +203,7 @@ export function createCreation({
     return draft
   }
 
-  const preview = (body, signal) => admit(() => preview2d(body, signal))
+  const preview = (body, signal, config) => admit(() => preview2d(body, signal, config))
 
   async function save(body) {
     const draftId = safeId(body.draft_id)
@@ -230,9 +230,17 @@ export function createCreation({
   }
 
   const routes = [
-    ['GET', /^\/api\/towns\/options$/, options],
-    ['POST', /^\/api\/towns\/parse$/, ({ body, signal }) => parse(body, signal)],
-    ['POST', /^\/api\/towns\/preview$/, ({ body, signal }) => preview(body, signal)],
+    ['GET', /^\/api\/towns\/options$/, async ({ headers }) => options(await configOf(headers))],
+    [
+      'POST',
+      /^\/api\/towns\/parse$/,
+      async ({ body, signal, headers }) => parse(body, signal, await configOf(headers)),
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/preview$/,
+      async ({ body, signal, headers }) => preview(body, signal, await configOf(headers)),
+    ],
     ['POST', /^\/api\/towns\/save$/, ({ body }) => save(body)],
     [
       'GET',

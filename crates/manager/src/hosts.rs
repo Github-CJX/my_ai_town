@@ -5,7 +5,7 @@ use crate::ws;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -29,8 +29,6 @@ pub struct Hosts {
     pub host_bin: PathBuf,
     /// 世界进程的工作目录（应用自带数据）。
     pub app: PathBuf,
-    /// 写好绝对路径的应用配置。
-    pub config: PathBuf,
     pub max_running: usize,
     pub mock_llm: bool,
     running: Mutex<HashMap<String, Record>>,
@@ -41,17 +39,10 @@ fn alive(child: &mut Child) -> bool {
 }
 
 impl Hosts {
-    pub fn new(
-        host_bin: PathBuf,
-        app: PathBuf,
-        config: PathBuf,
-        max_running: usize,
-        mock_llm: bool,
-    ) -> Self {
+    pub fn new(host_bin: PathBuf, app: PathBuf, max_running: usize, mock_llm: bool) -> Self {
         Self {
             host_bin,
             app,
-            config,
             max_running,
             mock_llm,
             running: Mutex::new(HashMap::new()),
@@ -85,8 +76,9 @@ impl Hosts {
     }
 
     /// 打开小镇：已在运行就核对身份后直接返回，否则启动 host 并等它写就绪文件。
+    /// `config` 是开镇人的那份应用配置（管理员一份、普通账号各一份），世界启动时就用它思考。
     /// 同一小镇的开关由调用方串行；跑满时由调用方先腾出位置。
-    pub fn open(&self, storage: &Storage, id: &str) -> Result<Value, ApiError> {
+    pub fn open(&self, storage: &Storage, id: &str, config: &Path) -> Result<Value, ApiError> {
         let map = storage.map(id)?;
         let existing = self.is_running(id).then(|| self.endpoint(id)).flatten();
         if let Some(endpoint) = existing {
@@ -128,7 +120,7 @@ impl Hosts {
         }
         let mut child = host::process::no_console(&mut command)
             .current_dir(&self.app)
-            .env("AI_TOWN_CONFIG", &self.config)
+            .env("AI_TOWN_CONFIG", config)
             .env("AI_TOWN_LOG_DIR", dir.join("logs"))
             .stdin(Stdio::piped())
             .stdout(log.try_clone()?)

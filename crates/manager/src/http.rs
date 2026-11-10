@@ -52,6 +52,13 @@ impl Response {
         }
     }
 
+    /// 带 Set-Cookie 的 JSON 回复：换账号时用（见 accounts.rs 的 `town_user`）。
+    pub fn json_cookie(status: u16, value: &Value, cookie: String) -> Self {
+        let mut response = Self::json(status, value);
+        response.headers.push(("Set-Cookie".into(), cookie));
+        response
+    }
+
     /// 已经是 JSON 文本的内容（地图文档）原样发送，不再解析一遍。
     pub fn raw_json(body: Vec<u8>) -> Self {
         Self {

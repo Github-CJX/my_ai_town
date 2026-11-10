@@ -3,7 +3,7 @@ import { HttpError } from './http.mjs'
 import { safeId } from './storage.mjs'
 import { positions } from './positions.mjs'
 
-export function createTownRoutes({ source, storage, hosts, serial }) {
+export function createTownRoutes({ source, storage, hosts, serial, configOf, current }) {
   const inTown = (id, fn) => serial('town-' + safeId(id), fn)
   /** 被挤掉的小镇 → 挤掉它的小镇：另一个页面进了别的小镇时，这个页面断线后不自动抢回来 */
   const displaced = new Map()
@@ -13,7 +13,13 @@ export function createTownRoutes({ source, storage, hosts, serial }) {
     [
       'GET',
       /^\/api\/towns\/health$/,
-      () => ({ kind: 'town-manager', version: 1, pid: process.pid, source }),
+      ({ headers }) => ({
+        kind: 'town-manager',
+        version: 1,
+        pid: process.pid,
+        source,
+        user: current(headers),
+      }),
     ],
     [
       'GET',
@@ -38,7 +44,7 @@ export function createTownRoutes({ source, storage, hosts, serial }) {
     [
       'POST',
       /^\/api\/towns\/([a-z0-9-]+)\/open$/,
-      async ({ params: [id], body }) => {
+      async ({ params: [id], body, headers }) => {
         // 页面断线后自动重开（automatic）：这个小镇是被另一个页面进的小镇挤掉的、那个还开着，
         // 就不抢回来，告诉页面原因，由玩家自己决定回不回来；不然两个页面会来回互相挤
         const by = displaced.get(id)
@@ -56,7 +62,8 @@ export function createTownRoutes({ source, storage, hosts, serial }) {
             await inTown(oldest, () => hosts.close(oldest))
           }
           displaced.delete(id)
-          return await inTown(id, () => hosts.open(id))
+          // 世界用开它的那个账号的配置（密钥）跑
+          return await inTown(id, async () => hosts.open(id, await configOf(headers)))
         } finally {
           claiming.delete(id)
         }

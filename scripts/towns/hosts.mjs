@@ -77,15 +77,16 @@ export class Hosts {
         oldest = { id, used: r.used }
     return oldest?.id
   }
-  async open(id) {
+  /** 打开小镇：config 是开它的那个账号的应用配置（在跑的世界沿用先打开时那份） */
+  async open(id, config = this.config) {
     if (this.stopping) throw Error('应用正在退出')
     if (this.closing.has(id)) await this.closing.get(id).catch(() => {})
     if (this.opening.has(id)) return this.opening.get(id)
-    const pending = this.start(id).finally(() => this.opening.delete(id))
+    const pending = this.start(id, config).finally(() => this.opening.delete(id))
     this.opening.set(id, pending)
     return pending
   }
-  async start(id) {
+  async start(id, config = this.config) {
     const doc = await this.storage.map(id)
     let record = this.running.get(id)
     if (record && !record.closing && alive(record.child)) {
@@ -126,7 +127,7 @@ export class Hosts {
         windowsHide: true,
         env: {
           ...process.env,
-          AI_TOWN_CONFIG: this.config,
+          AI_TOWN_CONFIG: config,
           AI_TOWN_LOG_DIR: path.join(dir, 'logs'),
         },
         // stdin 只握着不写：本进程无论怎样退出（含 SIGKILL），管道关闭，host 读到 EOF 后保存并退出。

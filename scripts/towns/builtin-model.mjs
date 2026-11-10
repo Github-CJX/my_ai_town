@@ -5,10 +5,11 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { worker } from './workers.mjs'
 
-export function createBuiltinModelRoutes({ source, config }) {
-  const run = (mode, input, options) => worker(source, config, mode, input, options)
+export function createBuiltinModelRoutes({ source, configOf }) {
+  const run = async (mode, input, options, headers) =>
+    worker(source, await configOf(headers), mode, input, options)
   let download = null
-  function ensureDownload() {
+  function ensureDownload(config) {
     if (download) return
     const child = spawn(
       process.env.TOWN_MAP_BINARY ?? path.join(source, 'target/debug/town-map'),
@@ -36,15 +37,20 @@ export function createBuiltinModelRoutes({ source, config }) {
   const stop = () => download?.kill('SIGTERM')
   process.on('exit', stop)
   const routes = [
-    ['GET', /^\/api\/towns\/builtin-model$/, () => run('builtin-model', {}, { timeout: 10000 })],
+    [
+      'GET',
+      /^\/api\/towns\/builtin-model$/,
+      ({ headers }) => run('builtin-model', {}, { timeout: 10000 }, headers),
+    ],
     [
       'POST',
       /^\/api\/towns\/builtin-model$/,
-      async ({ body }) => {
+      async ({ body, headers }) => {
         // 认不出版本的本机模型要先算一遍校验值，几百 MB 在手机上要几秒
-        if (body?.action === 'check') return run('builtin-model-check', {}, { timeout: 60000 })
-        const status = await run('builtin-model-act', body, { timeout: 60000 })
-        if (body?.action === 'download') ensureDownload()
+        if (body?.action === 'check')
+          return run('builtin-model-check', {}, { timeout: 60000 }, headers)
+        const status = await run('builtin-model-act', body, { timeout: 60000 }, headers)
+        if (body?.action === 'download') ensureDownload(await configOf(headers))
         return status
       },
     ],

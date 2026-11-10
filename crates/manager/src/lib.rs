@@ -1,6 +1,7 @@
 //! 本机小镇管理服务（Rust 版）：页面、小镇列表、按需启动世界进程。
 //! 手机版由应用壳启动；桌面版目前仍是 scripts/town-manager.mjs，两边的接口一致，
 //! 建镇（地图生成）暂时只在桌面版。
+mod accounts;
 mod builtin;
 mod creation;
 pub mod error;
@@ -96,8 +97,10 @@ pub struct App {
     storage: Storage,
     hosts: Hosts,
     town_locks: TownLocks,
-    /// 用户目录里的应用配置（模型服务、密钥、道具库路径），建镇时读
+    /// 用户目录里的应用配置（模型服务、密钥、道具库路径），建镇时读；也是管理员账号的那一份
     config: std::path::PathBuf,
+    /// 这台电脑上的账号：管理员、朋友各自的档案与密钥（见 accounts.rs）
+    accounts: std::sync::Mutex<accounts::Accounts>,
     drafts: creation::Drafts,
     /// 内置模型的下载线程
     downloads: builtin::Downloads,
@@ -253,10 +256,10 @@ pub fn run(options: Options) -> Result<(), String> {
 
 fn serve(options: Options, storage: Storage) -> Result<(), String> {
     let config = storage::setup_config(&options.root, &options.app).map_err(|e| e.message)?;
+    let accounts = accounts::Accounts::load(&options.root).map_err(|e| e.message)?;
     let hosts = Hosts::new(
         options.host_bin.clone(),
         options.app.clone(),
-        config.clone(),
         options.max_running,
         options.mock_llm,
     );
@@ -278,6 +281,7 @@ fn serve(options: Options, storage: Storage) -> Result<(), String> {
         hosts,
         town_locks: TownLocks::default(),
         config,
+        accounts: std::sync::Mutex::new(accounts),
         drafts: creation::Drafts::default(),
         downloads: builtin::Downloads::default(),
         displaced: Default::default(),

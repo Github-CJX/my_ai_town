@@ -1,4 +1,5 @@
 //! 接口与页面路由。路径与 scripts/towns/*-routes.mjs 一致；建镇（地图生成）暂时只有桌面版。
+use crate::accounts::{self, Role, User, USER_COOKIE};
 use crate::error::ApiError;
 use crate::http::{Request, Response};
 use crate::positions::positions;
@@ -86,8 +87,77 @@ fn body(req: &Request) -> Result<Value, ApiError> {
     serde_json::from_slice(&req.body).map_err(|_| ApiError::bad("请求内容不是有效的 JSON"))
 }
 
+/// 这次请求是谁：带着 `town_user` Cookie 就是这个账号，没有（或账号已经没了）就是默认管理员。
+fn current(app: &App, req: &Request) -> User {
+    app.accounts
+        .lock()
+        .unwrap()
+        .current(req.cookie(USER_COOKIE))
+}
+
+/// 这个账号的应用配置：管理员用小镇的公共配置，普通账号各用自己目录下那份（自己填的密钥）。
+fn user_config(app: &App, user: &User) -> Result<std::path::PathBuf, ApiError> {
+    app.accounts.lock().unwrap().config(&app.config, user)
+}
+
+fn account_cookie(id: &str) -> String {
+    format!("{USER_COOKIE}={id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000")
+}
+
+/// 账号接口：默认管理员、管理员给朋友建号、切换前端档案。
+fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiError> {
+    let me = current(app, req);
+    match (get, rest) {
+        (true, "/users") => {
+            let accounts = app.accounts.lock().unwrap();
+            Ok(Response::json(
+                200,
+                &json!({
+                    "current": me.public(),
+                    "users": accounts.list().iter().map(User::public).collect::<Vec<_>>(),
+                    "max": accounts::MAX_USERS,
+                    "admin": me.role == Role::Admin,
+                }),
+            ))
+        }
+        (false, "/users") => {
+            if me.role != Role::Admin {
+                return Err(ApiError::new(403, "只有管理员可以创建账号"));
+            }
+            let name = body(req)?["name"].as_str().unwrap_or_default().to_owned();
+            let user = app.accounts.lock().unwrap().create(&name)?;
+            // 建完仍留在管理员这边：朋友在这台电脑上自己选进他的档案。
+            Ok(Response::json(200, &json!({ "ok": true, "user": user.public() })))
+        }
+        (false, "/users/select") => {
+            let request = body(req)?;
+            let id = request["id"].as_str().map(str::to_owned);
+            let user = match id {
+                Some(id) => app
+                    .accounts
+                    .lock()
+                    .unwrap()
+                    .find(&id)
+                    .cloned()
+                    .ok_or_else(|| ApiError::bad("没有这个账号"))?,
+                None => current(app, req),
+            };
+            Ok(Response::json_cookie(
+                200,
+                &json!({ "ok": true, "current": user.public() }),
+                account_cookie(&user.id),
+            ))
+        }
+        _ => Err(ApiError::new(404, "操作不存在")),
+    }
+}
+
 fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiError> {
     let ok = |value: Value| Ok(Response::json(200, &value));
+    if rest == "/users" || rest.starts_with("/users/") {
+        return accounts_api(app, req, rest, get);
+    }
+    let me = current(app, req);
     match (get, rest) {
         (true, "/health") => {
             return ok(json!({
@@ -95,6 +165,7 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 "version": 1,
                 "pid": std::process::id(),
                 "source": app.storage.app.to_string_lossy(),
+                "user": me.public(),
             }))
         }
         (true, "") => {
@@ -113,41 +184,46 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             return ok(json!({ "towns": towns }));
         }
         // 建镇：生成在网页里做，这里理解描述、校验成品、暂存草稿、保存（见 creation.rs）
-        (true, "/options") => return ok(crate::creation::options(&app.config)),
-        (false, "/parse") => return ok(crate::creation::parse(&app.config, &body(req)?)?),
-        (false, "/drafts") => return ok(app.drafts.put(&app.config, &body(req)?)?),
+        (true, "/options") => return ok(crate::creation::options(&user_config(app, &me)?)),
+        (false, "/parse") => {
+            return ok(crate::creation::parse(
+                &user_config(app, &me)?,
+                &body(req)?,
+            )?)
+        }
+        (false, "/drafts") => return ok(app.drafts.put(&user_config(app, &me)?, &body(req)?)?),
         (false, "/save") => return ok(app.drafts.save(&app.storage, &body(req)?)?),
         (false, "/preview") => {
             return Err(ApiError::bad("请更新应用：建镇预览在页面里生成"));
         }
         // 首页「设定」的模型服务：读、存、连通测试。逻辑在 host::models，电脑版经 town-map 调同一份
         (true, "/models") => {
-            return ok(host::models::read(&crate::creation::load_app(
-                &app.config,
-            )?)?)
+            return ok(host::models::read(&crate::creation::load_app(&user_config(
+                app, &me,
+            )?)?)?)
         }
         (false, "/models") => {
-            let app = crate::creation::load_app(&app.config)?;
+            let app = crate::creation::load_app(&user_config(app, &me)?)?;
             return ok(host::models::write(&app, &body(req)?)?);
         }
         (false, "/models/test") => {
-            let app = crate::creation::load_app(&app.config)?;
+            let app = crate::creation::load_app(&user_config(app, &me)?)?;
             return ok(host::models::check(&app, &body(req)?)?);
         }
         // 内置模型的状态、看有没有新版本、下载暂停删除（host::builtin_store），电脑版经 town-map 调同一份
         (true, "/builtin-model") => {
-            let config = crate::creation::load_app(&app.config)?;
+            let config = crate::creation::load_app(&user_config(app, &me)?)?;
             return ok(host::builtin_store::status(&config)?);
         }
         (false, "/builtin-model") => {
-            let config = crate::creation::load_app(&app.config)?;
+            let config = crate::creation::load_app(&user_config(app, &me)?)?;
             let request = body(req)?;
             if request["action"] == "check" {
                 return ok(host::builtin_store::check(&config)?);
             }
             let status = host::builtin_store::act(&config, &request)?;
             if request["action"] == "download" {
-                app.downloads.ensure(&app.config);
+                app.downloads.ensure(&user_config(app, &me)?);
             }
             return ok(status);
         }
@@ -173,7 +249,9 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             let _claim = app.claim(id);
             app.make_room(id)?;
             let _serial = app.town_lock(id);
-            ok(app.hosts.open(&app.storage, id)?)
+            ok(app
+                .hosts
+                .open(&app.storage, id, &user_config(app, &me)?)?)
         }
         (false, "close") => {
             let lease = body(req)?["lease"].as_str().map(str::to_owned);
