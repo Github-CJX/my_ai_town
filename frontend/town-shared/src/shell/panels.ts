@@ -58,6 +58,8 @@ export function createPanels(input: ShellInputs) {
   const { map, events, localeName, send, selectedMap, game } = input
   const session = createSettingsSession(map, send, game, () => avatar.release())
   const chatHistory = createChatHistory(send, localeName, game, () => infoPanel.setCollapsed(false))
+  // 化身的「完整交谈记录」用居中弹窗：右栏此刻是化身自己的面板，塞进信息栏会被每拍的名册收起
+  const avatarHistory = createChatHistory(send, localeName, true, () => {})
   // HD-2D 的台词使用独立聊天气泡
   const chatBubbles = game
     ? null
@@ -221,7 +223,7 @@ export function createPanels(input: ShellInputs) {
   const avatar = createAvatar({
     send,
     map,
-    openHistory: (id) => chatHistory.open(id),
+    openHistory: (id, name) => avatarHistory.open(id, undefined, name),
     localeName,
     places: input.topology.places.map((p) => ({ id: p.locale, name: p.name })),
     resumeSpeed: input.normalSpeed,
@@ -307,7 +309,16 @@ export function createPanels(input: ShellInputs) {
     }
   )
   events.onImportant((clock, important) => notices.show(clock, important))
-  const parts = { session, chatHistory, chatBubbles, worldSettings, observed, infoPanel, strip }
+  const parts = {
+    session,
+    chatHistory,
+    avatarHistory,
+    chatBubbles,
+    worldSettings,
+    observed,
+    infoPanel,
+    strip,
+  }
   const shell = {
     ...parts,
     ...{ books, props, center, notices, avatar, open, emptyTown, models, modelWait },
@@ -421,6 +432,7 @@ interface RegisteredParts {
   pauseHint: PauseHint | null
   avatar: ReturnType<typeof createAvatar>
   chatHistory: ReturnType<typeof createChatHistory>
+  avatarHistory: ReturnType<typeof createChatHistory>
   chatBubbles: ChatBubbles | null
   worldSettings: ReturnType<typeof createWorldSettings>
   diary: ReturnType<typeof initDiary>
@@ -521,6 +533,7 @@ function register(input: ShellInputs, p: RegisteredParts) {
     p.avatar,
     { connected: () => send({ type: 'get_model_config' }) },
     p.chatHistory,
+    p.avatarHistory,
     mapPanel,
     p.worldSettings,
     hubs.roster,

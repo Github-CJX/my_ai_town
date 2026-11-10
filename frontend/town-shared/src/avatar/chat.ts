@@ -164,6 +164,8 @@ let appointPlace = ''
 let appointLater = '一小时后'
 // 空约定的对象也留着：离开小镇的人看不见名册，只能按名字写下来
 let reserveName = ''
+// 空约定这一栏平时收着：聊天的时候它占地方，要点开才写字
+let reserveOpen = false
 
 /** 约时间可选的时刻：一两个钟头以后、明早、明天中午；超出一天的不列（约定最多约到一天以内） */
 function laterChoices(now: number) {
@@ -216,7 +218,20 @@ function reserveRow(v: ChatView) {
   const choices = laterChoices(minutes)
   if (!places.length || !choices.length) return
   if (!places.some((p) => p.id === appointPlace)) appointPlace = places[0].id
-  const row = v.block('avatar-textacts avatar-reserve')
+  const block = v.block('avatar-reserve')
+  const body = el('div', '', 'avatar-textacts')
+  body.hidden = !reserveOpen
+  const toggle = button(
+    reserveOpen ? '收起「空约定」' : '给不在镇上的人留个约定',
+    () => {
+      reserveOpen = !reserveOpen
+      body.hidden = !reserveOpen
+      toggle.textContent = reserveOpen ? '收起「空约定」' : '给不在镇上的人留个约定'
+      toggle.setAttribute('aria-expanded', String(reserveOpen))
+    },
+    'avatar-reserve-toggle'
+  )
+  toggle.setAttribute('aria-expanded', String(reserveOpen))
   const name = el('input')
   name.type = 'text'
   name.maxLength = 24
@@ -245,13 +260,8 @@ function reserveRow(v: ChatView) {
       message: `${c.label}在${v.localeName(place.value)}见，你回来我们就见。`,
     })
   }
-  row.append(
-    el('span', '给不在镇上的人留个约定'),
-    name,
-    place,
-    later,
-    panelButton('留下约定', reserve, !v.idle || !reserveName.trim())
-  )
+  body.append(name, place, later, panelButton('留下约定', reserve, !v.idle || !reserveName.trim()))
+  block.append(toggle, body)
 }
 
 /** 聊天记录里的过程条目怎么说 */

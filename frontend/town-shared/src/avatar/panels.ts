@@ -261,7 +261,7 @@ export function createAvatarPanels(ui: AvatarUI, deps: AvatarDeps, actions: Avat
         execute,
         () => {
           stopMoving()
-          openHistory(a.id)
+          openHistory(a.id, a.name)
         },
         {
           holds,

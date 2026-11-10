@@ -121,10 +121,10 @@ export function createChatHistory(
     requestId = nextRequestId()
     send({ type: 'get_chat_history', resident, request_id: requestId, chat_id: chatId, offset })
   }
-  function open(id: string, chat?: string) {
+  function open(id: string, chat?: string, name = '居民') {
     resident = id
     head.querySelector('.resident-portrait')?.remove()
-    if (game) title.before(residentPortrait(id, '居民'))
+    if (game) title.before(residentPortrait(id, name))
     chatId = chat
     offset = 0
     signature = ''
@@ -137,7 +137,9 @@ export function createChatHistory(
   }
   function handleMsg(msg: ServerMsg) {
     if (msg.type !== 'chat_history') return false
-    if (!surface.isOpen() || msg.request_id !== requestId || msg.resident !== resident) return true
+    // 居民右栏与化身弹窗各有一份记录页：别人的请求编号交给后面的面板，不能在这里吞掉
+    if (msg.request_id !== requestId) return false
+    if (!surface.isOpen() || msg.resident !== resident) return true
     total = msg.total
     back.hidden = !chatId
     title.textContent = chatId ? '交谈记录' : '聊天记录'
@@ -212,6 +214,7 @@ export function createChatHistory(
   }
   return {
     open,
+    isOpen: () => surface.isOpen(),
     handleMsg,
     onReset() {
       surface.hide()

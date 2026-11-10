@@ -29,7 +29,7 @@ import './style.css'
 export interface AvatarDeps {
   send: (message: ClientMsg) => void
   map: GameMap
-  openHistory: (id: string) => void
+  openHistory: (id: string, name: string) => void
   localeName: (id: string) => string
   /** 地图上的已知地点：约时间时选见面的地方 */
   places: { id: string; name: string }[]
@@ -270,7 +270,7 @@ class AvatarController {
       leave: () => this.leave(),
       stopMoving: () => this.stopMoving(),
       showHistory: () => {
-        if (this.state?.actor) this.deps.openHistory(this.state.actor.id)
+        if (this.state?.actor) this.deps.openHistory(this.state.actor.id, this.state.actor.name)
       },
       speak: () => this.speak(),
       follow: () => this.resumeFollowing(),

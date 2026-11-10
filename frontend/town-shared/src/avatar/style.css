@@ -530,6 +530,32 @@
   color: var(--avatar-green);
   font-weight: 600;
 }
+/* 空约定这一栏平时收着：点一下才展开写字 */
+.avatar-reserve {
+  display: grid;
+  gap: 6px;
+}
+.avatar-reserve-toggle {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.avatar-reserve-toggle:hover {
+  color: var(--avatar-green);
+}
+.avatar-reserve input[type='text'] {
+  max-width: 9em;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-s);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
 .avatar-appointments {
   display: grid;
   gap: 6px;
