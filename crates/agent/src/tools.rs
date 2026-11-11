@@ -316,8 +316,8 @@ pub const TOOLS: [ToolSpec; 14] = [
         name: ToolName::WaitFor,
         description: || {
             format!(
-                "等待事件或若干分钟。只填 event：该类事件或重要通知到来才唤醒，最长 {} 分钟；填 minutes 到点一定重看。轮到自己说话时调用等于 listen。",
-                limits::WAIT_MINUTES.end()
+                "等待事件或若干分钟。只填 event：该类事件或重要通知到来就醒，没等到也在 {} 分钟后醒来重看；填 minutes 到点一定重看。轮到自己说话时调用等于 listen。",
+                limits::EVENT_WAIT_MINUTES
             )
         },
         parameters: schema::wait_for,
@@ -726,8 +726,8 @@ fn wait_for(ctx: &mut ToolContext, call: &ToolCall) -> Result<ToolOutcome, ToolE
     require_idle(ctx, "已有动作或事件正在等待")?;
     let minutes = match (args.minutes, args.event) {
         (Some(m), _) if m.is_finite() && limits::WAIT_MINUTES.contains(&m) => m,
-        // 只等事件：到来或收到重要通知才唤醒，最长等一天。
-        (None, Some(_)) => *limits::WAIT_MINUTES.end(),
+        // 只等事件：到来或收到重要通知就醒，没等到也按时醒来重看。
+        (None, Some(_)) => limits::EVENT_WAIT_MINUTES,
         _ => {
             return Err(ToolError::new(
                 ToolErrorKind::InvalidArguments,

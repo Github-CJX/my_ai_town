@@ -192,6 +192,34 @@ pub(crate) fn note_earlier(view: &mut Value, skipped: impl IntoIterator<Item = (
     }
 }
 
+/// 略过的交谈是和谁、在哪：醒来知道「刚才在哪、和谁聊了多久」，原话要时再 recall。
+fn chat_partners(
+    world: &World,
+    actor: &str,
+    skipped: &[protocol::WorldFact],
+) -> (Vec<String>, Vec<String>) {
+    let (mut with, mut places) = (Vec::new(), Vec::new());
+    for event in skipped.iter().filter(|e| e.kind == FactKind::Speech) {
+        let speaker = event.objects.first().filter(|id| *id != actor);
+        if let Some(other) = speaker.and_then(|id| world.actor(id)) {
+            if !with.contains(&other.name) {
+                with.push(other.name.clone());
+            }
+        }
+        for object in event
+            .objects
+            .iter()
+            .filter(|o| world.topo.locales.contains_key(*o))
+        {
+            let name = world.topo.locale_name(object);
+            if !places.contains(&name) {
+                places.push(name);
+            }
+        }
+    }
+    (with, places)
+}
+
 /// 随时间和位置变化的部分：新事件、身体、眼前道具与人、互动。
 ///
 /// 新事件积压多时只列最近的：交谈轮次不推进生活这边的游标（runtime/chat.rs），聊得久，攒下的多是
@@ -264,6 +292,14 @@ pub fn observe(world: &World, actor: &str, after: u64) -> Result<(Value, u64), A
             .filter(|event| event.kind != FactKind::Notice)
             .map(|event| (event.at, event.kind == FactKind::Speech)),
     );
+    // 略过的交谈是和谁、在哪：醒来知道「刚才在哪、和谁聊了多久」，原话要时再 recall
+    let (with, places) = chat_partners(world, actor, older);
+    if !with.is_empty() {
+        value["earlier_events"]["with"] = json!(with);
+    }
+    if !places.is_empty() {
+        value["earlier_events"]["places"] = json!(places);
+    }
     // 建镇时生成的落脚点（水边、东头……）：停留时 target 填它的 id 就走过去
     let spots: Vec<_> = world
         .topo

@@ -701,3 +701,51 @@ fn a_resident_left_where_nobody_can_stand_walks_away_and_the_save_reloads() {
         "{position:?}"
     );
 }
+
+#[test]
+fn walking_costs_a_little_extra_energy_and_water() {
+    // 走路的头一分钟：站着不动的一分钟和走去乙处的一分钟比较
+    let minute = 0.1;
+    let still = {
+        let mut w = world(&[("a", "阿树", "loc_a")]);
+        w.set_body_values("a", Some(60.), Some(60.), Some(60.), None)
+            .unwrap();
+        w.step(minute);
+        w
+    };
+    let mut walking = world(&[("a", "阿树", "loc_a")]);
+    common::run(
+        &mut walking,
+        "a",
+        "go",
+        json!({"intent":{"verb":"前往","locale":"loc_b"}}),
+    )
+    .unwrap();
+    walking
+        .set_body_values("a", Some(60.), Some(60.), Some(60.), None)
+        .unwrap();
+    walking.step(minute);
+    assert!(
+        walking
+            .body_view("a")
+            .unwrap()
+            .causes
+            .iter()
+            .any(|c| c.contains("走路额外消耗")),
+        "{:?}",
+        walking.body_view("a").unwrap().causes
+    );
+    let energy_extra = still.actor("a").unwrap().needs.energy.value
+        - walking.actor("a").unwrap().needs.energy.value;
+    let water_extra =
+        still.actor("a").unwrap().needs.water.value - walking.actor("a").unwrap().needs.water.value;
+    let expected = 0.02 * minute;
+    assert!(
+        (energy_extra - expected).abs() < 0.002,
+        "走路一分钟多耗精力 {energy_extra}（应当约 {expected}）"
+    );
+    assert!(
+        (water_extra - expected).abs() < 0.002,
+        "走路一分钟多耗水分 {water_extra}（应当约 {expected}）"
+    );
+}
