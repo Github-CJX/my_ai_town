@@ -194,6 +194,70 @@ fn join_town(app: &App, town: &str, command: &Value, op_id: &str) -> Result<Valu
         })
 }
 
+/// 把账号里的整份人设写进这个镇的村民库，返回（模板编号，版本）。
+/// 镇上那份还在、人也没改过 → 直接用；改过一版 → 按镇上当前版本重写；不在 → 新建一份。
+fn materialize(
+    app: &App,
+    town: &str,
+    agent: &crate::agents::Agent,
+    cards: &[Value],
+) -> Result<(String, u32), ApiError> {
+    let Some(fields) = agent.fields.clone() else {
+        return Err(ApiError::bad("这份定义里没有带着人设"));
+    };
+    let known = agent.template_in(town).cloned();
+    let current = known.as_ref().and_then(|known| {
+        cards
+            .iter()
+            .find(|card| card["template_id"] == known.template_id.as_str())
+            .cloned()
+    });
+    if let (Some(known), Some(card)) = (&known, &current) {
+        if known.revision == agent.revision
+            && card["version"].as_u64() == Some(known.version as u64)
+        {
+            return Ok((known.template_id.clone(), known.version));
+        }
+    }
+    // 重写用的是镇上那份模板现在的版本号：有人在镇里改过它，也不会把人的改动盖掉
+    let request_id = format!("template-{}-{}", agent.id, crate::token());
+    let mut command = json!({
+        "type": "save_resident_template",
+        "request_id": request_id.clone(),
+        "fields": fields,
+    });
+    if let (Some(known), Some(card)) = (&known, &current) {
+        command["template_id"] = Value::from(known.template_id.clone());
+        if let Some(version) = card["version"].as_u64() {
+            command["expected_version"] = Value::from(version);
+        }
+    }
+    let reply = app.hosts.query_in(
+        town,
+        Some(&command),
+        |m| m["type"] == "template_saved" && m["request_id"] == request_id.as_str(),
+        20,
+    )?;
+    if reply["ok"].as_bool() != Some(true) {
+        return Err(ApiError::new(
+            409,
+            reply["message"]
+                .as_str()
+                .unwrap_or("镇上写不进这份人设")
+                .to_owned(),
+        ));
+    }
+    let template_id = reply["template"]["template_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let version = reply["template"]["version"].as_u64().unwrap_or(0) as u32;
+    if template_id.is_empty() {
+        return Err(ApiError::new(409, "镇上没给新模板的编号"));
+    }
+    Ok((template_id, version))
+}
+
 /// 把某位村民的密钥交给世界：世界只记在内存里，回执只有一句人话。
 fn hand_key(
     app: &App,
@@ -458,6 +522,12 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             crate::agents::remove(&home, request["id"].as_str().unwrap_or_default())?;
             return ok(json!({ "ok": true }));
         }
+        // 改定义：人设、长相、落脚点。已经投出去的那位不会跟着变，收回再投才更新
+        (false, "/agents/update") => {
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            let agent = crate::agents::update(&home, &body(req)?)?;
+            return ok(json!({ "ok": true, "agent": agent.public() }));
+        }
         _ => {}
     }
     let mut parts = rest.trim_start_matches('/').splitn(2, '/');
@@ -693,6 +763,51 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 .unwrap_or_default();
             ok(json!({ "templates": templates }))
         }
+        // 首页建村民时用：按字段渲染人设全文（世界那边是纯函数，不落盘）
+        (false, "persona") => {
+            let request = body(req)?;
+            if !app.hosts.is_running(id) {
+                return Err(ApiError::new(
+                    409,
+                    "这个小镇没在运行：先进一次，或让它在后台运行，才能预览人设",
+                ));
+            }
+            let command = json!({
+                "type": "preview_template_persona",
+                "fields": request["fields"],
+            });
+            let reply = app
+                .hosts
+                .query(id, Some(&command), |m| m["type"] == "template_persona")?;
+            ok(json!({ "persona": reply["persona"], "error": reply["error"] }))
+        }
+        // 首页建村民时用：世界的工具模型按一句话描述生成一整份人设
+        (false, "generate") => {
+            let request = body(req)?;
+            if !app.hosts.is_running(id) {
+                return Err(ApiError::new(
+                    409,
+                    "这个小镇没在运行：先进一次，或让它在后台运行，才能用模型生成",
+                ));
+            }
+            let request_id = format!("generate-{}", crate::token());
+            let command = json!({
+                "type": "generate_resident_template",
+                "request_id": request_id.clone(),
+                "brief": request["brief"],
+            });
+            let reply = app.hosts.query_in(
+                id,
+                Some(&command),
+                |m| m["type"] == "template_generated" && m["request_id"] == request_id.as_str(),
+                120,
+            )?;
+            ok(json!({
+                "ok": reply["ok"],
+                "message": reply["message"],
+                "fields": reply["fields"],
+            }))
+        }
         // 手动投放：把账号里这份定义请进这个镇。世界不自动收人，必须由人点这一下。
         (false, "deploy") => {
             let request = body(req)?;
@@ -741,17 +856,26 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                         m["type"] == "resident_library"
                     })?;
             let cards = library["templates"].as_array().cloned().unwrap_or_default();
-            let usable = cards.iter().any(|card| {
-                card["template_id"] == agent.template_id.as_str()
-                    && card["version"].as_u64() == Some(agent.template_version as u64)
-                    && card["status"] == "available"
-            });
-            if !usable {
-                return Err(ApiError::new(
-                    409,
-                    "这个镇没有这个模板（或者它已经在用了）：换个模板，或在这个镇重新建一个 agent",
-                ));
-            }
+            // 新形状：定义里带着整份人设，投放时在镇上写一份模板（人改过一版就重写）
+            let (template_id, template_version) = if agent.fields.is_some() {
+                let (template_id, version) = materialize(app, id, &agent, &cards)?;
+                crate::agents::record_template(&home, &mut agent, id, &template_id, version)?;
+                (template_id, version)
+            } else {
+                // 老形状：定义只记着某个镇的模板，那份模板得还在、并且还没人占用
+                let usable = cards.iter().any(|card| {
+                    card["template_id"] == agent.template_id.as_str()
+                        && card["version"].as_u64() == Some(agent.template_version as u64)
+                        && card["status"] == "available"
+                });
+                if !usable {
+                    return Err(ApiError::new(
+                        409,
+                        "这个镇没有这个模板（或者它已经在用了）：换个模板，或在这个镇重新建一个 agent",
+                    ));
+                }
+                (agent.template_id.clone(), agent.template_version)
+            };
             let op_id = format!("agent-{}-{}", agent.id, crate::token());
             // 他自己账号的模型与密钥：投出去的村民用他自己的，不再花世界的额度
             let api = app.accounts.lock().unwrap().api(&app.config, &me)?;
@@ -759,8 +883,8 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 "type": "join_resident",
                 "op_id": op_id,
                 "world_id": view["world_id"],
-                "template_id": agent.template_id,
-                "template_version": agent.template_version,
+                "template_id": template_id,
+                "template_version": template_version,
                 "name": agent.name,
             });
             if let Some(api) = &api {

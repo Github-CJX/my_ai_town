@@ -352,12 +352,12 @@ body:has(.map-launcher) {
   color: var(--ui-ink-soft);
   font-size: 13px;
 }
-/* 账号自己养的村民：列表 + 起名选模板，投进哪个小镇由人点一下 */
+/* 账号自己养的村民：头像卡 + 末尾「邀请」虚线卡，和镇里那条头像条一个样子 */
 .agent-box {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius);
   background: var(--ui-fill);
@@ -371,70 +371,167 @@ body:has(.map-launcher) {
 .agent-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+  min-width: 0;
 }
-.agent-row {
+.agent-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+.agent-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 68px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.agent-face {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  overflow: hidden;
+  border: 2px solid var(--ui-line-strong);
+  border-radius: 10px;
+  background: var(--ui-accent-soft);
+  transition: transform 120ms ease;
+}
+/* 像素头像 92 像素见方，缩到 46 正好整数倍，不糊 */
+.agent-face img {
+  display: block;
+  width: 46px;
+  height: 46px;
+  image-rendering: pixelated;
+}
+.agent-face .game-icon {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2.6;
+}
+.agent-tile:hover .agent-face {
+  transform: translateY(-2px);
+}
+.agent-tile:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.agent-tile:disabled:hover .agent-face {
+  transform: none;
+}
+.agent-tile-name {
+  max-width: 100%;
+  padding: 1px 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ui-fill-strong);
+  color: var(--ui-ink-soft);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.agent-tile-where {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ui-ink-muted);
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 选中的那位：头像外一圈主色，名字牌换成实心 */
+.agent-tile.on .agent-face {
+  border-color: var(--ui-accent);
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+.agent-tile.on .agent-tile-name {
+  background: var(--ui-accent-fill);
+  color: var(--ui-accent-ink);
+}
+/* 右上角小点：在这个镇里是亮的，投在别处是暗的 */
+.agent-dot {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--ui-panel-solid);
+  border-radius: 50%;
+  background: var(--ui-accent);
+}
+.agent-dot.elsewhere {
+  background: var(--ui-ink-muted);
+}
+/* 末尾的「邀请」：虚线框里一个加号，看得出是空位 */
+.agent-add .agent-face {
+  border-style: dashed;
+  background: none;
+  color: var(--ui-ink-muted);
+}
+.agent-add:hover .agent-face {
+  border-style: solid;
+  color: var(--ui-accent);
+}
+/* 选中之后那排按钮：投放、收回、改人设、删 */
+.agent-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
 }
-.agent-row strong {
-  font-weight: 600;
-}
-.agent-where {
-  color: var(--ui-ink-soft);
-  font-size: 13px;
-}
-.agent-row button {
+.agent-actions button {
   min-height: 32px;
   padding: 0 12px;
   border: 1px solid var(--ui-line);
   border-radius: 8px;
   background: var(--ui-fill-strong);
+  color: var(--ui-ink);
   font-size: 13px;
 }
-.agent-row .agent-deploy {
-  margin-left: auto;
+.agent-actions button:disabled {
+  opacity: 0.5;
 }
-.agent-row .agent-drop {
+.agent-actions .agent-drop {
   color: var(--ui-danger);
   border-color: var(--ui-danger);
   background: none;
-}
-.agent-row .agent-recall {
-  color: var(--ui-warn, inherit);
-  border-color: var(--ui-line);
-  background: none;
-}
-.agent-create {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-.agent-create input,
-.agent-create select {
-  min-height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--ui-line);
-  border-radius: 8px;
-  background: var(--ui-panel-solid);
-}
-.agent-create .agent-add {
-  align-self: flex-start;
-  min-height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--ui-line);
-  border-radius: 8px;
-  background: var(--ui-fill-strong);
 }
 .agent-tip {
   margin: 0;
   color: var(--ui-ink-soft);
   font-size: 12px;
   line-height: 1.5;
+}
+/* 建村民的弹层：里面就是镇里那套编辑器（rv-* 的样式来自 town-shared/style.css） */
+.villager-dialog {
+  width: min(920px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius);
+  background: var(--ui-panel-solid);
+  color: var(--ui-ink);
+  overflow: hidden;
+}
+.villager-dialog::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+.villager-sheet {
+  max-height: calc(100vh - 48px);
+  padding: 18px 20px 22px;
+  overflow: auto;
 }
 .enter-game {
   display: flex;

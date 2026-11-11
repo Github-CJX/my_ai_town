@@ -9,8 +9,10 @@ import {
   publicAgent,
   readAgent,
   recordDeploy,
+  recordTemplate,
   recordWithdraw,
   removeAgent,
+  updateAgent,
 } from './agents.mjs'
 
 /** 天气可以选的那几种（与 protocol 的 WeatherKind 一致） */
@@ -99,6 +101,41 @@ async function handKey(hosts, id, resident, api) {
   } catch (e) {
     return e.message || '世界没有回应'
   }
+}
+
+/**
+ * 把账号里的整份人设写进这个镇的村民库，回（模板编号，版本）。
+ * 镇上那份还在、人也没改过 → 直接用；改过一版 → 按镇上当前版本重写；不在 → 新建一份。
+ */
+async function materialize(hosts, id, agent, cards) {
+  const known = agent.templates?.[id]
+  const current = known && cards.find((card) => card.template_id === known.template_id)
+  if (
+    known &&
+    current &&
+    (agent.revision ?? 0) === (known.revision ?? 0) &&
+    current.version === known.version
+  ) {
+    return { template_id: known.template_id, version: known.version }
+  }
+  // 重写用的是镇上那份模板现在的版本号：有人在镇里改过它，也不会把人的改动盖掉
+  const requestId = `template-${agent.id}-${Date.now()}`
+  const reply = await hosts.query(
+    id,
+    {
+      type: 'save_resident_template',
+      request_id: requestId,
+      fields: agent.fields,
+      ...(known && current
+        ? { template_id: known.template_id, expected_version: current.version }
+        : {}),
+    },
+    (m) => m.type === 'template_saved' && m.request_id === requestId,
+    20_000
+  )
+  if (!reply.ok) throw new HttpError(409, reply.message || '镇上写不进这份人设')
+  if (!reply.template?.template_id) throw new HttpError(409, '镇上没给新模板的编号')
+  return { template_id: reply.template.template_id, version: reply.template.version }
 }
 
 /**
@@ -260,6 +297,16 @@ export function createTownRoutes({
       },
     ],
     [
+      // 改定义：人设、长相、落脚点。已经投出去的那位不会跟着变，收回再投才更新
+      'POST',
+      /^\/api\/towns\/agents\/update$/,
+      async ({ body, headers }) => {
+        const me = mine(headers)
+        const agent = await serial('agents-' + me.id, () => updateAgent(root, me.id, body))
+        return { ok: true, agent: publicAgent(agent) }
+      },
+    ],
+    [
       'GET',
       /^\/api\/towns\/([a-z0-9-]+)\/templates$/,
       async ({ params: [id] }) => {
@@ -281,6 +328,40 @@ export function createTownRoutes({
       },
     ],
     [
+      // 首页建村民时用：按字段渲染人设全文（世界那边是纯函数，不落盘）
+      'POST',
+      /^\/api\/towns\/([a-z0-9-]+)\/persona$/,
+      async ({ params: [id], body }) => {
+        id = safeId(id)
+        if (!hosts.isRunning(id))
+          throw new HttpError(409, '这个小镇没在运行：先进一次，或让它在后台运行，才能预览人设')
+        const reply = await hosts.query(
+          id,
+          { type: 'preview_template_persona', fields: body?.fields },
+          (m) => m.type === 'template_persona'
+        )
+        return { persona: reply.persona ?? '', error: reply.error ?? null }
+      },
+    ],
+    [
+      // 首页建村民时用：世界的工具模型按一句话描述生成一整份人设
+      'POST',
+      /^\/api\/towns\/([a-z0-9-]+)\/generate$/,
+      async ({ params: [id], body }) => {
+        id = safeId(id)
+        if (!hosts.isRunning(id))
+          throw new HttpError(409, '这个小镇没在运行：先进一次，或让它在后台运行，才能用模型生成')
+        const requestId = `generate-${Date.now()}`
+        const reply = await hosts.query(
+          id,
+          { type: 'generate_resident_template', request_id: requestId, brief: body?.brief },
+          (m) => m.type === 'template_generated' && m.request_id === requestId,
+          120_000
+        )
+        return { ok: Boolean(reply.ok), message: reply.message ?? '', fields: reply.fields ?? null }
+      },
+    ],
+    [
       'POST',
       /^\/api\/towns\/([a-z0-9-]+)\/deploy$/,
       async ({ params: [id], body, headers }) => {
@@ -298,17 +379,29 @@ export function createTownRoutes({
           const view = await population(id)
           if (view.residents.some((person) => person.name === agent.name))
             throw new HttpError(409, `镇上已经有叫「${agent.name}」的居民了，换一个名字再投`)
-          const template = (await library(id)).find(
-            (card) =>
-              card.template_id === agent.template_id &&
-              card.version === agent.template_version &&
-              card.status === 'available'
-          )
-          if (!template)
-            throw new HttpError(
-              409,
-              '这个镇没有这个模板（或者它已经在用了）：换个模板，或在这个镇重新建一个 agent'
+          const cards = await library(id)
+          let template = null
+          if (agent.fields) {
+            // 新形状：定义里带着整份人设，投放时在镇上写一份模板（人改过一版就重写）
+            const made = await materialize(hosts, id, agent, cards)
+            await serial('agents-' + me.id, () =>
+              recordTemplate(root, me.id, agent, id, made.template_id, made.version)
             )
+            template = made
+          } else {
+            // 老形状：定义只记着某个镇的模板，那份模板得还在、并且还没人占用
+            template = cards.find(
+              (card) =>
+                card.template_id === agent.template_id &&
+                card.version === agent.template_version &&
+                card.status === 'available'
+            )
+            if (!template)
+              throw new HttpError(
+                409,
+                '这个镇没有这个模板（或者它已经在用了）：换个模板，或在这个镇重新建一个 agent'
+              )
+          }
           // 他自己的模型与密钥：世界只记内存，重启后由这里重发
           const api = await apiOf(await accountConfig(me)).catch(() => null)
           const opId = `agent-${agent.id}-${Date.now()}`
@@ -316,8 +409,8 @@ export function createTownRoutes({
             type: 'join_resident',
             op_id: opId,
             world_id: view.world_id,
-            template_id: agent.template_id,
-            template_version: agent.template_version,
+            template_id: template.template_id,
+            template_version: template.version,
             name: agent.name,
             ...(api ? { model: { provider: api.provider, model: api.model } } : {}),
             ...(agent.home && view.homes.some((home) => home.locale === agent.home)

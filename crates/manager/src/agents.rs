@@ -25,14 +25,34 @@ pub struct Deployed {
     pub at: u64,
 }
 
+/// 这个小镇的村民库里给他留的那份模板：投放时写进去，收回来也留着，再投一次接着用。
+/// `revision` 是写这份模板时账号里的定义是第几版：人改了人设，下次投放才知道要重写。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct TownTemplate {
+    pub template_id: String,
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub revision: u32,
+}
+
 /// 一份 agent 定义。`deployed` 以小镇编号为键：同一个定义在几个小镇各有一个自己。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Agent {
     pub id: String,
     pub name: String,
+    /// 老形状：指向某个小镇村民库里的模板。新定义改用 `fields`，这一项留空
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub template_id: String,
     #[serde(default)]
     pub template_version: u32,
+    /// 新形状：整份人设与长相（姓名、介绍、性格、背景、appearance.look）。
+    /// 定义跟着账号走，投进哪个小镇时才由管理服务写进那个镇的村民库。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Value>,
+    /// 人设改过几版：投放时拿它跟 `templates[镇].revision` 比，决定要不要重写模板
+    #[serde(default)]
+    pub revision: u32,
     /// 想住的落脚点；那个小镇没有这个地方时就按世界自己安排
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
@@ -41,6 +61,9 @@ pub struct Agent {
     pub created_at: u64,
     #[serde(default)]
     pub deployed: BTreeMap<String, Deployed>,
+    /// 在哪些小镇留下过模板：收回居民不清它，重新投放可以接着用
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub templates: BTreeMap<String, TownTemplate>,
 }
 
 impl Agent {
@@ -63,6 +86,8 @@ impl Agent {
             "name": self.name,
             "template_id": self.template_id,
             "template_version": self.template_version,
+            "fields": self.fields,
+            "revision": self.revision,
             "home": self.home,
             "created_at": self.created_at,
             "deployed": deployed,
@@ -71,6 +96,10 @@ impl Agent {
 
     pub fn deployed_in(&self, town: &str) -> Option<&Deployed> {
         self.deployed.get(town)
+    }
+
+    pub fn template_in(&self, town: &str) -> Option<&TownTemplate> {
+        self.templates.get(town)
     }
 }
 
@@ -142,29 +171,35 @@ fn check_name(name: &str) -> Result<String, ApiError> {
     Ok(name.to_owned())
 }
 
-/// 建一个定义：名字（账号内不重名）、模板编号与版本、可选落脚点；普通账号受 limit 限制。
+/// 建一个定义：整份人设（`fields`，在首页用建村民的老界面做的）或老形状的模板引用；
+/// 名字账号内不重名，普通账号受 limit 限制。
 pub fn create(home: &Path, request: &Value, limit: Option<u32>) -> Result<Agent, ApiError> {
-    let name = check_name(request["name"].as_str().unwrap_or_default())?;
-    let template_id = request["template_id"].as_str().unwrap_or_default().trim();
-    if template_id.is_empty() || template_id.chars().count() > MAX_TEMPLATE {
-        return Err(ApiError::bad("模板编号不对"));
-    }
-    let version = request["template_version"]
-        .as_u64()
-        .ok_or_else(|| ApiError::bad("模板版本不对"))?;
-    if version > u32::MAX as u64 {
-        return Err(ApiError::bad("模板版本不对"));
-    }
-    let home_name = match request["home"].as_str() {
-        Some(home) if !home.trim().is_empty() => {
-            let home = home.trim();
-            if home.chars().count() > MAX_HOME {
-                return Err(ApiError::bad("落脚点的名字太长"));
+    let fields = request
+        .get("fields")
+        .filter(|fields| fields.is_object())
+        .cloned();
+    let (name, template_id, version) = match &fields {
+        Some(fields) => (
+            check_name(fields["name"].as_str().unwrap_or_default())?,
+            String::new(),
+            0,
+        ),
+        None => {
+            let name = check_name(request["name"].as_str().unwrap_or_default())?;
+            let template_id = request["template_id"].as_str().unwrap_or_default().trim();
+            if template_id.is_empty() || template_id.chars().count() > MAX_TEMPLATE {
+                return Err(ApiError::bad("模板编号不对"));
             }
-            Some(home.to_owned())
+            let version = request["template_version"]
+                .as_u64()
+                .ok_or_else(|| ApiError::bad("模板版本不对"))?;
+            if version > u32::MAX as u64 {
+                return Err(ApiError::bad("模板版本不对"));
+            }
+            (name, template_id.to_owned(), version as u32)
         }
-        _ => None,
     };
+    let home_name = wanted_home(request)?;
     let agents = list(home)?;
     if agents.iter().any(|agent| agent.name == name) {
         return Err(ApiError::bad("已经有同名的 agent 了"));
@@ -179,14 +214,59 @@ pub fn create(home: &Path, request: &Value, limit: Option<u32>) -> Result<Agent,
     let agent = Agent {
         id: format!("a{}", &crate::token()[..16]),
         name,
-        template_id: template_id.to_owned(),
-        template_version: version as u32,
+        template_id,
+        template_version: version,
+        fields,
+        revision: 0,
         home: home_name,
         created_at: now(),
         deployed: BTreeMap::new(),
+        templates: BTreeMap::new(),
     };
     save(home, &agent)?;
     Ok(agent)
+}
+
+/// 改一份定义：人设、长相、落脚点都能改，`revision` +1，下次投放时才重写镇上的模板。
+/// 已经投出去的那一位不会跟着变——他镇上的档案是投放那一刻定下的，收回再投才更新。
+pub fn update(home: &Path, request: &Value) -> Result<Agent, ApiError> {
+    let mut agent = read(home, request["id"].as_str().unwrap_or_default())?;
+    let Some(fields) = request
+        .get("fields")
+        .filter(|fields| fields.is_object())
+        .cloned()
+    else {
+        return Err(ApiError::bad("没带上要改的人设"));
+    };
+    let name = check_name(fields["name"].as_str().unwrap_or_default())?;
+    if list(home)?
+        .iter()
+        .any(|other| other.id != agent.id && other.name == name)
+    {
+        return Err(ApiError::bad("已经有同名的 agent 了"));
+    }
+    agent.name = name;
+    agent.fields = Some(fields);
+    agent.revision = agent.revision.saturating_add(1);
+    if request.get("home").is_some() {
+        agent.home = wanted_home(request)?;
+    }
+    save(home, &agent)?;
+    Ok(agent)
+}
+
+/// 落脚点：空着或没写就是不指定，太长不收
+fn wanted_home(request: &Value) -> Result<Option<String>, ApiError> {
+    match request["home"].as_str() {
+        Some(home) if !home.trim().is_empty() => {
+            let home = home.trim();
+            if home.chars().count() > MAX_HOME {
+                return Err(ApiError::bad("落脚点的名字太长"));
+            }
+            Ok(Some(home.to_owned()))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn save(home: &Path, agent: &Agent) -> Result<(), ApiError> {
@@ -221,6 +301,25 @@ pub fn record_withdraw(home: &Path, agent: &mut Agent, town: &str) -> Result<(),
     if agent.deployed.remove(town).is_none() {
         return Err(ApiError::new(409, "这个 agent 不在这个镇里"));
     }
+    save(home, agent)
+}
+
+/// 投放时在镇上写了一份模板：记下编号、版本、以及当时账号里的定义是第几版
+pub fn record_template(
+    home: &Path,
+    agent: &mut Agent,
+    town: &str,
+    template_id: &str,
+    version: u32,
+) -> Result<(), ApiError> {
+    agent.templates.insert(
+        town.to_owned(),
+        TownTemplate {
+            template_id: template_id.to_owned(),
+            version,
+            revision: agent.revision,
+        },
+    );
     save(home, agent)
 }
 
@@ -285,5 +384,46 @@ mod tests {
         assert_eq!(list(&home).expect("列表").len(), 1);
         // 编号里不能带路径
         assert!(read(&home, "../accounts").is_err());
+    }
+
+    /// 新形状：整份人设跟着账号走，改一版 revision 就 +1；镇上模板的记录收回居民也不清
+    #[test]
+    fn a_definition_carries_the_whole_villager_and_counts_its_revisions() {
+        let home = temp_home();
+        let fields = json!({
+            "name": "阿岚",
+            "intro": "爱看海",
+            "personality": "安静",
+            "appearance": { "look": { "hair": 1 } },
+        });
+        let made = create(&home, &json!({ "fields": fields }), None).expect("建");
+        assert_eq!(made.name, "阿岚");
+        assert!(made.template_id.is_empty());
+        assert_eq!(made.revision, 0);
+        assert_eq!(made.public()["fields"]["intro"], "爱看海");
+
+        let mut changed_fields = fields.clone();
+        changed_fields["intro"] = Value::from("爱看海，也爱修船");
+        changed_fields["name"] = Value::from("阿岚二号");
+        let mut changed =
+            update(&home, &json!({ "id": made.id, "fields": changed_fields })).expect("改");
+        assert_eq!(changed.name, "阿岚二号");
+        assert_eq!(changed.revision, 1);
+        assert_eq!(read(&home, &made.id).expect("读回来").revision, 1);
+        // 没有 fields 的改法不收
+        assert!(update(&home, &json!({ "id": made.id })).is_err());
+
+        // 镇上模板的记录：记下编号、版本、写它时的定义版本
+        record_template(&home, &mut changed, "town-1", "t9", 3).expect("记模板");
+        let saved = read(&home, &changed.id).expect("读回来");
+        let recorded = saved.template_in("town-1").expect("有记录");
+        assert_eq!(
+            (
+                recorded.template_id.as_str(),
+                recorded.version,
+                recorded.revision
+            ),
+            ("t9", 3, 1)
+        );
     }
 }

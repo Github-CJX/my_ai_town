@@ -1,5 +1,6 @@
 // 游戏页用到的小镇接口：世界进程没了时重新打开（换新地址接着连），离开时保存并关闭。
 import type { MapEntry } from './mapDocument'
+import type { TemplateFields } from './protocol'
 
 /** 自动重开时发现这个小镇是被另一个页面进的小镇挤掉的：不抢回来，由玩家决定回不回来 */
 export class TownDisplaced extends Error {}
@@ -129,13 +130,18 @@ export function controlTown(
 
 /**
  * 账号自己养的村民（agent）：定义跟着账号走，换小镇还能用；投进哪个小镇是一次手动动作，
- * 投进去之后那一段记忆只留在那个小镇的存档里（不跟着账号跑）。
+ * 投进去之后那一段记忆只留在那个小镇的存档里。
  */
 export type HomeAgent = {
   id: string
   name: string
+  /** 老形状才有：指向某个镇村民库里的模板。新定义改用 fields */
   template_id: string
   template_version: number
+  /** 整份人设与长相：投放时由管理服务写进那个镇的村民库 */
+  fields?: TemplateFields
+  /** 人设改过几版：投放时据此判断要不要重写镇上的模板 */
+  revision: number
   home?: string
   created_at: string
   /** 已经住进哪些小镇：换镇不搬人，是在另一个镇再住一份 */
@@ -180,14 +186,36 @@ export async function readAgents(): Promise<HomeAgents | null> {
   }
 }
 
-/** 建一个 agent：起名字、选一个模板（模板来自某个正在运行的小镇） */
+/** 建一个 agent：整份人设（在首页用建村民的界面做的），投进哪个镇另说 */
 export function makeAgent(body: {
-  name: string
-  template_id: string
-  template_version: number
+  fields: TemplateFields
   home?: string
 }): Promise<{ ok: true; agent: HomeAgent }> {
   return home('/agents', body)
+}
+
+/** 改一份定义：已经投出去的那位不会跟着变，收回再投才更新 */
+export function updateAgent(
+  id: string,
+  body: { fields: TemplateFields; home?: string }
+): Promise<{ ok: true; agent: HomeAgent }> {
+  return home('/agents/update', { id, ...body })
+}
+
+/** 按当前字段渲染人设全文：世界那边的纯函数，小镇得先跑起来 */
+export function previewPersona(
+  townId: string,
+  fields: TemplateFields
+): Promise<{ persona: string; error: string | null }> {
+  return post(townId, 'persona', { fields })
+}
+
+/** 用小镇的工具模型按一句话描述生成一整份人设 */
+export function generateVillager(
+  townId: string,
+  brief: string
+): Promise<{ ok: boolean; message: string; fields: TemplateFields | null }> {
+  return post(townId, 'generate', { brief })
 }
 
 /** 删掉一个还没投出去的 agent（还在镇里的删不掉） */

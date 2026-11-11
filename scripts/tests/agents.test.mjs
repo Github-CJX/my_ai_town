@@ -59,33 +59,35 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     assert.equal(early.status, 404)
     assert.match(early.error, /没有这个 agent/)
 
-    // 进一次这个小镇，拿到镇上可用的村民模板
+    // 进一次这个小镇，镇上的村民库就能列出来
     const opened = await api('/default-town/open', {})
     assert.equal(opened.status, 200, JSON.stringify(opened))
     const picked = await api('/default-town/templates')
     assert.equal(picked.status, 200, JSON.stringify(picked))
     assert.ok(picked.templates.length > 0)
-    const [first, second] = picked.templates
 
-    // 建一个 agent：名字 + 模板（版本一起记下）
+    // 建一个 agent：定义自带一整份人设（和镇里建村民用的是同一份字段）
     const made = await api('/agents', {
-      name: '阿岚',
-      template_id: first.template_id,
-      template_version: first.version,
+      fields: { name: '阿岚', intro: '爱看海', personality: '安静' },
     })
     assert.equal(made.status, 200, JSON.stringify(made))
     const agent = made.agent
     assert.equal(agent.name, '阿岚')
-    assert.equal(agent.template_id, first.template_id)
+    // 新形状不引用镇上的模板编号：投放时由管理服务把这份人设写进那个镇的村民库
+    assert.equal(agent.template_id, '')
+    assert.equal(agent.revision, 0)
+    assert.equal(agent.fields.intro, '爱看海')
     assert.deepEqual(agent.deployed, [])
     // 同名的不让建（不然镇上两个「阿岚」分不清谁是谁）
     const same = await api('/agents', {
-      name: '阿岚',
-      template_id: second.template_id,
-      template_version: second.version,
+      fields: { name: '阿岚', intro: '另一份' },
     })
     assert.equal(same.status, 400)
     assert.match(same.error, /同名/)
+    // 没带人设的改不动（改的就是那份人设）
+    const nothing = await api('/agents/update', { id: agent.id })
+    assert.equal(nothing.status, 400)
+    assert.match(nothing.error, /人设/)
 
     // 投放：村民真的住进去了，记下镇上给的居民编号
     const closed = await api('/default-town/close', {})
@@ -136,20 +138,35 @@ test('an account keeps its own agent definitions and drops one into a town by ha
       )
     )
 
+    // 那份人设真的写进了这个镇的村民库：一份自建的模板，并且已经有人住了
+    // （只数自建的：内置模板里也有叫「阿岚」的那一份）
+    const cardsOf = async (name) => {
+      const library = await m.hosts.query(
+        'default-town',
+        { type: 'get_resident_library' },
+        (msg) => msg.type === 'resident_library'
+      )
+      return library.templates.filter((card) => !card.builtin && card.name === name)
+    }
+    const mine = await cardsOf('阿岚')
+    assert.equal(mine.length, 1)
+    assert.equal(mine[0].builtin, false)
+    assert.equal(mine[0].status, 'joined')
+    assert.equal(mine[0].resident_id, deployed.agent.deployed[0].resident)
+
     // 同一个人不再投第二遍
     const again = await api('/default-town/deploy', { agent_id: agent.id })
     assert.equal(again.status, 409)
     assert.match(again.error, /已经在这个镇里了/)
-    // 同一个模板已经有人在用了：换个模板，或换个名字也没用——模板只够住一个人
-    const other = await api('/agents', {
-      name: '阿树',
-      template_id: first.template_id,
-      template_version: first.version,
-    })
+    // 另一个人自带自己的定义：各写各的模板，不会互相占着
+    const other = await api('/agents', { fields: { name: '阿树', intro: '爱爬树' } })
     assert.equal(other.status, 200, JSON.stringify(other))
-    const stuckTemplate = await api('/default-town/deploy', { agent_id: other.agent.id })
-    assert.equal(stuckTemplate.status, 409)
-    assert.match(stuckTemplate.error, /模板/)
+    const otherDeploy = await api('/default-town/deploy', { agent_id: other.agent.id })
+    assert.equal(otherDeploy.status, 200, JSON.stringify(otherDeploy))
+    const theirs = await cardsOf('阿树')
+    assert.equal(theirs.length, 1)
+    assert.equal(theirs[0].status, 'joined')
+    assert.notEqual(theirs[0].template_id, mine[0].template_id)
     // 还在镇里的删不掉（记录和镇上的人得对得上）
     assert.equal((await api('/agents/delete', { id: agent.id })).status, 409)
 
@@ -159,15 +176,11 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     const friend = call(base, `town_user=${madeUser.user.id}`)
     assert.equal((await friend('/agents')).limit, 1)
     const one = await friend('/agents', {
-      name: '朋友的小人',
-      template_id: second.template_id,
-      template_version: second.version,
+      fields: { name: '朋友的小人', intro: '话不多' },
     })
     assert.equal(one.status, 200, JSON.stringify(one))
     const full = await friend('/agents', {
-      name: '再来一个',
-      template_id: second.template_id,
-      template_version: second.version,
+      fields: { name: '再来一个', intro: '也话不多' },
     })
     assert.equal(full.status, 403)
     assert.equal(full.code, 'limit')
@@ -179,7 +192,8 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     // 各投各的：管理员的 agent 列表里看不到朋友的
     assert.equal((await api('/agents')).agents.length, 2)
 
-    // 没投出去的那个可以删
+    // 收回来的那个才能删
+    assert.equal((await api('/default-town/withdraw', { agent_id: other.agent.id })).status, 200)
     const deleted = await api('/agents/delete', { id: other.agent.id })
     assert.equal(deleted.status, 200, JSON.stringify(deleted))
     assert.equal((await api('/agents')).agents.length, 1)
@@ -220,6 +234,27 @@ test('an account keeps its own agent definitions and drops one into a town by ha
       !left.population.residents.some((person) => person.id === deployed.agent.deployed[0].resident)
     )
     assert.ok(left.population.residents.some((person) => person.name === '朋友的小人'))
+
+    // 收回居民不顺带删镇上那份模板：它留在库里，只是又变成可用的
+    const kept = await cardsOf('阿岚')
+    assert.equal(kept.length, 1)
+    assert.equal(kept[0].status, 'available')
+    // 改人设：账号里这份版本 +1；已经住下的那位不跟着变（他按投放那一刻的档案）
+    const edited = await api('/agents/update', {
+      id: agent.id,
+      fields: { name: '阿岚', intro: '改成爱爬山', personality: '安静' },
+    })
+    assert.equal(edited.status, 200, JSON.stringify(edited))
+    assert.equal(edited.agent.revision, 1)
+    assert.equal(edited.agent.fields.intro, '改成爱爬山')
+    // 再投一次：镇上那份模板跟着重写一版，库里不会多出一份
+    const redeploy = await api('/default-town/deploy', { agent_id: agent.id })
+    assert.equal(redeploy.status, 200, JSON.stringify(redeploy))
+    const rewritten = await cardsOf('阿岚')
+    assert.equal(rewritten.length, 1)
+    assert.equal(rewritten[0].version, kept[0].version + 1)
+    // 收回来，留给后面那次「不能收第二次」和删除
+    assert.equal((await api('/default-town/withdraw', { agent_id: agent.id })).status, 200)
 
     // 朋友把这个账号自己的模型与密钥填上，再投一次：这回用他自己的密钥，不需要提醒
     const friendFile = await m.accountConfig({ id: madeUser.user.id, role: 'user' })

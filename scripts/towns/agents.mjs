@@ -64,8 +64,10 @@ export function publicAgent(agent) {
   return {
     id: agent.id,
     name: agent.name,
-    template_id: agent.template_id,
-    template_version: agent.template_version,
+    template_id: agent.template_id ?? '',
+    template_version: agent.template_version ?? 0,
+    ...(agent.fields ? { fields: agent.fields } : {}),
+    revision: agent.revision ?? 0,
     ...(agent.home ? { home: agent.home } : {}),
     created_at: agent.created_at,
     deployed: Object.entries(agent.deployed ?? {}).map(([town, record]) => ({
@@ -106,15 +108,24 @@ export async function readAgent(root, userId, id) {
 }
 
 /**
- * 建一个 agent 定义：名字 + 用哪个村民模板（编号与版本都记下来——模板改版之后，
- * 原来的 agent 还是按当初那一版投）。普通账号有人数上限，管理员不限。
+ * 建一个 agent 定义：整份人设（`fields`：姓名、介绍、性格、背景、长相）跟着账号走，
+ * 投进哪个镇时才由管理服务写进那个镇的村民库。也认老形状（name + template_id + template_version）。
+ * 普通账号有人数上限，管理员不限。
  */
 export async function createAgent(root, userId, body, limit) {
-  const name = checkName(body?.name)
-  const templateId = String(body?.template_id ?? '').trim()
-  if (!templateId || templateId.length > 200) throw new HttpError(400, '要指定一个村民模板')
-  const version = Number(body?.template_version)
-  if (!Number.isInteger(version) || version < 0) throw new HttpError(400, '模板版本不对')
+  const fields =
+    body?.fields && typeof body.fields === 'object' && !Array.isArray(body.fields)
+      ? body.fields
+      : null
+  const name = checkName(fields ? fields.name : body?.name)
+  let templateId = ''
+  let version = 0
+  if (!fields) {
+    templateId = String(body?.template_id ?? '').trim()
+    if (!templateId || templateId.length > 200) throw new HttpError(400, '要指定一个村民模板')
+    version = Number(body?.template_version)
+    if (!Number.isInteger(version) || version < 0) throw new HttpError(400, '模板版本不对')
+  }
   const home = body?.home === undefined || body?.home === null ? null : String(body.home).trim()
   if (home !== null && (!home || home.length > 64)) throw new HttpError(400, '住处不对')
   const agents = await listAgents(root, userId)
@@ -124,11 +135,57 @@ export async function createAgent(root, userId, body, limit) {
   const agent = {
     id: 'a' + hex(8),
     name,
-    template_id: templateId,
-    template_version: version,
+    ...(fields ? { fields } : { template_id: templateId, template_version: version }),
+    revision: 0,
     ...(home ? { home } : {}),
     created_at: Math.floor(Date.now() / 1000),
     deployed: {},
+  }
+  await atomicJson(agentFile(root, userId, agent.id), agent)
+  return agent
+}
+
+/**
+ * 改一份定义：人设、长相、落脚点，`revision` +1，下次投放时才重写镇上的模板。
+ * 已经投出去的那一位不会跟着变——他镇上的档案是投放那一刻定下的，收回再投才更新。
+ */
+export async function updateAgent(root, userId, body) {
+  const agent = await readAgent(root, userId, body?.id)
+  const fields =
+    body?.fields && typeof body.fields === 'object' && !Array.isArray(body.fields)
+      ? body.fields
+      : null
+  if (!fields) throw new HttpError(400, '没带上要改的人设')
+  const name = checkName(fields.name)
+  const others = await listAgents(root, userId)
+  if (others.some((other) => other.id !== agent.id && other.name === name))
+    throw new HttpError(400, '已经有同名的 agent 了')
+  let home = agent.home
+  if (body.home !== undefined) {
+    home = body.home === null ? null : String(body.home).trim()
+    if (home !== null && (!home || home.length > 64)) throw new HttpError(400, '住处不对')
+  }
+  const next = {
+    ...agent,
+    name,
+    fields,
+    revision: (agent.revision ?? 0) + 1,
+    ...(home ? { home } : {}),
+  }
+  if (!home) delete next.home
+  await atomicJson(agentFile(root, userId, agent.id), next)
+  return next
+}
+
+/** 投放时在镇上写了一份模板：记下编号、版本、以及当时账号里的定义是第几版 */
+export async function recordTemplate(root, userId, agent, townId, templateId, version) {
+  agent.templates = {
+    ...(agent.templates ?? {}),
+    [safeId(townId)]: {
+      template_id: templateId,
+      version,
+      revision: agent.revision ?? 0,
+    },
   }
   await atomicJson(agentFile(root, userId, agent.id), agent)
   return agent
