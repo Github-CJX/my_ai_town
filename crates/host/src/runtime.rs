@@ -436,7 +436,18 @@ impl Runtime {
                 resident,
                 calls_per_day,
                 tokens_per_day,
-            } => self.set_resident_budget(request_id, &resident, calls_per_day, tokens_per_day),
+                group,
+                max_concurrent,
+                per_minute,
+            } => self.set_resident_budget(
+                request_id,
+                &resident,
+                calls_per_day,
+                tokens_per_day,
+                group,
+                max_concurrent,
+                per_minute,
+            ),
         }
     }
 

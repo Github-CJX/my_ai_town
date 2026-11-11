@@ -323,6 +323,15 @@ pub enum ClientMsg {
         calls_per_day: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens_per_day: Option<u64>,
+        /// 账号（或某一伙人）的不透明标签：同标签的居民共享下面两项。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+        /// 这一伙人同时在途的上限。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_concurrent: Option<u32>,
+        /// 这一伙人每分钟最多发几次。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        per_minute: Option<u32>,
     },
 }
 

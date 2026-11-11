@@ -306,6 +306,7 @@ pub(crate) fn resend_keys(app: &App, town: &str) {
                 let api = accounts.api(&app.config, user).ok().flatten();
                 (
                     user.name.clone(),
+                    user.id.clone(),
                     crate::agents::list(&home).unwrap_or_default(),
                     api,
                     home,
@@ -313,10 +314,10 @@ pub(crate) fn resend_keys(app: &App, town: &str) {
             })
             .collect::<Vec<_>>()
     };
-    for (who, agents, api, home) in prepared {
+    for (who, id, agents, api, home) in prepared {
         let budget = crate::usage::read(&home);
-        if budget.calls_per_day.is_some() || budget.tokens_per_day.is_some() {
-            if let Err(error) = crate::usage::push(&app.hosts, town, &agents, &budget) {
+        if !budget.is_none() {
+            if let Err(error) = crate::usage::push(&app.hosts, town, &agents, &budget, &id) {
                 eprintln!(
                     "[town-manager] 重发「{who}」的每日额度没成功：{}",
                     error.message
@@ -562,7 +563,9 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 if !app.hosts.is_running(&town) {
                     continue;
                 }
-                if let Err(error) = crate::usage::push(&app.hosts, &town, &agents, &budget) {
+                if let Err(error) =
+                    crate::usage::push(&app.hosts, &town, &agents, &budget, &me.id)
+                {
                     notes.push(format!(
                         "「{}」还没接受这个额度（{}）",
                         app.storage.name(&town),
@@ -994,12 +997,16 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 }
             };
             crate::agents::record_deploy(&home, &mut agent, id, &resident, &name)?;
-            // 他自己设过每日额度的话，跟着发给镇上这位居民（世界按居民记，投别人不受影响）
+            // 他自己设过每日额度或并发/速率的话，跟着发给镇上这位居民（世界按居民记，投别人不受影响）
             let budget = crate::usage::read(&home);
-            if budget.calls_per_day.is_some() || budget.tokens_per_day.is_some() {
-                if let Err(error) =
-                    crate::usage::push(&app.hosts, id, std::slice::from_ref(&agent), &budget)
-                {
+            if !budget.is_none() {
+                if let Err(error) = crate::usage::push(
+                    &app.hosts,
+                    id,
+                    std::slice::from_ref(&agent),
+                    &budget,
+                    &me.id,
+                ) {
                     if !note.is_empty() {
                         note.push('；');
                     }

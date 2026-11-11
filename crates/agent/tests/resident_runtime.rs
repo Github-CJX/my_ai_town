@@ -732,6 +732,7 @@ fn one_resident_can_carry_its_owners_daily_budget_and_an_unmetered_reply_gives_t
     let own = DailyBudget {
         calls_per_day: Some(40),
         tokens_per_day: Some(town.tokens_per_day / 2),
+        ..DailyBudget::default()
     };
     r.set_actor_budget("r1", Some(own.clone())).unwrap();
     assert_eq!(
@@ -748,6 +749,7 @@ fn one_resident_can_carry_its_owners_daily_budget_and_an_unmetered_reply_gives_t
     let broken = DailyBudget {
         calls_per_day: Some(0),
         tokens_per_day: None,
+        ..DailyBudget::default()
     };
     let refused = r.set_actor_budget("r1", Some(broken)).unwrap_err();
     assert!(refused.to_string().contains("Agent 预算配置无效"));
@@ -787,5 +789,85 @@ fn one_resident_can_carry_its_owners_daily_budget_and_an_unmetered_reply_gives_t
     assert_eq!(
         r.daily_limits("r1"),
         (town.calls_per_day, town.tokens_per_day)
+    );
+}
+
+#[test]
+fn one_group_shares_a_concurrency_cap_without_blocking_others() {
+    let mut w = world();
+    w.spawn("r2", "阿桥", "loc_b").unwrap();
+    w.spawn("r3", "阿禾", "loc_a").unwrap();
+    let mut limits = Limits::default();
+    limits.max_concurrent = 8; // 全镇名额够，卡住的只能是组自己的上限
+    let mut r = runtime(&mut w, limits);
+    r.register(&mut w, "r2", "我也在镇上走动。").unwrap();
+    r.register(&mut w, "r3", "我来看看。").unwrap();
+
+    // 并发与速率要带组标签才认：不然不知道该跟谁一起分
+    let lonely = DailyBudget {
+        max_concurrent: Some(1),
+        ..DailyBudget::default()
+    };
+    let refused = r.set_actor_budget("r1", Some(lonely)).unwrap_err();
+    assert!(
+        refused.to_string().contains("Agent 预算配置无效"),
+        "没组标签的并发上限要拒收：{refused}"
+    );
+    assert!(r.state().budgets.is_empty());
+
+    let quota = DailyBudget {
+        group: Some("acct-1".into()),
+        max_concurrent: Some(1),
+        ..DailyBudget::default()
+    };
+    r.set_actor_budget("r1", Some(quota.clone())).unwrap();
+    r.set_actor_budget("r2", Some(quota)).unwrap();
+    assert_eq!(r.group_of("r1").as_deref(), Some("acct-1"));
+    assert_eq!(r.group_of("r3"), None);
+
+    let first = r.poll(&mut w, true);
+    assert_eq!(first.len(), 2, "同组只放一个人；不在组里的照旧");
+    let same: Vec<_> = first
+        .iter()
+        .filter(|q| q.actor_id == "r1" || q.actor_id == "r2")
+        .collect();
+    assert_eq!(same.len(), 1, "这一组同时在途只能有一个");
+    assert!(first.iter().any(|q| q.actor_id == "r3"), "别的人不受影响");
+
+    // 一个都不回：组内那一份还占着，第三位也不该再放
+    assert!(r.poll(&mut w, true).is_empty(), "在途的没落定之前不再放");
+}
+
+#[test]
+fn one_group_keeps_to_its_requests_per_minute() {
+    let mut w = world();
+    w.spawn("r2", "阿桥", "loc_b").unwrap();
+    let mut limits = Limits::default();
+    limits.max_concurrent = 8;
+    let mut r = runtime(&mut w, limits);
+    r.register(&mut w, "r2", "我也在镇上走动。").unwrap();
+    // 只设速率、不设并发：此时没人占着「在途」名额，能拦住下一位的只有分钟窗口
+    let rate = DailyBudget {
+        group: Some("acct-2".into()),
+        per_minute: Some(1),
+        ..DailyBudget::default()
+    };
+    r.set_actor_budget("r1", Some(rate.clone())).unwrap();
+    r.set_actor_budget("r2", Some(rate)).unwrap();
+
+    let start = 1_000u64;
+    assert_eq!(
+        r.poll_at(&mut w, true, start).len(),
+        1,
+        "一分钟一次，只放一位"
+    );
+    assert!(
+        r.poll_at(&mut w, true, start + 5).is_empty(),
+        "同一分钟里已经发过一次"
+    );
+    assert_eq!(
+        r.poll_at(&mut w, true, start + 61).len(),
+        1,
+        "窗口过去之后又放行"
     );
 }

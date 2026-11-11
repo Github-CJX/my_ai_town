@@ -103,7 +103,7 @@
     <dialog id="villager-dialog" class="villager-dialog" aria-label="我的 agent">
       <div class="villager-sheet" id="villager-view"></div>
     </dialog>
-    <!-- 账号自己的每日额度：限定投出去的 agent 每天最多花多少 -->
+    <!-- 账号自己的每日额度：限定投出去的 agent 每天最多花多少、同时忙几件 -->
     <dialog id="budget-dialog" class="villager-dialog" aria-label="每日额度">
       <div class="villager-sheet budget-sheet">
         <h2 class="budget-title">这个账号的每日额度</h2>
@@ -119,6 +119,25 @@
           <span>每天最多 token</span>
           <input id="budget-tokens" type="number" min="1" step="1000" placeholder="不限" />
         </label>
+        <label class="budget-field">
+          <span>同时在想几件事</span>
+          <input
+            id="budget-concurrent"
+            type="number"
+            min="1"
+            max="16"
+            step="1"
+            placeholder="不限"
+          />
+        </label>
+        <label class="budget-field">
+          <span>每分钟最多请求</span>
+          <input id="budget-rate" type="number" min="1" max="600" step="1" placeholder="不限" />
+        </label>
+        <p class="budget-note">
+          后两项是你这个账号投出去的 agent 一起算的：别让一个账号把小镇同时在跑的
+          名额占满。空着就只受小镇自己的限额约束。
+        </p>
         <p id="budget-tip" class="agent-tip" role="status" hidden></p>
         <div class="agent-actions">
           <button id="budget-save" class="agent-deploy">存下来</button>

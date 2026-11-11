@@ -227,6 +227,10 @@ export function deleteAgent(id: string): Promise<{ ok: true }> {
 export type AccountBudget = {
   calls_per_day?: number
   tokens_per_day?: number
+  /** 这个账号投出去的居民同时在途的上限（同账号共用） */
+  max_concurrent?: number
+  /** 这个账号的居民每分钟最多发几次模型请求（同账号共用） */
+  per_minute?: number
 }
 
 /** 投出去的某一位今天用了多少（世界按居民记，管理服务换回账号的 agent） */

@@ -29,11 +29,14 @@ pub fn read(home: &Path) -> DailyBudget {
         .unwrap_or_default()
 }
 
-/// 存下来。两项都可以不带（= 回到全镇额度），但给了就不能是 0。
+/// 存下来。两项都可以不带（= 回到全镇额度），但给了就不能是 0；并发与速率同理。
 pub fn save(home: &Path, request: &Value) -> Result<DailyBudget, ApiError> {
     let budget = DailyBudget {
         calls_per_day: number(request, "calls_per_day")?,
         tokens_per_day: number(request, "tokens_per_day")?,
+        group: None,
+        max_concurrent: small(request, "max_concurrent")?,
+        per_minute: small(request, "per_minute")?,
     };
     if budget.calls_per_day == Some(0) {
         return Err(ApiError::bad("每日调用上限须大于 0"));
@@ -41,9 +44,33 @@ pub fn save(home: &Path, request: &Value) -> Result<DailyBudget, ApiError> {
     if budget.tokens_per_day == Some(0) {
         return Err(ApiError::bad("每日 token 上限须大于 0"));
     }
+    // 并发与速率按范围校验；组标签由推送时按账号补上，所以这里拿个占位标签探一下。
+    let probe = DailyBudget {
+        group: Some("acct".into()),
+        ..budget.clone()
+    };
+    probe.validate_quota().map_err(ApiError::bad)?;
     let value = serde_json::to_value(&budget).map_err(|_| ApiError::bad("额度存不下来"))?;
     storage::write_json(&file(home), &value)?;
     Ok(budget)
+}
+
+/// 世界不认识账号，只认「组标签」：同一个账号的 agent 共用一组并发与速率。
+pub fn group_of(owner: &str) -> String {
+    format!("acct-{owner}")
+}
+
+/// 并发与速率这类小整数。
+fn small(request: &Value, key: &str) -> Result<Option<u32>, ApiError> {
+    match request.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| ApiError::bad(format!("{key} 须是不小于 1 的整数"))),
+        Some(_) => Err(ApiError::bad(format!("{key} 须是不小于 1 的整数"))),
+    }
 }
 
 fn number(request: &Value, key: &str) -> Result<Option<u64>, ApiError> {
@@ -64,6 +91,7 @@ pub fn push(
     town: &str,
     agents: &[Agent],
     budget: &DailyBudget,
+    owner: &str,
 ) -> Result<(), ApiError> {
     if !hosts.is_running(town) {
         return Ok(());
@@ -77,12 +105,19 @@ pub fn push(
             "type": "set_resident_budget",
             "request_id": request_id,
             "resident": here.resident,
+            "group": group_of(owner),
         });
         if let Some(calls) = budget.calls_per_day {
             command["calls_per_day"] = json!(calls);
         }
         if let Some(tokens) = budget.tokens_per_day {
             command["tokens_per_day"] = json!(tokens);
+        }
+        if let Some(cap) = budget.max_concurrent {
+            command["max_concurrent"] = json!(cap);
+        }
+        if let Some(cap) = budget.per_minute {
+            command["per_minute"] = json!(cap);
         }
         let want = request_id.clone();
         let reply = hosts.query(town, Some(&command), move |msg| {
@@ -426,6 +461,22 @@ mod tests {
         assert_eq!(saved.calls_per_day, Some(40));
         assert_eq!(saved.tokens_per_day, Some(300_000));
         assert_eq!(read(&home), saved);
+        // 账号级的小名额：并发与速率存得下来，越界当错误收下
+        let shared = save(
+            &home,
+            &json!({ "calls_per_day": 40, "max_concurrent": 2, "per_minute": 20 }),
+        )
+        .expect("存并发与速率");
+        assert_eq!(shared.max_concurrent, Some(2));
+        assert_eq!(shared.per_minute, Some(20));
+        assert_eq!(read(&home), shared);
+        assert!(shared.group.is_none(), "组标签是发的时候才填的");
+        assert_eq!(group_of("u1"), "acct-u1");
+        let fast = save(&home, &json!({ "per_minute": 601 })).expect_err("601 不收");
+        assert!(fast.message.contains("1–600"), "{}", fast.message);
+        let many = save(&home, &json!({ "max_concurrent": 17 })).expect_err("17 不收");
+        assert!(many.message.contains("1–16"), "{}", many.message);
+        assert_eq!(read(&home), shared, "被拒的不改磁盘上的额度");
         // 0 等于「永远不许跑」，当错误收下，而不是悄悄当成不限
         let zero = save(&home, &json!({ "calls_per_day": 0 })).expect_err("0 不收");
         assert!(zero.message.contains("大于 0"));

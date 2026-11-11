@@ -41,6 +41,8 @@ pub const INSTRUCTIONS_MAX_CHARS: usize = 12_000;
 const RESERVE_MARGIN_PERCENT: u64 = 15;
 /// 校准每 token 字节数时新样本的权重。
 const BYTES_PER_TOKEN_SMOOTHING: f64 = 0.3;
+/// 「每分钟」按多长的现实时间窗口算：同一组在这一段时间里最多发几次。
+const RATE_WINDOW_SECS: u64 = 60;
 pub(crate) const BYTES_PER_TOKEN_RANGE: std::ops::RangeInclusive<f64> = 1.5..=6.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,6 +288,23 @@ impl ResidentRuntime {
             .values()
             .filter(|s| s.in_flight.is_some())
             .count();
+        // 同一组（账号标签）的居民共享并发与「每分钟几次」：多开页面、多个 agent
+        // 都是同一伙人，不能把全镇名额全占走。没有组标签的居民照旧只看全镇限额。
+        let mut group_in_flight: BTreeMap<String, u32> = BTreeMap::new();
+        let mut group_recent: BTreeMap<String, u32> = BTreeMap::new();
+        for (id, session) in &self.state.sessions {
+            let Some(group) = self.group_of(id) else { continue };
+            if session.in_flight.is_some() {
+                *group_in_flight.entry(group).or_insert(0) += 1;
+            }
+        }
+        for row in &self.state.requests {
+            if row.sent_at.saturating_add(RATE_WINDOW_SECS) > unix_now {
+                if let Some(group) = self.group_of(&row.actor_id) {
+                    *group_recent.entry(group).or_insert(0) += 1;
+                }
+            }
+        }
         for actor in actors {
             let mut session = self
                 .state
@@ -300,12 +319,17 @@ impl ResidentRuntime {
             if running
                 && wants_request(world, &session)
                 && in_flight < self.state.limits.max_concurrent
+                && self.quota_allows(&actor, &group_in_flight, &group_recent)
                 && self.awake(world, &mut session)
             {
                 match self.prepare(world, &mut session) {
                     Ok(Some(request)) => {
                         self.state.last_dispatched = Some(actor.clone());
                         in_flight += 1;
+                        if let Some(group) = self.group_of(&actor) {
+                            *group_in_flight.entry(group.clone()).or_insert(0) += 1;
+                            *group_recent.entry(group).or_insert(0) += 1;
+                        }
                         requests.push(request);
                     }
                     Ok(None) => {}
@@ -315,6 +339,40 @@ impl ResidentRuntime {
             self.state.sessions.insert(actor, session);
         }
         requests
+    }
+
+    /// 这位居民属于哪一组（账号的不透明标签）；没设就是独自一份。
+    pub fn group_of(&self, actor: &str) -> Option<String> {
+        self.state
+            .budgets
+            .get(actor)
+            .and_then(|budget| budget.group.clone())
+    }
+
+    /// 这一伙人的并发或每分钟次数到顶了吗？没组标签、没设上限的永远放行。
+    fn quota_allows(
+        &self,
+        actor: &str,
+        in_flight: &BTreeMap<String, u32>,
+        recent: &BTreeMap<String, u32>,
+    ) -> bool {
+        let Some(budget) = self.state.budgets.get(actor) else {
+            return true;
+        };
+        let Some(group) = budget.group.as_deref() else {
+            return true;
+        };
+        if let Some(cap) = budget.max_concurrent {
+            if in_flight.get(group).copied().unwrap_or(0) >= cap {
+                return false;
+            }
+        }
+        if let Some(cap) = budget.per_minute {
+            if recent.get(group).copied().unwrap_or(0) >= cap {
+                return false;
+            }
+        }
+        true
     }
 
     /// 轮到本人发言时立即唤醒；同一动作版本只唤醒一次。
@@ -757,6 +815,9 @@ impl ResidentRuntime {
                     probe.tokens_per_day = tokens;
                 }
                 probe.validate().map_err(AgentError::Limits)?;
+                budget.validate_quota().map_err(|problem| {
+                    AgentError::Limits(format!("Agent 预算配置无效：{problem}"))
+                })?;
                 self.state.budgets.insert(actor.to_owned(), budget);
             }
             _ => {

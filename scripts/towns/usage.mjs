@@ -13,7 +13,12 @@ const hex = (bytes) => randomBytes(bytes).toString('hex')
 export const budgetFile = (root, userId) => path.join(root, 'users', safeId(userId), 'budget.json')
 
 export function hasBudget(budget) {
-  return budget?.calls_per_day != null || budget?.tokens_per_day != null
+  return (
+    budget?.calls_per_day != null ||
+    budget?.tokens_per_day != null ||
+    budget?.max_concurrent != null ||
+    budget?.per_minute != null
+  )
 }
 
 /** 读账号的额度；文件不在或读坏了就当没设过（全员用世界的全镇额度）。 */
@@ -29,6 +34,9 @@ export async function readBudget(root, userId) {
     budget.calls_per_day = doc.calls_per_day
   if (Number.isInteger(doc?.tokens_per_day) && doc.tokens_per_day > 0)
     budget.tokens_per_day = doc.tokens_per_day
+  if (Number.isInteger(doc?.max_concurrent) && doc.max_concurrent > 0)
+    budget.max_concurrent = doc.max_concurrent
+  if (Number.isInteger(doc?.per_minute) && doc.per_minute > 0) budget.per_minute = doc.per_minute
   return budget
 }
 
@@ -39,7 +47,15 @@ function number(body, key) {
   return value
 }
 
-/** 存下来。两项都可以不带（= 回到全镇额度），但给了就不能是 0。 */
+/** 并发与速率这类小整数：给了就得在范围内。 */
+function small(body, key, low, high, unit) {
+  const value = number(body, key)
+  if (value === null) return null
+  if (value < low || value > high) throw new HttpError(400, `${key} 须为 ${low}–${high}${unit}`)
+  return value
+}
+
+/** 存下来。两项都可以不带（= 回到全镇额度），但给了就不能是 0；并发与速率同理。 */
 export async function saveBudget(root, userId, body) {
   const calls = number(body, 'calls_per_day')
   const tokens = number(body, 'tokens_per_day')
@@ -48,15 +64,22 @@ export async function saveBudget(root, userId, body) {
   const budget = {}
   if (calls !== null) budget.calls_per_day = calls
   if (tokens !== null) budget.tokens_per_day = tokens
+  const concurrent = small(body, 'max_concurrent', 1, 16, '')
+  const rate = small(body, 'per_minute', 1, 600, ' 次')
+  if (concurrent !== null) budget.max_concurrent = concurrent
+  if (rate !== null) budget.per_minute = rate
   await atomicJson(budgetFile(root, userId), budget)
   return budget
 }
+
+/** 世界不认识账号，只认「组标签」：同一个账号的 agent 共用一组并发与速率。 */
+export const groupOf = (owner) => `acct-${owner}`
 
 /**
  * 把账号的额度发给正在跑的小镇：一位居民发一条，世界按居民执行。
  * 没在跑的小镇跳过——等它下次起来，投放/心跳会再发一次。
  */
-export async function pushBudget(hosts, town, agents, budget) {
+export async function pushBudget(hosts, town, agents, budget, owner) {
   if (!hosts.isRunning(town)) return
   for (const agent of agents) {
     const record = agent.deployed?.[town]
@@ -66,9 +89,12 @@ export async function pushBudget(hosts, town, agents, budget) {
       type: 'set_resident_budget',
       request_id: requestId,
       resident: record.resident,
+      group: groupOf(owner),
     }
     if (budget.calls_per_day != null) command.calls_per_day = budget.calls_per_day
     if (budget.tokens_per_day != null) command.tokens_per_day = budget.tokens_per_day
+    if (budget.max_concurrent != null) command.max_concurrent = budget.max_concurrent
+    if (budget.per_minute != null) command.per_minute = budget.per_minute
     const reply = await hosts.query(
       town,
       command,

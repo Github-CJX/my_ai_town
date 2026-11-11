@@ -1620,12 +1620,18 @@ pub fn client_samples() -> Vec<ClientMsg> {
             resident: "resident_xiaohe".into(),
             calls_per_day: Some(120),
             tokens_per_day: Some(600_000),
+            group: Some("acct-7".into()),
+            max_concurrent: Some(2),
+            per_minute: Some(20),
         },
         ClientMsg::SetResidentBudget {
             request_id: "req-3".into(),
             resident: "resident_xiaohe".into(),
             calls_per_day: None,
             tokens_per_day: None,
+            group: None,
+            max_concurrent: None,
+            per_minute: None,
         },
     ]
 }

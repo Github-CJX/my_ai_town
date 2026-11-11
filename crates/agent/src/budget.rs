@@ -218,16 +218,38 @@ fn within<T: PartialOrd + std::fmt::Display>(
 
 /// 一位居民自己的每日额度：只覆盖每日调用与每日 token，其余沿用全镇限额。
 /// 两项都可以空着，空着的那项就沿用全镇限额；两项都空等于没有自己的额度。
+///
+/// `group` 是账号（或别的「一伙人」）的不透明标签，世界不认识账号，只按这个标签
+/// 在**这一伙人之间**分并发与速率：同标签的居民共享 `max_concurrent` 与
+/// `per_minute`，不带的居民照旧只看全镇限额。两项并发/速率必须带标签才认。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DailyBudget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calls_per_day: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_per_day: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_minute: Option<u32>,
 }
 impl DailyBudget {
+    /// 组标签最长多少字。
+    pub const MAX_GROUP: usize = 64;
+    /// 一组同时在途的合法范围。
+    pub const CONCURRENT: RangeInclusive<u32> = 1..=16;
+    /// 一组每分钟最多发多少次的合法范围。
+    pub const PER_MINUTE: RangeInclusive<u32> = 1..=600;
+
+    /// 三样都空才算「没有自己的额度」；只带组标签也是一份额度。
     pub fn is_none(&self) -> bool {
-        self.calls_per_day.is_none() && self.tokens_per_day.is_none()
+        self.calls_per_day.is_none()
+            && self.tokens_per_day.is_none()
+            && self.group.is_none()
+            && self.max_concurrent.is_none()
+            && self.per_minute.is_none()
     }
     /// 用这份额度把全镇限额里的每日两项换掉，得到这个人实际的每日上限。
     pub fn apply_to(&self, limits: &Limits) -> (u64, u64) {
@@ -235,6 +257,35 @@ impl DailyBudget {
             self.calls_per_day.unwrap_or(limits.calls_per_day),
             self.tokens_per_day.unwrap_or(limits.tokens_per_day),
         )
+    }
+    /// 组标签与并发/速率这几项的校验；不合规的给一句说明。
+    pub fn validate_quota(&self) -> Result<(), String> {
+        match &self.group {
+            Some(group) => {
+                let chars = group.chars().count();
+                if chars == 0 || chars > Self::MAX_GROUP {
+                    return Err(format!("组标签须为 1–{} 个字符", Self::MAX_GROUP));
+                }
+            }
+            None => {
+                if self.max_concurrent.is_some() || self.per_minute.is_some() {
+                    return Err("并发与速率要带组标签，否则按谁算".into());
+                }
+            }
+        }
+        if let Some(cap) = self.max_concurrent {
+            let (within, problem) = within(cap, &Self::CONCURRENT, "同时在途上限", "");
+            if !within {
+                return Err(problem);
+            }
+        }
+        if let Some(cap) = self.per_minute {
+            let (within, problem) = within(cap, &Self::PER_MINUTE, "每分钟上限", " 次");
+            if !within {
+                return Err(problem);
+            }
+        }
+        Ok(())
     }
 }
 

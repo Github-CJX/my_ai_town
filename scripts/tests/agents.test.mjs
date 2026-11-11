@@ -177,6 +177,31 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     assert.equal(zero.status, 400)
     assert.match(zero.error, /大于 0/)
 
+    // 账号级的小名额：同账号投出去的 agent 共用一个组，范围和读回都跟世界那边对得上
+    const shared = await api('/budget', {
+      calls_per_day: 30,
+      max_concurrent: 2,
+      per_minute: 20,
+    })
+    assert.equal(shared.status, 200, JSON.stringify(shared))
+    assert.equal(shared.budget.max_concurrent, 2)
+    assert.equal(shared.budget.per_minute, 20)
+    // 世界确实收下了（镇上那条居民回来是 saved，不是被拒）
+    const afterShared = await api('/usage')
+    assert.equal(afterShared.budget.max_concurrent, 2)
+    assert.equal(afterShared.budget.per_minute, 20)
+    const tooMany = await api('/budget', { max_concurrent: 17 })
+    assert.equal(tooMany.status, 400)
+    assert.match(tooMany.error, /1–16/)
+    const tooFast = await api('/budget', { per_minute: 601 })
+    assert.equal(tooFast.status, 400)
+    assert.match(tooFast.error, /1–600/)
+    // 清掉：并发/速率也一起回到小镇自己的上限
+    const cleaned = await api('/budget', { calls_per_day: 30 })
+    assert.equal(cleaned.status, 200, JSON.stringify(cleaned))
+    assert.equal(cleaned.budget.max_concurrent, undefined)
+    assert.equal((await api('/usage')).budget.max_concurrent, undefined)
+
     // 同一个人不再投第二遍
     const again = await api('/default-town/deploy', { agent_id: agent.id })
     assert.equal(again.status, 409)

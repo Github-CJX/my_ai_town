@@ -161,7 +161,7 @@ export async function sendOwnerKeys({ root, hosts, accounts, accountConfig }, id
     const budget = await readBudget(root, user.id)
     if (hasBudget(budget)) {
       try {
-        await pushBudget(hosts, id, agents, budget)
+        await pushBudget(hosts, id, agents, budget, user.id)
       } catch (e) {
         console.error(`[town-manager] 重发「${user.name}」的每日额度没成功：${e.message}`)
       }
@@ -338,7 +338,7 @@ export function createTownRoutes({
         for (const town of towns) {
           if (!hosts.isRunning(town)) continue
           try {
-            await pushBudget(hosts, town, agents, budget)
+            await pushBudget(hosts, town, agents, budget, me.id)
           } catch (e) {
             notes.push(`「${await townName(storage, town)}」还没接受这个额度（${e.message}）`)
           }
@@ -500,7 +500,7 @@ export function createTownRoutes({
           let budgetNote = ''
           if (hasBudget(budget)) {
             try {
-              await pushBudget(hosts, id, [saved], budget)
+              await pushBudget(hosts, id, [saved], budget, me.id)
             } catch (e) {
               budgetNote = `他自己的每日额度没送到世界那边（${e.message}）：先按全镇额度算`
             }

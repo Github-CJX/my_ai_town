@@ -338,7 +338,7 @@ impl Runtime {
         }
     }
 
-    /// 账号限额：给一位村民定他自己的每日额度；两项都不给就回到全镇限额。
+    /// 账号限额：给一位村民定他自己的每日额度与一伙人的并发/速率；全空就回到全镇限额。
     /// 因为到了上限而停着的村民，要点「开始」才接着跑。
     pub(crate) fn set_resident_budget(
         &mut self,
@@ -346,6 +346,9 @@ impl Runtime {
         resident: &str,
         calls_per_day: Option<u64>,
         tokens_per_day: Option<u64>,
+        group: Option<String>,
+        max_concurrent: Option<u32>,
+        per_minute: Option<u32>,
     ) -> Outcome {
         let person = self
             .population
@@ -362,6 +365,9 @@ impl Runtime {
         let budget = agent::budget::DailyBudget {
             calls_per_day,
             tokens_per_day,
+            group,
+            max_concurrent,
+            per_minute,
         };
         let back_to_town = budget.is_none();
         match self.driver.runtime.set_actor_budget(&id, Some(budget)) {

@@ -449,6 +449,8 @@ function tokens(count: number) {
 const budgetDialog = $('budget-dialog') as HTMLDialogElement
 const budgetCalls = $('budget-calls') as HTMLInputElement
 const budgetTokens = $('budget-tokens') as HTMLInputElement
+const budgetConcurrent = $('budget-concurrent') as HTMLInputElement
+const budgetRate = $('budget-rate') as HTMLInputElement
 const budgetTip = $('budget-tip')
 
 function budgetSay(text: string) {
@@ -460,6 +462,8 @@ function openBudget() {
   const budget = accountUsage?.budget ?? {}
   budgetCalls.value = budget.calls_per_day ? String(budget.calls_per_day) : ''
   budgetTokens.value = budget.tokens_per_day ? String(budget.tokens_per_day) : ''
+  budgetConcurrent.value = budget.max_concurrent ? String(budget.max_concurrent) : ''
+  budgetRate.value = budget.per_minute ? String(budget.per_minute) : ''
   budgetSay('')
   budgetDialog.showModal()
 }
@@ -474,7 +478,24 @@ function budgetOf(input: HTMLInputElement) {
   return value
 }
 
-async function storeBudget(body: { calls_per_day?: number; tokens_per_day?: number }) {
+/** 并发/速率这类小名额：空着 = 不限，填了就得在世界的范围里 */
+function capOf(input: HTMLInputElement, low: number, high: number, label: string) {
+  const text = input.value.trim()
+  if (!text) return undefined
+  const value = Number(text)
+  if (!Number.isInteger(value) || value < low || value > high)
+    throw new Error(`${label}要填 ${low}–${high} 的整数（不想限就空着）`)
+  return value
+}
+
+type BudgetBody = {
+  calls_per_day?: number
+  tokens_per_day?: number
+  max_concurrent?: number
+  per_minute?: number
+}
+
+async function storeBudget(body: BudgetBody) {
   try {
     const reply = await saveBudget(body)
     budgetDialog.close()
@@ -493,6 +514,8 @@ $('budget-save').addEventListener('click', () => {
     void storeBudget({
       calls_per_day: budgetOf(budgetCalls),
       tokens_per_day: budgetOf(budgetTokens),
+      max_concurrent: capOf(budgetConcurrent, 1, 16, '同时在想几件事'),
+      per_minute: capOf(budgetRate, 1, 600, '每分钟最多请求'),
     })
   } catch (error) {
     budgetSay(errorText(error))
@@ -630,6 +653,11 @@ function renderAgents() {
   const quota = capped
     ? ` · 额度 ${cap.calls_per_day ?? '不限'} 次 / ${cap.tokens_per_day ? tokens(cap.tokens_per_day) : '不限'}`
     : ''
+  // 账号里多人共用的小名额：同账号投出去的 agent 一起算
+  const shared =
+    cap.max_concurrent || cap.per_minute
+      ? ` · 同时 ${cap.max_concurrent ?? '不限'} 位 / 每分钟 ${cap.per_minute ?? '不限'} 次`
+      : ''
   // 跨天账本：今天之外的也算上，换天归零不会把这些丢了
   const week = accountUsage
     ? accountUsage.history.reduce(
@@ -641,7 +669,7 @@ function renderAgents() {
     week && week.calls > accountUsage!.totals.calls
       ? ` · 近 7 天 ${week.calls} 次 / ${tokens(week.tokens)}`
       : ''
-  agentNote.textContent = `我的 agent · ${count} · ${billing}${used}${unknown}${quota}${longer}`
+  agentNote.textContent = `我的 agent · ${count} · ${billing}${used}${unknown}${quota}${shared}${longer}`
 
   const strip = document.createElement('div')
   strip.className = 'agent-strip'

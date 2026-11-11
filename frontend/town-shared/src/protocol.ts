@@ -963,6 +963,10 @@ export type ClientMsg =
       resident: string
       calls_per_day?: number
       tokens_per_day?: number
+      /** 不透明的组标签：同一账号投出去的居民共用一个组（世界不懂账号） */
+      group?: string
+      max_concurrent?: number
+      per_minute?: number
     }
 
 type Life = 'alive' | 'dead'
