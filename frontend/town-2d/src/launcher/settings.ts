@@ -47,6 +47,8 @@ type HomeAccount = {
   id: string
   name: string
   role: 'admin' | 'member'
+  /** 这个账号在小镇里固定的那个化身：进化身后由页面记回来 */
+  avatar_name: string | null
   agent_limit: number | null
 }
 type HomeAccounts = { current: HomeAccount; users: HomeAccount[]; max: number; admin: boolean }
@@ -257,11 +259,13 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
       ...who.users.map((user) => {
         const current = user.id === who!.current.id
         const label = user.role === 'admin' ? `${user.name} · 管理员` : user.name
+        // 一个账号一个固定化身：页面记回来之后这里就写着他进镇用的那个名字
+        const avatar = user.avatar_name ? `化身：${user.avatar_name}` : ''
         const sub = current
-          ? '正在用这个档案'
-          : user.role === 'admin'
-            ? '可以给这台电脑加账号'
-            : '一位公共村民'
+          ? avatar
+            ? `正在用这个档案 · ${avatar}`
+            : '正在用这个档案 · 还没进化身'
+          : avatar || (user.role === 'admin' ? '可以给这台电脑加账号' : '还没进化身')
         return settingRow(
           label,
           sub,
@@ -271,7 +275,7 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
     )
     accountCreate.hidden = !who.admin || who.users.length >= who.max
     accountNote.textContent = who.admin
-      ? `最多 ${who.max} 个账号。朋友切到自己的档案后，在「模型服务」里填自己的密钥。`
+      ? `最多 ${who.max} 个账号。朋友切到自己的档案后，进镇第一次给自己起个名字，之后就一直是他；模型密钥也各存各的。`
       : '管理员可以给这台电脑加账号。'
   }
 

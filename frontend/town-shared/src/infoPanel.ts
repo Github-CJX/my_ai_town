@@ -39,6 +39,8 @@ interface InfoPanelDeps {
   avatarActive: () => boolean
   /** 这个世界开放了化身控制 */
   avatarAvailable: () => boolean
+  /** 这个账号能不能附身村民：只有管理员可以，普通账号只玩自己的化身 */
+  canPossess: () => boolean
   onOpenItem: (id: string) => void
   /** 清掉居民的暂停原因让他们接着行动：世界在运行时按原速度再选一次 */
   onResumeAgents: () => void
@@ -200,6 +202,7 @@ export function initInfoPanel(deps: InfoPanelDeps) {
   }
   function canPossess(m: RosterMember) {
     return (
+      deps.canPossess() &&
       !!deps.map.avatarSupported &&
       deps.avatarAvailable() &&
       !!m.body?.can_decide &&
@@ -349,7 +352,7 @@ export function initInfoPanel(deps: InfoPanelDeps) {
     if (playing) panel.dataset.kind = 'avatar'
     else delete panel.dataset.kind
     note.textContent = playing ? '别的页面正在玩的化身：你只能看着，不能替他行动' : ''
-    possessBtn.hidden = playing || !deps.map.avatarSupported
+    possessBtn.hidden = playing || !deps.map.avatarSupported || !deps.canPossess()
     possessBtn.disabled = playing || !canPossess(m)
     possessBtn.title = playing
       ? '这是别的页面正在玩的化身，不能附身'

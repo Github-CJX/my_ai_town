@@ -33,6 +33,9 @@ pub struct User {
     /// 这个账号的固定化身：第一次进小镇时记下，之后只控制它（世界身份那一刀用）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_id: Option<String>,
+    /// 那个化身在小镇里的名字（改过名也跟着变）：下次进场直接用它，不再改名
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_name: Option<String>,
     /// 还能自己建几个公共 Agent：管理员不限（None），普通账号 1 个
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_limit: Option<u32>,
@@ -48,6 +51,7 @@ impl User {
             "name": self.name,
             "role": self.role,
             "avatar_id": self.avatar_id,
+            "avatar_name": self.avatar_name,
             "agent_limit": self.agent_limit,
         })
     }
@@ -103,10 +107,7 @@ impl Accounts {
     }
 
     fn save(&self) -> Result<(), ApiError> {
-        write_json(
-            &self.path(),
-            &json!({ "version": 1, "users": self.users }),
-        )
+        write_json(&self.path(), &json!({ "version": 1, "users": self.users }))
     }
 
     pub fn list(&self) -> &[User] {
@@ -119,10 +120,7 @@ impl Accounts {
 
     /// 默认管理员：没带 Cookie（或 Cookie 里的账号已经没了）时的身份，本机第一次打开就是它。
     pub fn admin(&self) -> Option<User> {
-        self.users
-            .iter()
-            .find(|u| u.role == Role::Admin)
-            .cloned()
+        self.users.iter().find(|u| u.role == Role::Admin).cloned()
     }
 
     pub fn current(&self, cookie: Option<&str>) -> User {
@@ -139,6 +137,7 @@ impl Accounts {
             name: name.to_owned(),
             role,
             avatar_id: None,
+            avatar_name: None,
             agent_limit,
             created_at: now(),
         }
@@ -161,6 +160,39 @@ impl Accounts {
         }
         let user = self.make(name, Role::Member, Some(1));
         self.users.push(user.clone());
+        self.save()?;
+        Ok(user)
+    }
+
+    /// 记下这个账号在小镇里的固定化身（页面上第一次进化身、改名之后各记一次）。
+    /// 传 None 就解开绑定，下次进镇当新人。编号和名字都由页面上报：本机形态下没有口令，
+    /// 谁能开页面谁就能切档案，这一条是「一个账号一个化身」的记性，不是授权。
+    pub fn set_avatar(
+        &mut self,
+        id: &str,
+        avatar: Option<(String, String)>,
+    ) -> Result<User, ApiError> {
+        if let Some((avatar_id, avatar_name)) = &avatar {
+            let bad = avatar_id.chars().count() > 64
+                || avatar_id.is_empty()
+                || avatar_id
+                    .chars()
+                    .any(|c| c.is_control() || c.is_whitespace());
+            if bad {
+                return Err(ApiError::bad("化身编号不合法"));
+            }
+            if avatar_name.chars().count() > MAX_NAME {
+                return Err(ApiError::bad(format!("化身名字最多 {MAX_NAME} 个字")));
+            }
+        }
+        let user = self
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+            .ok_or_else(|| ApiError::bad("没有这个账号"))?;
+        user.avatar_id = avatar.as_ref().map(|(id, _)| id.clone());
+        user.avatar_name = avatar.map(|(_, name)| name);
+        let user = user.clone();
         self.save()?;
         Ok(user)
     }
@@ -196,5 +228,60 @@ impl Accounts {
         let path = dir.join("application.json");
         write_json(&path, &doc)?;
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("town-accounts-{}", crate::token()));
+        std::fs::create_dir_all(&root).expect("建临时目录");
+        root
+    }
+
+    /// 一个账号一个固定化身：记下来、重启之后还在、传 null 能解开
+    #[test]
+    fn an_account_keeps_one_avatar_across_restarts() {
+        let root = temp_root();
+        let mut accounts = Accounts::load(&root).expect("建账号表");
+        let admin = accounts.admin().expect("账号表里总有管理员");
+        assert_eq!(admin.avatar_id, None);
+        for bad in ["", " player_avatar", &"a".repeat(65)] {
+            assert!(
+                accounts
+                    .set_avatar(&admin.id, Some((bad.to_owned(), "阿岚".into())))
+                    .is_err(),
+                "{bad:?} 不该收"
+            );
+        }
+        assert!(accounts
+            .set_avatar(&admin.id, Some(("player_avatar".into(), "阿".repeat(17))))
+            .is_err());
+        assert!(accounts
+            .set_avatar("u-nobody", Some(("player_avatar".into(), "阿岚".into())))
+            .is_err());
+        let user = accounts
+            .set_avatar(&admin.id, Some(("player_avatar".into(), "阿岚".into())))
+            .expect("记下化身");
+        assert_eq!(user.avatar_id.as_deref(), Some("player_avatar"));
+        assert_eq!(user.avatar_name.as_deref(), Some("阿岚"));
+        // 重开管理服务：档案里还记着这个人
+        let reloaded = Accounts::load(&root).expect("重读账号表");
+        assert_eq!(
+            reloaded
+                .find(&admin.id)
+                .and_then(|u| u.avatar_name.as_deref()),
+            Some("阿岚")
+        );
+        assert_eq!(
+            accounts
+                .set_avatar(&admin.id, None)
+                .expect("解开")
+                .avatar_id,
+            None
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }

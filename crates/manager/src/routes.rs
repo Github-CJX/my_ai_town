@@ -127,7 +127,10 @@ fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Respo
             let name = body(req)?["name"].as_str().unwrap_or_default().to_owned();
             let user = app.accounts.lock().unwrap().create(&name)?;
             // 建完仍留在管理员这边：朋友在这台电脑上自己选进他的档案。
-            Ok(Response::json(200, &json!({ "ok": true, "user": user.public() })))
+            Ok(Response::json(
+                200,
+                &json!({ "ok": true, "user": user.public() }),
+            ))
         }
         (false, "/users/select") => {
             let request = body(req)?;
@@ -146,6 +149,22 @@ fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Respo
                 200,
                 &json!({ "ok": true, "current": user.public() }),
                 account_cookie(&user.id),
+            ))
+        }
+        (false, "/users/avatar") => {
+            // 页面记下自己认下的那个化身（「一个账号一个固定化身」）：传 null 就解开
+            let request = body(req)?;
+            let avatar = match request["id"].as_str() {
+                Some(id) => Some((
+                    id.to_owned(),
+                    request["name"].as_str().unwrap_or_default().to_owned(),
+                )),
+                None => None,
+            };
+            let user = app.accounts.lock().unwrap().set_avatar(&me.id, avatar)?;
+            Ok(Response::json(
+                200,
+                &json!({ "ok": true, "current": user.public() }),
             ))
         }
         _ => Err(ApiError::new(404, "操作不存在")),
@@ -198,9 +217,9 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
         }
         // 首页「设定」的模型服务：读、存、连通测试。逻辑在 host::models，电脑版经 town-map 调同一份
         (true, "/models") => {
-            return ok(host::models::read(&crate::creation::load_app(&user_config(
-                app, &me,
-            )?)?)?)
+            return ok(host::models::read(&crate::creation::load_app(
+                &user_config(app, &me)?,
+            )?)?)
         }
         (false, "/models") => {
             let app = crate::creation::load_app(&user_config(app, &me)?)?;
@@ -249,9 +268,7 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             let _claim = app.claim(id);
             app.make_room(id)?;
             let _serial = app.town_lock(id);
-            ok(app
-                .hosts
-                .open(&app.storage, id, &user_config(app, &me)?)?)
+            ok(app.hosts.open(&app.storage, id, &user_config(app, &me)?)?)
         }
         (false, "close") => {
             let lease = body(req)?["lease"].as_str().map(str::to_owned);

@@ -492,7 +492,10 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     const before = await fs.readFile(friendKeys, 'utf8').catch(() => null)
     assert.ok(!before || !before.includes(key))
     const own = (await api('/models', undefined, friend)).data
-    assert.ok(!own.providers.find((p) => p.id === added.id)?.key_mask, '朋友的档案里没有管理员的密钥')
+    assert.ok(
+      !own.providers.find((p) => p.id === added.id)?.key_mask,
+      '朋友的档案里没有管理员的密钥'
+    )
     // 朋友自己存一份，两边互不影响
     await api(
       '/models',
@@ -514,6 +517,14 @@ test('each account keeps its own model keys: the admin creates friends, a friend
       `town_user=${adminId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
     )
     await assert.rejects(api('/users/select', { id: 'u-nobody' }), /没有这个账号/)
+    // 一个账号一个固定化身：页面把认下的那个记回来，下次进镇还当同一个人；传 null 解开
+    const bound = await api('/users/avatar', { id: 'player_avatar', name: '阿岚' }, friend)
+    assert.equal(bound.data.current.avatar_id, 'player_avatar')
+    assert.equal(bound.data.current.avatar_name, '阿岚')
+    assert.equal((await api('/users', undefined, friend)).data.current.avatar_name, '阿岚')
+    await assert.rejects(api('/users/avatar', { id: '有 空格' }, friend), /化身编号不合法/)
+    await assert.rejects(api('/users/avatar', { id: 'a'.repeat(65) }, friend), /化身编号不合法/)
+    assert.equal((await api('/users/avatar', { id: null }, friend)).data.current.avatar_id, null)
     // 账号表里只记身份和归属，不记密钥
     const saved = JSON.parse(await fs.readFile(path.join(root, 'accounts.json'), 'utf8'))
     assert.equal(saved.users.length, 2)

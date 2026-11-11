@@ -17,6 +17,7 @@ export function publicUser(user) {
     name: user.name,
     role: user.role,
     avatar_id: user.avatar_id ?? null,
+    avatar_name: user.avatar_name ?? null,
     agent_limit: user.agent_limit ?? null,
     created_at: user.created_at,
   }
@@ -87,6 +88,28 @@ export class Accounts {
     return user
   }
   /**
+   * 记下这个账号在小镇里的固定化身（页面上第一次进化身、改名之后各记一次）；传 null 解开。
+   * 编号和名字都由页面上报：本机形态没有口令，这一条是「一个账号一个化身」的记性，不是授权。
+   */
+  async setAvatar(id, avatar) {
+    const user = this.find(id)
+    if (!user) throw new HttpError(400, '没有这个账号')
+    if (avatar) {
+      const badge =
+        typeof avatar.id !== 'string' ||
+        !avatar.id ||
+        avatar.id.length > 64 ||
+        /[\s\u0000-\u001f\u007f]/.test(avatar.id)
+      if (badge) throw new HttpError(400, '化身编号不合法')
+      if (String(avatar.name ?? '').length > MAX_NAME)
+        throw new HttpError(400, `化身名字最多 ${MAX_NAME} 个字`)
+    }
+    user.avatar_id = avatar ? avatar.id : null
+    user.avatar_name = avatar ? String(avatar.name ?? '') : null
+    await this.save()
+    return user
+  }
+  /**
    * 这个账号要用的应用配置：管理员直接用小镇公共那份；普通账号各有一份，只把
    * providers_path / credentials_path 换到自己目录下（密钥从空开始，模板等仍然共享）。
    */
@@ -125,6 +148,7 @@ function makeUser(name, role, agent_limit) {
     name,
     role,
     avatar_id: null,
+    avatar_name: null,
     agent_limit,
     created_at: Math.floor(Date.now() / 1000),
   }
@@ -174,6 +198,16 @@ export function createAccountRoutes({ accounts }) {
           'Cache-Control': 'no-store',
           'Set-Cookie': accountCookie(user.id),
         })
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/users\/avatar$/,
+      async ({ body, headers }) => {
+        const me = accounts.current(cookieId(headers))
+        const id = typeof body?.id === 'string' ? body.id : null
+        const avatar = id ? { id, name: typeof body?.name === 'string' ? body.name : '' } : null
+        return { ok: true, current: publicUser(await accounts.setAvatar(me.id, avatar)) }
       },
     ],
   ]

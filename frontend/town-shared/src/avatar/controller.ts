@@ -5,6 +5,7 @@ import { createAvatarCommands } from './commands'
 import { createInvitations } from './invitations'
 import { resumeLease } from './lease'
 import { storedAvatar, type RememberedAvatar } from './identity'
+import { createAvatarAccount } from './account'
 import { createAvatarNavigation } from './navigation'
 import { createAvatarUI, escapeKey, guardPointer, type AvatarUI } from './ui'
 import { createAvatarPanels, panelSignature, type AvatarPanelState } from './panels'
@@ -102,6 +103,8 @@ export function createAvatar(deps: AvatarDeps) {
     /** 菜单等覆盖层打开或关闭时停止移动输入 */
     overlay: (open: boolean) => avatar.overlay(open),
     possess: (resident: string) => avatar.possess(resident),
+    /** 这个账号是不是管理员：附身村民、给这台电脑加账号都只给管理员 */
+    isAdmin: () => avatar.isAdmin(),
     handleMsg: (message: ServerMsg) => avatar.handleMsg(message),
     connected: () => avatar.connected(),
     disconnected: () => avatar.disconnected(),
@@ -134,6 +137,8 @@ class AvatarController {
   private readonly lease: ReturnType<typeof resumeLease>
   /** 这个标签页在这个世界里的化身：退出化身、离开小镇再回来时接着当同一个人 */
   private readonly identity: ReturnType<typeof storedAvatar>
+  /** 这台电脑上的账号：谁是管理员、这个账号固定的那个化身 */
+  private readonly account = createAvatarAccount()
   private readonly footsteps: ReturnType<typeof movementSound>
   private readonly navigation: ReturnType<typeof createAvatarNavigation>
   private readonly commands: ReturnType<typeof createAvatarCommands>
@@ -215,6 +220,8 @@ class AvatarController {
       (command) => this.execute(command)
     )
     this.identity = storedAvatar(() => this.world)
+    // 哪个档案在玩这个页面：问回来之前按本机单人（管理员）处理
+    this.account.load()
     this.footsteps = movementSound(
       deps.sounds,
       () => this.state,
@@ -482,7 +489,7 @@ class AvatarController {
       state?.controlled && state.actor
         ? { id: state.actor.id, name: state.actor.name, color: state.actor.appearance.color }
         : null
-    this.ui.entry.open(live ?? this.me())
+    this.ui.entry.open(live ?? this.self())
   }
 
   /** 本页记着的自己；没记过为 null */
@@ -490,9 +497,20 @@ class AvatarController {
     return this.identity.read()
   }
 
+  /** 该用哪个化身进场：账号认下的那个优先（换了标签页、清了缓存仍是同一个人），
+   *  账号还没记过才用本页记着的 */
+  private self(): RememberedAvatar | null {
+    return this.account.self(this.me()?.color) ?? this.me()
+  }
+
   /** 这个世界的化身通道通不通：地图支持、世界也说支持。顶栏标记与半透明界面都看它 */
   channelReady(): boolean {
     return !!this.map.avatarSupported && !!this.state?.supported
+  }
+
+  /** 这个账号是不是管理员。还没问到档案（老管理服务、本机单人）就按管理员算，和以前一样 */
+  isAdmin(): boolean {
+    return this.account.admin()
   }
 
   /** 世界里有几个化身在场、而本页并没有控制：观察者页面用它说「围观中 · N 人在玩」。
@@ -511,12 +529,13 @@ class AvatarController {
     const { state } = this
     if (!this.online || !state?.supported || !this.map.avatarSupported) return
     if (this.owned()) return
-    const me = this.me()
+    const me = this.self()
     if (!me) return this.openDialog()
     this.reenter(me)
   }
 
-  /** 回到自己上次的化身。编号已经不在我们手里（复制了标签页）就以新人的身份进场，别卡住 */
+  /** 回到自己上次的化身。编号已经不在我们手里（复制了标签页）就以新人的身份进场，别卡住；
+   *  账号认下的那个化身不换——同账号的另一个页面正在玩时，本页先当观察者，等那边退出再进 */
   private reenter(me: RememberedAvatar) {
     const look = { marker: '我', color: me.color }
     void this.execute({
@@ -527,6 +546,10 @@ class AvatarController {
     }).then((ok) => {
       if (ok) return
       this.identity.forget()
+      if (this.account.self()) {
+        this.openDialog()
+        return
+      }
       void this.execute({ kind: 'enter', name: me.name, appearance: look }).then((fresh) => {
         if (!fresh) this.openDialog()
       })
@@ -550,6 +573,11 @@ class AvatarController {
 
   async possess(resident: string) {
     const { ui, state } = this
+    // 附身是管理员开镇、调世界用的：普通账号只玩自己那个化身
+    if (!this.account.admin()) {
+      ui.showToast('只有管理员可以附身村民', true)
+      return false
+    }
     if (!this.map.avatarSupported) {
       ui.showToast('当前地图尚未支持接管', true)
       return false
@@ -586,7 +614,7 @@ class AvatarController {
     if (!this.online || !this.map.avatarSupported || !state?.supported) return false
     // 只有控制中的 actor 才是本页的自己：没控制权时视图里的 actor 可能是别的页面的
     const actor = state.controlled ? state.actor : null
-    const me = this.me()
+    const me = this.self()
     if (actor)
       void this.execute({
         kind: 'enter',
@@ -850,7 +878,11 @@ class AvatarController {
     }
     if (next.resume_token) this.lease.store(next.resume_token)
     // 记着自己是谁：退出化身或离开小镇再回来，用这个编号接着当同一个人
-    if (next.controlled && next.actor) this.identity.remember(next.actor)
+    if (next.controlled && next.actor) {
+      this.identity.remember(next.actor)
+      // 也记到账号里：换个标签页、清了缓存，还是这个账号的这个化身
+      this.account.bind(next.actor)
+    }
     const { ui } = this
     if (next.actor && !ui.profile.contains(document.activeElement)) {
       ui.profileName.value = next.actor.name

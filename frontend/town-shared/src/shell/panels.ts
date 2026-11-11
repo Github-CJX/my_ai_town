@@ -127,6 +127,7 @@ export function createPanels(input: ShellInputs) {
     onSelected: () => strip.select(),
     avatarActive: () => avatar.active(),
     avatarAvailable: () => avatar.available(),
+    canPossess: () => avatar.isAdmin(),
     onOpenItem: (id) => props.open(id),
     // 点一次开始就会清掉所有居民的暂停原因；世界在运行时按原速度再选一次
     onResumeAgents: () => resumeAgents(),
