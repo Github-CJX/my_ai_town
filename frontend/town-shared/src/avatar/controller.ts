@@ -489,7 +489,8 @@ class AvatarController {
       state?.controlled && state.actor
         ? { id: state.actor.id, name: state.actor.name, color: state.actor.appearance.color }
         : null
-    this.ui.entry.open(live ?? this.self())
+    // 第一次进镇时名字默认跟着账号走，省得再想一个
+    this.ui.entry.open(live ?? this.self(), this.account.name())
   }
 
   /** 本页记着的自己；没记过为 null */

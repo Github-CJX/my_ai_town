@@ -24,6 +24,9 @@ export function createAvatarAccount() {
     /** 能不能附身村民：管理员可以（开镇、调世界用），普通账号只能玩自己的化身 */
     admin: () => legacy || who?.role === 'admin',
 
+    /** 这个账号的名字：第一次进镇时化身名字的默认值 */
+    name: () => who?.name ?? '',
+
     /** 这个账号认下的化身：进镇、回到上次的位置都用它。颜色不知道时沿用本页记着的 */
     self(color?: string): RememberedAvatar | null {
       if (!who?.avatar_id) return null

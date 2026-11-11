@@ -55,6 +55,50 @@ function pinInput(label: string): HTMLInputElement {
   return input
 }
 
+const PIN_RULE = '密码是 4–8 位数字'
+
+/** 密码框下面那行小提示：只在写得不对时出现，改对了就收起来 */
+function pinTip(): HTMLParagraphElement {
+  const tip = el('p', '', 'account-tip')
+  tip.hidden = true
+  tip.setAttribute('role', 'status')
+  return tip
+}
+
+/** 盯着一个密码框：格式不对就立刻写在它下面，返回「现在能不能提交」 */
+function watchPin(input: HTMLInputElement, tip: HTMLParagraphElement): () => boolean {
+  const check = () => {
+    const value = input.value.trim()
+    const bad = value.length > 0 && !/^\d{4,8}$/.test(value)
+    tip.textContent = bad ? PIN_RULE : ''
+    tip.hidden = !bad
+    input.setAttribute('aria-invalid', bad ? 'true' : 'false')
+    return !bad
+  }
+  input.addEventListener('input', check)
+  input.addEventListener('blur', check)
+  return check
+}
+
+/** 两遍要一样：第二遍一改就跟第一遍比 */
+function watchSame(
+  first: HTMLInputElement,
+  second: HTMLInputElement,
+  tip: HTMLParagraphElement
+): () => boolean {
+  const check = () => {
+    const bad = second.value.length > 0 && second.value !== first.value
+    tip.textContent = bad ? '两遍密码不一样' : ''
+    tip.hidden = !bad
+    second.setAttribute('aria-invalid', bad ? 'true' : 'false')
+    return !bad
+  }
+  second.addEventListener('input', check)
+  second.addEventListener('blur', check)
+  first.addEventListener('input', check)
+  return check
+}
+
 function later() {
   try {
     return localStorage.getItem(LATER_KEY) === '1'
@@ -201,15 +245,21 @@ export function installHomeSettings(deps: {
   setupName.maxLength = 16
   setupName.setAttribute('aria-label', '你的名字')
   const setupPin = pinInput('设一个 4–8 位数字密码')
+  const setupPinTip = pinTip()
   const setupAgain = pinInput('再输一遍')
+  const setupAgainTip = pinTip()
   const setupRow = el('div', '', 'account-create')
   setupRow.hidden = true
   setupRow.append(
     setupName,
     setupPin,
+    setupPinTip,
     setupAgain,
+    setupAgainTip,
     button('创建', () => void createAdmin(), 'account-add')
   )
+  const checkSetupPin = watchPin(setupPin, setupPinTip)
+  const checkSetupAgain = watchSame(setupPin, setupAgain, setupAgainTip)
   // 管理员给朋友建号：名字 + 一个初始密码
   const accountName = el('input')
   accountName.type = 'text'
@@ -217,24 +267,29 @@ export function installHomeSettings(deps: {
   accountName.maxLength = 16
   accountName.setAttribute('aria-label', '新账号的名字')
   const accountPin = pinInput('给朋友的初始密码')
+  const accountPinTip = pinTip()
   const accountCreate = el('div', '', 'account-create')
   accountCreate.hidden = true
   accountCreate.append(
     accountName,
     accountPin,
+    accountPinTip,
     button('建账号', () => void createAccount(), 'account-add')
   )
+  const checkAccountPin = watchPin(accountPin, accountPinTip)
   // 切到锁着的账号：输一次密码
   const switchWho = el('span', '', 'account-switch-name')
   const switchPin = pinInput('这个账号的密码')
+  const switchPinTip = pinTip()
   const switchRow = el('div', '', 'account-create')
   switchRow.hidden = true
-  switchRow.append(
-    switchWho,
-    switchPin,
+  const switchActions = el('div', '', 'account-actions')
+  switchActions.append(
     button('进入', () => void enterPending(), 'account-add'),
     button('取消', () => hidePending(), 'account-cancel')
   )
+  switchRow.append(switchWho, switchPin, switchPinTip, switchActions)
+  const checkSwitchPin = watchPin(switchPin, switchPinTip)
   const accountNote = el('p', '', 'page-status')
   accountNote.setAttribute('role', 'status')
   accounts.append(
@@ -335,6 +390,7 @@ export function installHomeSettings(deps: {
         : '管理员可以给这台电脑加账号。'
     }
     // 有没有账号决定首页还催不催模型
+    for (const tip of [setupPinTip, setupAgainTip, accountPinTip]) tip.hidden = true
     render()
   }
 
@@ -347,6 +403,7 @@ export function installHomeSettings(deps: {
     pending = user
     switchWho.textContent = `切到「${user.name}」`
     switchPin.value = ''
+    switchPinTip.hidden = true
     switchRow.hidden = false
     switchPin.focus()
   }
@@ -355,10 +412,12 @@ export function installHomeSettings(deps: {
     pending = null
     switchRow.hidden = true
     switchPin.value = ''
+    switchPinTip.hidden = true
   }
 
   function enterPending() {
     if (!pending) return
+    if (!checkSwitchPin()) return
     void switchAccount(pending.id, switchPin.value)
   }
 
@@ -380,8 +439,10 @@ export function installHomeSettings(deps: {
 
   /** 第一次打开：给自己建管理员账号 */
   async function createAdmin() {
-    if (setupPin.value !== setupAgain.value) {
-      accountNote.textContent = '两遍密码不一样'
+    if (!checkSetupPin() || !checkSetupAgain()) return
+    if (!setupName.value.trim()) {
+      accountNote.textContent = '先写一个名字'
+      setupName.focus()
       return
     }
     try {
@@ -389,6 +450,8 @@ export function installHomeSettings(deps: {
       setupName.value = ''
       setupPin.value = ''
       setupAgain.value = ''
+      setupPinTip.hidden = true
+      setupAgainTip.hidden = true
       await renderAccounts()
       await transport.load()
       renderSettings()
@@ -401,11 +464,18 @@ export function installHomeSettings(deps: {
   }
 
   async function createAccount() {
+    if (!checkAccountPin()) return
     const name = accountName.value.trim()
+    if (!name) {
+      accountNote.textContent = '先写朋友的名字'
+      accountName.focus()
+      return
+    }
     try {
       await api('/users', { name, pin: accountPin.value })
       accountName.value = ''
       accountPin.value = ''
+      accountPinTip.hidden = true
       await renderAccounts()
       accountNote.textContent = `已建「${name}」。让朋友在这台电脑上切过去，输一次密码，再填自己的模型密钥。`
     } catch (error) {

@@ -153,10 +153,11 @@ export function createAvatarEntry(
       listeners.add(listener)
       listener(available)
     },
-    /** 打开对话框；回到小镇时填上次的名字和外观（记得自己就带编号，回来还是同一个人） */
-    open(self: EntrySelf | null) {
+    /** 打开对话框；回到小镇时填上次的名字和外观（记得自己就带编号，回来还是同一个人）。
+     *  defaultName：第一次进镇时名字的默认值——用这个账号的名字，玩家想改再改 */
+    open(self: EntrySelf | null, defaultName?: string) {
       dialog.setAvatar(self?.id)
-      dialog.name.value = self?.name || '旅人'
+      dialog.name.value = self?.name || defaultName?.trim() || '旅人'
       if (self) {
         picker.set(self.color)
         dialog.refreshPreview()
