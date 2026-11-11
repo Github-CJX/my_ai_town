@@ -61,6 +61,8 @@
                 </svg>
               </summary>
               <div class="town-actions-menu" aria-label="小镇管理">
+                <button id="keep-town" hidden>让它在后台一直运行</button>
+                <button id="unkeep-town" hidden>取消后台运行</button>
                 <button id="close-town" hidden>保存并关闭小镇</button>
                 <button id="reset-town" class="delete-town" hidden>重新开始…</button>
                 <button id="delete-town" class="delete-town" hidden>删除地图…</button>
@@ -70,6 +72,17 @@
           <p class="map-metadata">
             <span id="selected-map-description"></span>
           </p>
+          <!-- 后台运行的小镇：管理员在首页就能让它开始/暂停、改天气，不用先进去 -->
+          <div id="resident-controls" class="resident-controls" hidden>
+            <p class="resident-note" id="resident-note" role="status"></p>
+            <div class="resident-row">
+              <button id="resident-speed" type="button">暂停</button>
+              <label class="resident-weather">
+                天气
+                <select id="resident-weather-select" aria-label="天气"></select>
+              </label>
+            </div>
+          </div>
         </div>
         <button id="enter-game" class="enter-game" disabled>
           进入游戏 <span aria-hidden="true">→</span>

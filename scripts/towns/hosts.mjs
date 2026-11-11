@@ -54,26 +54,43 @@ export class Hosts {
     this.opening = new Map()
     this.closing = new Map()
     this.stopping = false
+    // 常驻小镇：占自己一个位置，不算进同时运行的上限，也不会被别的小镇挤掉
+    this.resident = null
     // 管理进程无论怎样退出，都不留下孤儿 host。
     this.onExit = () => {
       for (const r of this.running.values()) if (alive(r.child)) terminate(r.child)
     }
     process.on('exit', this.onExit)
   }
+  /** 管理员设的常驻小镇（null 表示没有）；它不被挤掉、也不占上限 */
+  setResident(id) {
+    this.resident = id ?? null
+  }
   isRunning(id) {
     const record = this.running.get(id)
     return Boolean(record && alive(record.child))
   }
-  /** 同时运行的小镇已经跑满（正在启动的也算） */
+  /** 同时运行的小镇已经跑满（正在启动的也算；常驻的那一个不算） */
   full() {
-    const live = [...this.running].filter(([, r]) => alive(r.child) && !r.closing).map(([id]) => id)
-    return new Set([...live, ...this.opening.keys()]).size >= this.maxRunning
+    const live = [...this.running]
+      .filter(([id, r]) => id !== this.resident && alive(r.child) && !r.closing)
+      .map(([id]) => id)
+    return (
+      new Set([...live, ...this.opening.keys()].filter((id) => id !== this.resident)).size >=
+      this.maxRunning
+    )
   }
-  /** 除了 except 之外最久没人进过的运行中小镇 */
+  /** 除了 except 之外最久没人进过的运行中小镇（常驻小镇不参与挤占） */
   leastRecent(except) {
     let oldest
     for (const [id, r] of this.running)
-      if (id !== except && alive(r.child) && !r.closing && (!oldest || r.used < oldest.used))
+      if (
+        id !== except &&
+        id !== this.resident &&
+        alive(r.child) &&
+        !r.closing &&
+        (!oldest || r.used < oldest.used)
+      )
         oldest = { id, used: r.used }
     return oldest?.id
   }
@@ -95,7 +112,10 @@ export class Hosts {
       await this.verify(record, id, doc)
       return this.info(record, id, doc)
     }
-    if (new Set([...this.running.keys(), ...this.opening.keys()]).size > this.maxRunning)
+    if (
+      new Set([...this.running.keys(), ...this.opening.keys()].filter((id) => id !== this.resident))
+        .size > this.maxRunning
+    )
       throw Error(`同时运行的小镇已达 ${this.maxRunning} 个，请关闭其他小镇`)
     const dir = this.storage.town(id),
       ready = path.join(dir, 'host-ready.json'),
@@ -199,6 +219,13 @@ export class Hosts {
       endpoint: r.endpoint,
       lease: r.lease,
     }
+  }
+  /** 向正在运行的世界发一条命令、等它回执：首页的「开始／暂停／天气」走这里 */
+  query(id, command, predicate, timeout = 5000) {
+    const record = this.running.get(id)
+    if (!record || !alive(record.child) || !record.endpoint) throw Error('这个小镇没在运行')
+    record.used = Date.now()
+    return worldQuery(record.endpoint, command, predicate, timeout)
   }
   /** 这次打开的凭证还是不是最新的：每次打开都换一个，关闭时拿它核对 */
   holds(id, lease) {

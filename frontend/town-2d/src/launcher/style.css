@@ -246,6 +246,12 @@ body:has(.map-launcher) {
   font-weight: 500;
   vertical-align: 2px;
 }
+.map-option-badge.is-resident {
+  /* 实心：和「内置」那种空心标签区分开，一眼看到哪个在后台跑 */
+  border-color: var(--ui-accent-fill);
+  background: var(--ui-accent-fill);
+  color: var(--ui-accent-ink);
+}
 .launcher-panel-footer {
   display: flex;
   align-items: center;
@@ -309,6 +315,42 @@ body:has(.map-launcher) {
 }
 #selected-map-description {
   overflow-wrap: anywhere;
+}
+/* 后台运行的小镇：首页就能让它开始/暂停、改天气，不用先进去 */
+.resident-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius);
+  background: var(--ui-fill);
+}
+.resident-note {
+  margin: 0;
+  color: var(--ui-ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.resident-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.resident-row button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: var(--ui-fill-strong);
+}
+.resident-weather {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-ink-soft);
+  font-size: 13px;
 }
 .enter-game {
   display: flex;

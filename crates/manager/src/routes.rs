@@ -12,6 +12,17 @@ use std::path::Path;
 /// 会话口令放在这个 Cookie 里；应用壳先用口令打开 /__session 拿到它。
 pub const SESSION_COOKIE: &str = "town_session";
 
+/// 天气可以选的那几种（与 protocol 的 WeatherKind 一致）
+const WEATHERS: [&str; 7] = [
+    "clear",
+    "overcast",
+    "light_rain",
+    "rain",
+    "heavy_rain",
+    "thunderstorm",
+    "snow",
+];
+
 pub fn handle(app: &App, req: &Request) -> Response {
     match dispatch(app, req) {
         Ok(response) => response,
@@ -223,19 +234,25 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
     let me = me.ok_or_else(account_needed)?;
     match (get, rest) {
         (true, "") => {
+            let resident = app.resident.town();
             let towns: Vec<Value> = app
                 .storage
                 .list()?
                 .into_iter()
                 .map(|mut town| {
-                    let running = town["id"]
-                        .as_str()
-                        .is_some_and(|id| app.hosts.is_running(id));
-                    town["running"] = Value::from(running);
+                    let id = town["id"].as_str().unwrap_or_default().to_owned();
+                    town["running"] = Value::from(app.hosts.is_running(&id));
+                    town["resident"] = Value::from(resident.as_deref() == Some(id.as_str()));
                     town
                 })
                 .collect();
-            return ok(json!({ "towns": towns }));
+            let status = resident.as_deref().and_then(|id| app.hosts.observe(id));
+            return ok(json!({
+                "towns": towns,
+                "resident": resident,
+                "status": status,
+                "admin": me.role == Role::Admin,
+            }));
         }
         // 建镇：生成在网页里做，这里理解描述、校验成品、暂存草稿、保存（见 creation.rs）
         (true, "/options") => return ok(crate::creation::options(&user_config(app, &me)?)),
@@ -300,12 +317,31 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
         (false, "open") => {
             let automatic = body(req)?["automatic"].as_bool().unwrap_or(false);
             app.refuse_displaced(id, automatic)?;
+            // 有后台运行的小镇时，别人只能进那一个：管理员想换，先在首页把常驻换过来
+            let resident = app.resident.town();
+            if resident.as_deref().is_some_and(|resident| resident != id) && me.role != Role::Admin
+            {
+                let resident = resident.unwrap_or_default();
+                let mut error = ApiError::new(
+                    403,
+                    format!(
+                        "现在后台运行的是「{}」，同一时间只有一个小镇在跑",
+                        app.storage.name(&resident)
+                    ),
+                );
+                error.code = Some("resident".into());
+                return Err(error);
+            }
             let _claim = app.claim(id);
             app.make_room(id)?;
             let _serial = app.town_lock(id);
             ok(app.hosts.open(&app.storage, id, &user_config(app, &me)?)?)
         }
         (false, "close") => {
+            // 常驻小镇不因为有人离开就停：它在后台跑，要它停得管理员先在首页取消常驻
+            if app.resident.town().as_deref() == Some(id) {
+                return ok(json!({ "ok": true, "closed": false, "resident": true }));
+            }
             let lease = body(req)?["lease"].as_str().map(str::to_owned);
             let _serial = app.town_lock(id);
             // 带着打开凭证来关：之后又有页面打开过这个小镇（比如刷新），旧页面晚到的关闭不算数
@@ -316,11 +352,120 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             }
             ok(json!({ "ok": true, "closed": !superseded }))
         }
+        (false, "resident") => {
+            if me.role != Role::Admin {
+                return Err(ApiError::new(403, "只有管理员能管理后台运行的小镇"));
+            }
+            // 取消常驻只是不再后台看着它：正开着的世界不动，谁想进还能进
+            if body(req)?["on"].as_bool() == Some(false) {
+                if app.resident.town().as_deref() != Some(id) {
+                    return ok(json!({ "ok": true, "resident": app.resident.town() }));
+                }
+                app.resident.set(None)?;
+                app.hosts.set_resident(None);
+                return ok(json!({ "ok": true, "resident": Value::Null }));
+            }
+            app.storage.map(id)?;
+            app.resident.set(Some(id.to_owned()))?;
+            app.hosts.set_resident(Some(id.to_owned()));
+            let _claim = app.claim(id);
+            app.make_room(id)?;
+            let _serial = app.town_lock(id);
+            let mut info = app.hosts.open(&app.storage, id, &user_config(app, &me)?)?;
+            // 世界观设好的小镇才谈得上「在后台跑」：没设好的先停着，等管理员进镇设一次
+            let ready = app
+                .hosts
+                .observe(id)
+                .is_some_and(|state| state["ready"].as_bool().unwrap_or(false));
+            if ready {
+                if let Err(e) = app.hosts.apply_speed(id, app.resident.speed()) {
+                    // 速度没设上不影响常驻：留在后台，一会儿心跳再试
+                    eprintln!("[town-manager] 常驻小镇的速度没设上：{}", e.message);
+                }
+            }
+            info["resident"] = Value::from(id);
+            info["ready"] = Value::from(ready);
+            ok(info)
+        }
+        (false, "control") => {
+            if me.role != Role::Admin {
+                return Err(ApiError::new(403, "只有管理员能管理后台运行的小镇"));
+            }
+            if app.resident.town().as_deref() != Some(id) {
+                return Err(ApiError::new(403, "只能控制后台运行的那个小镇"));
+            }
+            let state = app
+                .hosts
+                .observe(id)
+                .ok_or_else(|| ApiError::new(409, "这个小镇正在拉起来，稍等一会儿再试"))?;
+            let request = body(req)?;
+            match request["kind"].as_str() {
+                Some("speed") => {
+                    let speed = request["speed"].as_f64().unwrap_or(f64::NAN);
+                    if !(0.0..=64.0).contains(&speed) {
+                        return Err(ApiError::bad("速度不对"));
+                    }
+                    if !state["ready"].as_bool().unwrap_or(false) {
+                        return Err(ApiError::new(
+                            409,
+                            "这个小镇还没设定世界观，先进镇里设定一次",
+                        ));
+                    }
+                    app.resident.set_speed(speed)?;
+                    app.hosts.apply_speed(id, speed)?;
+                    ok(json!({ "ok": true, "speed": speed }))
+                }
+                Some("weather") => {
+                    if state["weather"].is_null() {
+                        return Err(ApiError::new(409, "这个小镇没开天气，先进镇里的设定打开"));
+                    }
+                    let roster = app.hosts.query(id, None, |m| m["type"] == "roster")?;
+                    let environment = &roster["environment"];
+                    if !environment.is_object() {
+                        return Err(ApiError::new(409, "这个世界还没有天气"));
+                    }
+                    let fixed = request["mode"].as_str() == Some("fixed");
+                    let kernel = request["weather"].as_str().unwrap_or_default();
+                    if fixed && !WEATHERS.contains(&kernel) {
+                        return Err(ApiError::bad("没有这种天气"));
+                    }
+                    let id_request = format!("resident-weather-{}", crate::token());
+                    let mut command = json!({
+                        "type": "set_weather",
+                        "request_id": id_request,
+                        "world_id": environment["world_id"],
+                        "expected_revision": environment["revision"],
+                        "mode": if fixed { "fixed" } else { "natural" },
+                    });
+                    if fixed {
+                        command["kind"] = Value::from(kernel);
+                    }
+                    let saved = app.hosts.query(id, Some(&command), |m| {
+                        m["type"] == "weather_saved" && m["request_id"] == command["request_id"]
+                    })?;
+                    if saved["ok"].as_bool() != Some(true) {
+                        let message = saved["message"].as_str().unwrap_or("天气没能改");
+                        return Err(ApiError::new(409, message));
+                    }
+                    let weather = if saved["environment"].is_object() {
+                        json!({ "mode": saved["environment"]["mode"], "kind": saved["environment"]["kind"] })
+                    } else {
+                        json!({ "mode": if fixed { "fixed" } else { "natural" } })
+                    };
+                    ok(json!({ "ok": true, "weather": weather }))
+                }
+                _ => Err(ApiError::bad("不认识的控制")),
+            }
+        }
         (false, "delete") => {
             body(req)?;
             let _serial = app.town_lock(id);
             if !app.storage.can_delete(id) {
                 return Err(ApiError::new(403, "内置地图不能删除"));
+            }
+            if app.resident.town().as_deref() == Some(id) {
+                app.resident.set(None)?;
+                app.hosts.set_resident(None);
             }
             app.hosts.close(id)?;
             app.storage.remove(id, false)?;

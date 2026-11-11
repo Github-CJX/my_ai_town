@@ -6,12 +6,12 @@ import { $, query } from 'town-shared/dom'
 import { errorText } from 'town-shared/format'
 import { loadDocument } from '../assets'
 import { createMapRenderer } from '../mapRenderers'
-import { gameUrl, listMaps, openMap } from './catalog'
+import { gameUrl, openMap, readTowns } from './catalog'
 import { initCreator } from './creator'
 import { PREFABS, type Prefab } from 'town-shared/prefabs/index'
 import { generatePrefab, isBuiltinTown, missingPrefabs, prefabTownId } from './prefabEntry'
 import { api, TownApiError } from './api'
-import { ACCOUNT_NEEDED } from 'town-shared/townApi'
+import { ACCOUNT_NEEDED, controlTown, keepRunning, type ResidentStatus } from 'town-shared/townApi'
 import { warmSelectedGame } from '../startupWarmup'
 import { createMusicController } from 'town-shared/audio/music'
 import { installPlatform, isCompact, isTouch, onBack, systemBars } from 'town-shared/platform'
@@ -69,6 +69,10 @@ let fitNext = ''
 let selected: MapEntry | undefined,
   request = 0,
   maps: MapEntry[] = []
+/** 管理员安排成「在后台一直跑」的那个小镇，以及它此刻的速度与天气 */
+let residentId: string | null = null
+let residentStatus: ResidentStatus | null = null
+let amAdmin = false
 
 type Preview = { host: HTMLElement; map: GameMap }
 // 桌面保留最近两张预览，避免来回切换时重新生成地面和 WebGL 场景；触屏设备只保留一张，控制显存。
@@ -231,6 +235,13 @@ function mapOption(map: MapEntry) {
     badge.textContent = '内置'
     name.append(badge)
   }
+  if (map.resident) {
+    const badge = document.createElement('span')
+    badge.className = 'map-option-badge is-resident'
+    badge.textContent = '后台运行'
+    badge.title = '这个小镇在后台一直跑着，别人只能进这里'
+    name.append(badge)
+  }
   b.onclick = () => {
     if (selected?.id === map.id && selected.mapHash === map.mapHash && retry.hidden) return
     void select(map)
@@ -289,7 +300,11 @@ async function buildPrefab(prefab: Prefab) {
 
 async function refresh(id?: string) {
   try {
-    maps = await listMaps()
+    const list = await readTowns()
+    maps = list.towns
+    residentId = list.resident ?? null
+    residentStatus = list.status ?? null
+    amAdmin = list.admin === true
     // 还没生成的预制小镇也排在内置小镇里，选中时才生成
     const options = maps.map(mapOption)
     const after = maps.filter(isBuiltinTown).length
@@ -343,12 +358,60 @@ const actions = query<HTMLDetailsElement>(document, '#town-actions')
 const close = query<HTMLButtonElement>(document, '#close-town')
 const remove = query<HTMLButtonElement>(document, '#delete-town')
 const reset = query<HTMLButtonElement>(document, '#reset-town')
+const keep = query<HTMLButtonElement>(document, '#keep-town')
+const unkeep = query<HTMLButtonElement>(document, '#unkeep-town')
+const controls = $('resident-controls')
+const residentNote = $('resident-note')
+const speedButton = query<HTMLButtonElement>(document, '#resident-speed')
+const weatherSelect = query<HTMLSelectElement>(document, '#resident-weather-select')
+/** 天气下拉：和世界那边的字面值一一对应（见 protocol 的 WeatherKind） */
+const WEATHERS: [string, string][] = [
+  ['natural', '自然变化'],
+  ['clear', '晴天'],
+  ['overcast', '阴天'],
+  ['light_rain', '小雨'],
+  ['rain', '中雨'],
+  ['heavy_rain', '大雨'],
+  ['thunderstorm', '雷暴'],
+  ['snow', '下雪'],
+]
+weatherSelect.replaceChildren(...WEATHERS.map(([value, label]) => new Option(label, value)))
+/** 控制请求在飞：按钮先按住，免得连点 */
+let controlling = false
+/** 暂停前跑的是几倍速：点「开始」时回到这个速度 */
+let lastSpeed = 1
+
+/** 后台运行的那个小镇：首页显示它的状态和两个开关 */
+function renderControls() {
+  const on = amAdmin && !!selected?.resident
+  controls.hidden = !on
+  if (!on) return
+  const running = (residentStatus?.speed ?? 0) > 0
+  if (running) lastSpeed = residentStatus!.speed
+  const ready = residentStatus?.ready ?? false
+  residentNote.textContent = !ready
+    ? '还没设定世界观：进这个小镇设定一次，回来就能在首页让它跑起来。'
+    : running
+      ? '这个小镇在后台一直跑着，别人只能进这里。'
+      : '这个小镇在后台跑着，这会儿是暂停的。'
+  speedButton.textContent = running ? '暂停' : '开始'
+  speedButton.disabled = controlling || !ready
+  const weather = residentStatus?.weather ?? null
+  weatherSelect.value = weather?.mode === 'fixed' ? weather.kind : 'natural'
+  weatherSelect.disabled = controlling || !weather
+  weatherSelect.title = weather ? '' : '这个小镇没开天气：进镇里的设定打开'
+}
+
 function updateActions() {
-  close.hidden = !selected?.running
+  close.hidden = !selected?.running || !!selected?.resident
   remove.hidden = !selected?.deletable
   reset.hidden = !selected?.id.startsWith('prefab-')
-  actions.hidden = close.hidden && remove.hidden && reset.hidden
+  // 后台运行只给管理员安排：别人看到的是「现在后台跑的是哪个」
+  keep.hidden = !amAdmin || !selected || !!selected.resident
+  unkeep.hidden = !amAdmin || !selected?.resident
+  actions.hidden = close.hidden && remove.hidden && reset.hidden && keep.hidden && unkeep.hidden
   if (actions.hidden) actions.open = false
+  renderControls()
 }
 document.addEventListener('click', (event) => {
   if (event.target instanceof Node && !actions.contains(event.target)) actions.open = false
@@ -383,6 +446,89 @@ close.onclick = async () => {
     void syncRunning()
   }
 }
+// 后台运行：管理员挑一个小镇一直跑着，别人只能进这一个（同时只跑一个世界）
+keep.onclick = async () => {
+  const map = selected
+  if (!map || controlling) return
+  actions.open = false
+  controlling = true
+  $('pause-status').textContent = `正在把「${map.name}」放到后台…`
+  try {
+    const entry = await keepRunning(map.id, true)
+    $('pause-status').textContent =
+      entry.ready === false
+        ? '已经在后台运行了。这个小镇还没设定世界观：进去设定一次，它就会自己跑起来。'
+        : `「${map.name}」在后台一直跑着，别人只能进这里。`
+    await refresh(map.id)
+  } catch (error) {
+    $('pause-status').textContent = errorText(error)
+  } finally {
+    controlling = false
+    renderControls()
+    void syncRunning()
+  }
+}
+unkeep.onclick = async () => {
+  const map = selected
+  if (!map || controlling) return
+  actions.open = false
+  controlling = true
+  try {
+    await keepRunning(map.id, false)
+    $('pause-status').textContent = '不再让它在后台一直跑了。它还开着的话，照常开着。'
+    await refresh(map.id)
+  } catch (error) {
+    $('pause-status').textContent = errorText(error)
+  } finally {
+    controlling = false
+    renderControls()
+    void syncRunning()
+  }
+}
+// 首页控制后台的小镇：暂停／继续
+speedButton.onclick = async () => {
+  const map = selected
+  if (!map?.resident || controlling) return
+  const running = (residentStatus?.speed ?? 0) > 0
+  const speed = running ? 0 : lastSpeed || 1
+  controlling = true
+  renderControls()
+  try {
+    await controlTown(map.id, { kind: 'speed', speed })
+    $('pause-status').textContent = running
+      ? '已经在后台暂停了。点「开始」接着跑。'
+      : `已经在后台跑起来了（${speed} 倍速）。`
+  } catch (error) {
+    $('pause-status').textContent = errorText(error)
+  } finally {
+    controlling = false
+    void syncRunning()
+  }
+}
+// 首页控制后台的小镇：天气
+weatherSelect.onchange = async () => {
+  const map = selected
+  if (!map?.resident || controlling) return
+  const value = weatherSelect.value
+  const mode = value === 'natural' ? 'natural' : 'fixed'
+  controlling = true
+  renderControls()
+  try {
+    await controlTown(map.id, {
+      kind: 'weather',
+      mode,
+      ...(mode === 'fixed' ? { weather: value } : {}),
+    })
+    const label = WEATHERS.find(([id]) => id === value)?.[1] ?? value
+    $('pause-status').textContent =
+      mode === 'natural' ? '天气交还给小镇自己了。' : `天气改成了${label}。`
+  } catch (error) {
+    $('pause-status').textContent = errorText(error)
+  } finally {
+    controlling = false
+    void syncRunning()
+  }
+}
 // 只更新运行状态，避免轮询重画预览或覆盖操作提示。
 let closing = false,
   runningRequest = 0
@@ -390,15 +536,22 @@ async function syncRunning() {
   if (document.hidden || closing || deleting) return
   const current = ++runningRequest
   try {
-    const latest = await listMaps()
+    const latest = await readTowns()
     if (current !== runningRequest || closing || deleting) return
-    for (const map of maps)
-      map.running = latest.find((town) => town.id === map.id)?.running ?? false
+    residentId = latest.resident ?? null
+    residentStatus = latest.status ?? null
+    amAdmin = latest.admin === true
+    for (const map of maps) {
+      const town = latest.towns.find((item) => item.id === map.id)
+      map.running = town?.running ?? false
+      map.resident = town?.resident ?? false
+    }
+    if (selected) selected.resident = residentId === selected.id
     updateActions()
   } catch {
     if (current === runningRequest) {
       close.hidden = true
-      actions.hidden = remove.hidden && reset.hidden
+      actions.hidden = remove.hidden && reset.hidden && keep.hidden && unkeep.hidden
       if (actions.hidden) actions.open = false
     }
   }

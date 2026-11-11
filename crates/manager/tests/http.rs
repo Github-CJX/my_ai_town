@@ -37,6 +37,11 @@ impl Manager {
 
     /// extra 里的字段写进应用配置
     fn start_with(name: &str, extra: serde_json::Value) -> Self {
+        Self::start_prepared(name, extra, |_| {})
+    }
+
+    /// prepare 在服务启动前拿到临时目录：可以预先摆好数据目录里的文件（比如常驻小镇）
+    fn start_prepared(name: &str, extra: serde_json::Value, prepare: impl FnOnce(&Path)) -> Self {
         let dir = std::env::temp_dir().join(format!("town-manager-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let (app, web) = (dir.join("app"), dir.join("web"));
@@ -70,6 +75,7 @@ impl Manager {
         fs::write(app.join("builtin-model").join(server), "").unwrap();
         fs::write(web.join("index.html"), "<!doctype html>town").unwrap();
         fs::write(web.join("assets/app.js"), "void 0").unwrap();
+        prepare(&dir);
         let ready = dir.join("ready.json");
         let child = Command::new(env!("CARGO_BIN_EXE_town-manager"))
             .arg("--root")
@@ -152,6 +158,25 @@ impl Manager {
         });
         format!("Cookie: town_session={SECRET}; town_user={user}\r\n")
     }
+
+    /// 管理员给朋友建个号，返回新账号的编号
+    fn friend(&self, name: &str, pin: &str) -> String {
+        let (status, created) = post(
+            self,
+            "/users",
+            &serde_json::json!({ "name": name, "pin": pin }),
+        );
+        assert_eq!(status, 200, "{created}");
+        created["user"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// 换成另一个账号的请求头
+    fn as_user(&self, id: &str) -> String {
+        format!("Cookie: town_session={SECRET}; town_user={id}\r\n")
+    }
 }
 
 #[test]
@@ -201,20 +226,32 @@ fn town_api_needs_session_and_static_files_stay_in_web_dir() {
 
 /// 带会话 Cookie 和应用请求头的 POST，返回状态码和响应体
 fn post(manager: &Manager, path: &str, body: &serde_json::Value) -> (u16, serde_json::Value) {
+    post_as(manager, &manager.cookie(), path, body)
+}
+
+/// 以某个账号发 POST：`cookie` 是 `Manager::cookie()` 或 `Manager::as_user()` 给的那一段
+fn post_as(
+    manager: &Manager,
+    cookie: &str,
+    path: &str,
+    body: &serde_json::Value,
+) -> (u16, serde_json::Value) {
     let text = body.to_string();
     let (status, response) = manager.request(
         &format!(
-            "POST /api/towns{path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{}\
-             X-Town-Client: 1\r\nContent-Type: application/json\r\n",
-            manager.cookie()
+            "POST /api/towns{path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{cookie}\
+             X-Town-Client: 1\r\nContent-Type: application/json\r\n"
         ),
         &text,
     );
-    let json = response
+    (status, json_of(&response))
+}
+
+fn json_of(response: &str) -> serde_json::Value {
+    response
         .split_once("\r\n\r\n")
         .and_then(|(_, b)| serde_json::from_str(b).ok())
-        .unwrap_or_default();
-    (status, json)
+        .unwrap_or_default()
 }
 
 #[test]
@@ -488,4 +525,118 @@ fn builtin_model_resumes_after_network_break_and_never_installs_a_bad_file() {
         .dir
         .join("home/builtin-model/model.gguf.part")
         .exists());
+}
+
+/// 后台常驻的小镇：只有管理员能安排、能控制；别人只能进这一个。
+/// 这里没有世界进程（--host-bin 指向不存在的文件），所以「没在运行」是常态：
+/// 看的是名单、权限与状态文件，不启动世界。
+#[test]
+fn resident_town_is_arranged_and_controlled_by_admin_only() {
+    let manager = Manager::start_prepared("resident", serde_json::json!({}), |dir| {
+        let map = fs::read(dir.join("app/data/maps/2d-town/map.json")).unwrap();
+        fs::create_dir_all(dir.join("home/towns/next-town")).unwrap();
+        fs::write(dir.join("home/towns/next-town/map.json"), map).unwrap();
+        fs::write(
+            dir.join("home/resident.json"),
+            r#"{"town":"default-town","speed":2}"#,
+        )
+        .unwrap();
+    });
+
+    // 管理员打开首页：看到常驻的是哪个、自己的管理身份、此刻还没有世界在跑
+    let (status, response) = manager.get("/api/towns", &manager.cookie());
+    assert_eq!(status, 200);
+    let list = json_of(&response);
+    assert_eq!(list["resident"], "default-town");
+    assert_eq!(list["admin"], true);
+    assert!(list["status"].is_null(), "{list}");
+    let towns = list["towns"].as_array().unwrap();
+    assert_eq!(
+        towns.iter().find(|t| t["id"] == "default-town").unwrap()["resident"],
+        true
+    );
+    assert_eq!(
+        towns.iter().find(|t| t["id"] == "next-town").unwrap()["resident"],
+        false
+    );
+
+    // 朋友有账号，但没有管理权
+    let friend = manager.as_user(&manager.friend("朋友", "1357"));
+    let (status, response) = manager.get("/api/towns", &friend);
+    assert_eq!(status, 200);
+    assert_eq!(json_of(&response)["admin"], false);
+    // 有常驻时别人只能进那一个：进别的被挡回来，带上原因码
+    let (status, denied) = post_as(&manager, &friend, "/next-town/open", &serde_json::json!({}));
+    assert_eq!(status, 403, "{denied}");
+    assert_eq!(denied["code"], "resident");
+    assert!(
+        denied["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("后台运行的是「"),
+        "{denied}"
+    );
+    // 安排常驻、控制速度都只有管理员能点
+    let (status, _) = post_as(
+        &manager,
+        &friend,
+        "/next-town/resident",
+        &serde_json::json!({ "on": true }),
+    );
+    assert_eq!(status, 403);
+    let (status, _) = post_as(
+        &manager,
+        &friend,
+        "/default-town/control",
+        &serde_json::json!({ "kind": "speed", "speed": 1 }),
+    );
+    assert_eq!(status, 403);
+
+    // 管理员想进别的镇不受常驻限制：过了那道门才会去起世界，而这里的 host 程序不存在（404 就是起不来）
+    let (status, failed) = post(&manager, "/next-town/open", &serde_json::json!({}));
+    assert_eq!(status, 404, "{failed}");
+
+    // 控制只对后台那个镇；它还没跑起来时先让等一等，不去猜
+    let (status, wrong) = post(
+        &manager,
+        "/next-town/control",
+        &serde_json::json!({ "kind": "speed", "speed": 1 }),
+    );
+    assert_eq!(status, 403, "{wrong}");
+    let (status, waiting) = post(
+        &manager,
+        "/default-town/control",
+        &serde_json::json!({ "kind": "speed", "speed": 1 }),
+    );
+    assert_eq!(status, 409, "{waiting}");
+    assert!(
+        waiting["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("正在拉起来"),
+        "{waiting}"
+    );
+
+    // 取消常驻：正开着的世界不动，状态写回数据目录（速度留着，下次接着按这个跑）
+    let (status, cancelled) = post(
+        &manager,
+        "/default-town/resident",
+        &serde_json::json!({ "on": false }),
+    );
+    assert_eq!(status, 200, "{cancelled}");
+    assert!(cancelled["resident"].is_null(), "{cancelled}");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(manager.dir.join("home/resident.json")).unwrap()).unwrap();
+    assert_eq!(saved["town"], serde_json::Value::Null);
+    assert_eq!(saved["speed"], 2.0);
+    // 没有常驻之后，朋友又能进别的镇了（同样只到起不了世界为止）
+    let (status, failed) = post_as(&manager, &friend, "/next-town/open", &serde_json::json!({}));
+    assert_eq!(status, 404, "{failed}");
+    // 不存在的镇不能设成常驻
+    let (status, _) = post(
+        &manager,
+        "/not-there/resident",
+        &serde_json::json!({ "on": true }),
+    );
+    assert_eq!(status, 404);
 }

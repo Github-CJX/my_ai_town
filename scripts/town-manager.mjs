@@ -9,7 +9,8 @@ import {
 import { createCreation } from './towns/creation.mjs'
 import { createModelRoutes } from './towns/models.mjs'
 import { createBuiltinModelRoutes } from './towns/builtin-model.mjs'
-import { createTownRoutes } from './towns/town-routes.mjs'
+import { createTownRoutes, applySpeed, observe } from './towns/town-routes.mjs'
+import { createResident, readResident } from './towns/resident.mjs'
 import { Raw, HttpError, readBody, describe } from './towns/http.mjs'
 import http from 'node:http'
 import fs from 'node:fs/promises'
@@ -60,6 +61,9 @@ export async function createManager({
     hosts = new Hosts(source, storage, config, { mockLlm, maxRunning })
   // 这台电脑上的账号：第一次打开由玩家自己建的管理员 + 管理员给朋友建的普通账号，各自一份密钥
   const accounts = await new Accounts(root).load()
+  // 常驻小镇：管理员在首页挑一个一直跑，别人只能进它；页面关掉、重启管理服务都不等于停世界
+  const resident = createResident(root, await readResident(root))
+  hosts.setResident(resident.town())
   /** 这次请求是谁；还没建号/没选号时为 undefined */
   const who = (headers) => accounts.current(cookieId(headers))
   const current = (headers) => {
@@ -108,7 +112,7 @@ export async function createManager({
     ...builtinModel.routes,
     ...creation.routes,
     ...assets.routes,
-    ...createTownRoutes({ source, storage, hosts, serial, configOf, current }),
+    ...createTownRoutes({ source, storage, hosts, serial, configOf, current, resident }),
   ]
   async function dispatch(req, signal) {
     if (stopping) throw new HttpError(503, '应用正在退出')
@@ -162,30 +166,63 @@ export async function createManager({
     throw e
   }
   console.log(`[town-manager] http://127.0.0.1:${server.address().port} · ${root}`)
-  if (alwaysOn) {
+  /** 常驻小镇用管理员那份密钥跑；别人进镇时用自己那份，世界一旦跑起来沿用先打开的那份 */
+  const residentConfig = async () => {
+    const admin = accounts.admin()
+    return admin ? accounts.config(config, admin) : null
+  }
+  /** 常驻小镇没在跑就拉起来：页面都关了、host 崩了都拉回来；连续失败就先慢慢重试 */
+  let residentFailures = 0
+  const ensureResident = async () => {
+    const id = resident.town()
+    if (!id || stopping || hosts.isRunning(id)) return
     try {
-      const towns = (await storage.list()).filter((town) => town.available),
-        wanted = process.env.TOWN_ALWAYS_ON_TOWN,
-        chosen =
-          towns.find((town) => town.id === wanted) ??
-          towns
-            .filter((town) => town.progress)
-            .sort(
-              (a, b) =>
-                b.progress.day - a.progress.day || b.progress.residents - a.progress.residents
-            )[0] ??
-          towns[0]
-      if (chosen) {
-        await hosts.open(chosen.id)
-        console.log(`[town-manager] 常驻世界已启动：${chosen.name}（${chosen.id}）`)
-      }
+      const config = await residentConfig()
+      if (!config) return
+      await serial('town-' + id, () => hosts.open(id, config))
+      residentFailures = 0
+      // 世界观没设好的小镇先停着：这时候发速度会被世界推回来（「请先设置世界观」）
+      const state = await observe(hosts, id)
+      if (state?.ready) await applySpeed(hosts, id, resident.speed()).catch(() => {})
+      console.log(`[town-manager] 常驻小镇已启动：${id}`)
     } catch (e) {
-      console.error('[town-manager] 常驻世界启动失败：', e.message)
+      residentFailures += 1
+      if (residentFailures === 1 || residentFailures % 10 === 0)
+        console.error(`[town-manager] 常驻小镇没能拉起来：${e.message}`)
     }
   }
+  if (alwaysOn) {
+    // 第一次打开：替管理员挑一个（上次在玩的、或者第一个），之后由他在首页自己换
+    if (!resident.town()) {
+      try {
+        const towns = (await storage.list()).filter((town) => town.available),
+          wanted = process.env.TOWN_ALWAYS_ON_TOWN,
+          chosen =
+            towns.find((town) => town.id === wanted) ??
+            towns
+              .filter((town) => town.progress)
+              .sort(
+                (a, b) =>
+                  b.progress.day - a.progress.day || b.progress.residents - a.progress.residents
+              )[0] ??
+            towns[0]
+        if (chosen) {
+          await resident.set(chosen.id)
+          hosts.setResident(chosen.id)
+        }
+      } catch (e) {
+        console.error('[town-manager] 挑常驻小镇失败：', e.message)
+      }
+    }
+    await ensureResident()
+  }
+  // 每 15 秒看一眼：常驻小镇死了就拉回来（管理员取消常驻之后它自然什么都不做）
+  const heartbeat = setInterval(() => void ensureResident(), 15000)
+  heartbeat.unref()
   async function stop() {
     if (stopping) return
     stopping = true
+    clearInterval(heartbeat)
     for (const c of active) c.abort()
     builtinModel.stop()
     try {

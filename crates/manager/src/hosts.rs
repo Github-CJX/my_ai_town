@@ -32,6 +32,8 @@ pub struct Hosts {
     pub max_running: usize,
     pub mock_llm: bool,
     running: Mutex<HashMap<String, Record>>,
+    /// 后台常驻的小镇：不算进「同时运行几个」的名额，也不会被挤掉
+    resident: Mutex<Option<String>>,
 }
 
 fn alive(child: &mut Child) -> bool {
@@ -46,7 +48,17 @@ impl Hosts {
             max_running,
             mock_llm,
             running: Mutex::new(HashMap::new()),
+            resident: Mutex::new(None),
         }
+    }
+
+    /// 管理员在首页安排的那个后台小镇（见 resident.rs）；换镇时页面与这里都要跟着改。
+    pub fn set_resident(&self, id: Option<String>) {
+        *self.resident.lock().unwrap() = id;
+    }
+
+    fn is_resident(&self, id: &str) -> bool {
+        self.resident.lock().unwrap().as_deref() == Some(id)
     }
 
     pub fn is_running(&self, id: &str) -> bool {
@@ -58,19 +70,25 @@ impl Hosts {
         alive == Some(true)
     }
 
-    /// 同时运行的小镇已经跑满（不算已经退出的）
+    /// 同时运行的小镇已经跑满（不算已经退出的，也不算后台常驻的那个）
     pub fn full(&self) -> bool {
+        let resident = self.resident.lock().unwrap().clone();
         let mut running = self.running.lock().unwrap();
         running.retain(|_, record| alive(&mut record.child));
-        running.len() >= self.max_running
+        let count = running
+            .keys()
+            .filter(|id| resident.as_deref() != Some(id.as_str()))
+            .count();
+        count >= self.max_running
     }
 
-    /// 除了 except 之外最久没人进过的运行中小镇
+    /// 除了 except 之外最久没人进过的运行中小镇（后台常驻的那个不算：不能被挤掉）
     pub fn least_recent(&self, except: &str) -> Option<String> {
+        let resident = self.resident.lock().unwrap().clone();
         let running = self.running.lock().unwrap();
         running
             .iter()
-            .filter(|(id, _)| id.as_str() != except)
+            .filter(|(id, _)| id.as_str() != except && resident.as_deref() != Some(id.as_str()))
             .min_by_key(|(_, record)| record.used)
             .map(|(id, _)| id.clone())
     }
@@ -90,7 +108,7 @@ impl Hosts {
             verify(&endpoint, id, &map.hash)?;
             return info(storage, id, &map.document, &map.hash, &endpoint, &lease);
         }
-        if self.running.lock().unwrap().len() >= self.max_running {
+        if self.full() && !self.is_resident(id) {
             return Err(ApiError::bad(format!(
                 "同时运行的小镇已达 {} 个，请关闭其他小镇",
                 self.max_running
@@ -176,6 +194,62 @@ impl Hosts {
             .unwrap()
             .get(id)
             .is_some_and(|r| r.lease == lease)
+    }
+
+    /// 向正在跑的世界问一件事（首页控制速度/天气、常驻心跳都用它）。没在运行就报错。
+    pub fn query(
+        &self,
+        id: &str,
+        command: Option<&Value>,
+        want: impl Fn(&Value) -> bool,
+    ) -> Result<Value, ApiError> {
+        let endpoint = self
+            .endpoint(id)
+            .ok_or_else(|| ApiError::bad("这个小镇没在运行"))?;
+        if let Some(record) = self.running.lock().unwrap().get_mut(id) {
+            record.used = Instant::now();
+        }
+        ws::query(&endpoint, command, want)
+    }
+
+    /// 现在跑得怎么样：速度、天气、有没有设好世界观、有没有开天气。没在运行回 None。
+    /// 与 scripts/towns/town-routes.mjs 的 observe 同一个形状，页面两边都认。
+    pub fn observe(&self, id: &str) -> Option<Value> {
+        if !self.is_running(id) {
+            return None;
+        }
+        let roster = self.query(id, None, |m| m["type"] == "roster").ok()?;
+        let settings = self
+            .query(id, Some(&json!({ "type": "get_world_settings" })), |m| {
+                m["type"] == "world_settings"
+            })
+            .ok()?;
+        let environment = &roster["environment"];
+        let weather = environment
+            .is_object()
+            .then(|| json!({ "mode": environment["mode"], "kind": environment["kind"] }));
+        Some(json!({
+            "speed": roster["speed"],
+            "weather": weather,
+            "ready": settings["state"]["ready"].as_bool().unwrap_or(false),
+            "climate": settings["state"]["physiology"]["weather"].as_bool().unwrap_or(false),
+        }))
+    }
+
+    /// 把速度设上去并等广播里确认（世界还在设定世界观阶段时会拒绝，交给调用方决定怎么提示）。
+    pub fn apply_speed(&self, id: &str, speed: f64) -> Result<(), ApiError> {
+        if !self.is_running(id) {
+            return Ok(());
+        }
+        let command = json!({
+            "type": "set_speed",
+            "request_id": format!("resident-{id}"),
+            "speed": speed,
+        });
+        self.query(id, Some(&command), |m| {
+            m["type"] == "roster" && (m["speed"].as_f64().unwrap_or(-1.0) - speed).abs() < 1e-9
+        })?;
+        Ok(())
     }
 
     fn endpoint(&self, id: &str) -> Option<String> {

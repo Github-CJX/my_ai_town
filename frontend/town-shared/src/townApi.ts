@@ -99,6 +99,34 @@ export async function bindAvatar(id: string | null, name = ''): Promise<void> {
   }
 }
 
+/** 常驻小镇此刻的样子（首页的控制按钮显示这些） */
+export type ResidentStatus = {
+  /** 世界速度：0 是暂停 */
+  speed: number
+  /** 没开天气的世界是 null */
+  weather: { mode: string; kind: string } | null
+  /** 世界观设好了没有：没设好的世界推不动速度（世界自己会说「请先设置世界观」） */
+  ready: boolean
+  /** 这个世界的天气开了没有 */
+  climate: boolean
+}
+
+/** 让某个小镇留在后台一直跑（管理员），或者取消常驻：取消不会关掉正开着的世界。
+ *  ready 说明世界观设好了没有：没设好的小镇先停着，等人进镇设定一次 */
+export function keepRunning(id: string, on: boolean): Promise<MapEntry & { ready?: boolean }> {
+  return post<MapEntry & { ready?: boolean }>(id, 'resident', { on })
+}
+
+/** 首页控制常驻小镇：开始/暂停（speed 0 是暂停）、改天气 */
+export function controlTown(
+  id: string,
+  body:
+    | { kind: 'speed'; speed: number }
+    | { kind: 'weather'; mode: 'natural' | 'fixed'; weather?: string }
+): Promise<{ speed?: number; weather?: { mode: string; kind: string } }> {
+  return post(id, 'control', body)
+}
+
 /** 重新打开小镇：世界进程不在了，管理服务就从存档把它拉起来。返回新的连接地址和打开凭证。
  *  automatic 是断线后自动重开：被另一个页面进的小镇挤掉时不抢回来，抛 TownDisplaced */
 export function reopenTown(id: string, automatic = true) {

@@ -8,6 +8,7 @@ pub mod error;
 mod hosts;
 pub mod http;
 mod positions;
+mod resident;
 mod routes;
 pub mod storage;
 mod ws;
@@ -108,6 +109,8 @@ pub struct App {
     displaced: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
     /// 正在被页面打开的小镇：关掉旧的、启动新的这段时间里它还不在运行，也算占着
     claiming: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// 后台常驻的小镇与它的速度（见 resident.rs）
+    resident: resident::Resident,
 }
 
 impl App {
@@ -133,7 +136,49 @@ impl App {
         Ok(())
     }
 
-    /// 页面断线后自动重开（automatic）：这个小镇是被另一个页面进的小镇挤掉的、那个还开着，
+    /// 管理员挑的后台小镇没在跑就把它拉起来（进程退出、崩溃、有人手动关掉之后都靠这里）。
+    /// 与 scripts/town-manager.mjs 的 ensureResident 同一个行为：不设世界观时先拉起来但不改速度。
+    fn ensure_resident(&self) {
+        let Some(id) = self.resident.town() else {
+            return;
+        };
+        if self.hosts.is_running(&id) {
+            return;
+        }
+        let config = {
+            let accounts = self.accounts.lock().unwrap();
+            let Some(admin) = accounts.admin() else {
+                return;
+            };
+            match accounts.config(&self.config, &admin) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("[town-manager] 常驻小镇的配置读不到：{}", e.message);
+                    return;
+                }
+            }
+        };
+        let _serial = self.town_lock(&id);
+        if self.hosts.is_running(&id) {
+            return;
+        }
+        match self.hosts.open(&self.storage, &id, &config) {
+            Ok(_) => {
+                let ready = self
+                    .hosts
+                    .observe(&id)
+                    .is_some_and(|state| state["ready"].as_bool().unwrap_or(false));
+                if ready {
+                    if let Err(e) = self.hosts.apply_speed(&id, self.resident.speed()) {
+                        eprintln!("[town-manager] 常驻小镇的速度没设上：{}", e.message);
+                    }
+                }
+                println!("[town-manager] 常驻小镇已启动：{id}");
+            }
+            Err(e) => eprintln!("[town-manager] 常驻小镇没启动起来：{id}：{}", e.message),
+        }
+    }
+
     /// 就不抢回来，告诉页面原因；不然两个页面会来回互相挤。电脑版管理服务按同样的规则。
     fn refuse_displaced(&self, id: &str, automatic: bool) -> Result<(), ApiError> {
         let by = self.displaced.lock().unwrap().get(id).cloned();
@@ -275,6 +320,7 @@ fn serve(options: Options, storage: Storage) -> Result<(), String> {
         "[town-manager] http://127.0.0.1:{port} · {}",
         options.root.display()
     );
+    let root = options.root.clone();
     let app = Arc::new(App {
         options,
         storage,
@@ -286,7 +332,20 @@ fn serve(options: Options, storage: Storage) -> Result<(), String> {
         downloads: builtin::Downloads::default(),
         displaced: Default::default(),
         claiming: Default::default(),
+        resident: resident::Resident::load(&root),
     });
+    // 后台常驻的小镇：进来了就拉起来，之后每 15 秒看一次在不在（进程没了就再拉）。
+    app.hosts.set_resident(app.resident.town());
+    {
+        let app = app.clone();
+        std::thread::spawn(move || loop {
+            if host::process::stopping() {
+                return;
+            }
+            app.ensure_resident();
+            std::thread::sleep(Duration::from_secs(15));
+        });
+    }
     while !host::process::stopping() {
         match listener.accept() {
             Ok((stream, _)) => {

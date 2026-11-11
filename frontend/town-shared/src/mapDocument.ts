@@ -100,6 +100,8 @@ export interface MapEntry {
   lease?: string
   worldId?: string
   running?: boolean
+  /** 管理员安排成「在后台一直跑」的那个小镇：同一时间只有它跑着，别人只能进这里 */
+  resident?: boolean
   deletable?: boolean
   origin?: string
   /** 玩到第几天、住了几个人（读存档）；还没开始过的小镇是 null */
