@@ -372,6 +372,37 @@ test('only one town runs at a time: entering another town closes the open one, t
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+// 放公网时只开放后台常驻的那一个小镇：管理员也不能从首页进别的镇
+test('a locked manager opens only the resident town, and says why for the others', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-manager-locked-'))
+  let m
+  try {
+    m = await createManager({ root, port: 0, mockLlm: true, onlyResident: true })
+    const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+    const api = client(base, await signIn(base))
+    // 首页照样读得到列表（管理员要能挑常驻），但标明这台机器只开放常驻镇
+    const list = await api('')
+    assert.equal(list.locked, true)
+    assert.equal(list.resident, null)
+    await assert.rejects(api('/default-town/open', {}), /还没在首页设常驻/)
+    // 管理员把默认小镇设成常驻：之后只有它能进
+    const kept = await api('/default-town/resident', { on: true })
+    assert.ok(kept.endpoint, JSON.stringify(kept))
+    assert.equal((await api('')).resident, 'default-town')
+    const draft = await api('/preview', { spec })
+    const town = await api('/save', {
+      draft_id: draft.id,
+      expected_version: draft.version,
+      request_id: 'save-locked-town',
+    })
+    await assert.rejects(api(`/${town.id}/open`, {}), /这台服务器只开放「/)
+    const opened = await api('/default-town/open', {})
+    assert.ok(opened.endpoint)
+  } finally {
+    await m?.stop()
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
 test('home settings save a key only into the data root config, read back only its mask, and cannot delete a service', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-models-'))
   const repoConfig = ['config/providers.json', 'config/credentials.json'].map((p) =>

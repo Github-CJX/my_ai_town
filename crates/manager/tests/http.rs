@@ -42,6 +42,16 @@ impl Manager {
 
     /// prepare 在服务启动前拿到临时目录：可以预先摆好数据目录里的文件（比如常驻小镇）
     fn start_prepared(name: &str, extra: serde_json::Value, prepare: impl FnOnce(&Path)) -> Self {
+        Self::start_args(name, extra, prepare, &[])
+    }
+
+    /// 再加上额外的命令行开关（比如 --only-resident）
+    fn start_args(
+        name: &str,
+        extra: serde_json::Value,
+        prepare: impl FnOnce(&Path),
+        args: &[&str],
+    ) -> Self {
         let dir = std::env::temp_dir().join(format!("town-manager-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let (app, web) = (dir.join("app"), dir.join("web"));
@@ -88,6 +98,7 @@ impl Manager {
             .arg(dir.join("no-host"))
             .args(["--port", "0", "--session-secret", SECRET, "--ready-file"])
             .arg(&ready)
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -761,5 +772,32 @@ fn an_account_keeps_its_agents_apart_from_other_accounts() {
             .unwrap()
             .count(),
         1
+    );
+}
+
+/// 放公网时只开放后台常驻的那一个小镇：管理员也不能进别的镇。
+#[test]
+fn only_the_resident_town_opens_when_the_server_is_locked() {
+    let manager = Manager::start_args(
+        "locked",
+        serde_json::json!({}),
+        |_| {},
+        &["--only-resident"],
+    );
+    let cookie = manager.cookie();
+    // 列表照样读得到（管理员要能挑常驻），但标明这台机器只开放常驻镇
+    let (status, response) = manager.get("/api/towns", &cookie);
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(json_of(&response)["locked"], serde_json::json!(true));
+    // 还没设常驻：谁进都吃 403，说明先去首页设一个
+    let (status, body) = post(&manager, "/default-town/open", &serde_json::json!({}));
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body["code"], serde_json::json!("resident"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("还没在首页设常驻"),
+        "{body}"
     );
 }

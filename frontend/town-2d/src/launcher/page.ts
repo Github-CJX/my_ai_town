@@ -89,6 +89,8 @@ let selected: MapEntry | undefined,
 let residentId: string | null = null
 let residentStatus: ResidentStatus | null = null
 let amAdmin = false
+/** 这台服务器只开放常驻小镇（公网部署）：别的小镇只能看，不能进 */
+let onlyResident = false
 
 type Preview = { host: HTMLElement; map: GameMap }
 // 桌面保留最近两张预览，避免来回切换时重新生成地面和 WebGL 场景；触屏设备只保留一张，控制显存。
@@ -128,6 +130,11 @@ function finishPreview(map: MapEntry) {
   }
 }
 
+/** 只开放常驻小镇时，别的小镇进不去：按钮置灰，并说明为什么 */
+function blocked(map: MapEntry) {
+  return onlyResident && !map.resident
+}
+
 function describe(map: MapEntry) {
   document
     .querySelectorAll<HTMLElement>('[data-map-id]')
@@ -138,12 +145,15 @@ function describe(map: MapEntry) {
   $('selected-map-description').textContent = map.description
   $('selection-status').textContent = `已选择 · ${map.name}`
   const played = !!map.progress
-  $('pause-status').textContent = played
-    ? '接着上次的进度玩。这里只是预览，进去后小镇才接着走。'
-    : '这里只是预览，进去后小镇才开始。'
+  const keeper = maps.find((m) => m.id === residentId)
+  $('pause-status').textContent = blocked(map)
+    ? `这台服务器只开放「${keeper?.name ?? '后台运行的小镇'}」，要进别的小镇得管理员先在首页换常驻。`
+    : played
+      ? '接着上次的进度玩。这里只是预览，进去后小镇才接着走。'
+      : '这里只是预览，进去后小镇才开始。'
   enter.replaceChildren(played ? '继续玩 ' : '进入游戏 ', arrow())
   updateActions()
-  enter.disabled = deleting || !map.available
+  enter.disabled = deleting || !map.available || blocked(map)
 }
 
 async function select(map: MapEntry) {
@@ -258,6 +268,13 @@ function mapOption(map: MapEntry) {
     badge.title = '这个小镇在后台一直跑着，别人只能进这里'
     name.append(badge)
   }
+  if (blocked(map)) {
+    const badge = document.createElement('span')
+    badge.className = 'map-option-badge is-locked'
+    badge.textContent = '不开放'
+    badge.title = '这台服务器只开放后台运行的那个小镇'
+    name.append(badge)
+  }
   b.onclick = () => {
     if (selected?.id === map.id && selected.mapHash === map.mapHash && retry.hidden) return
     void select(map)
@@ -321,6 +338,7 @@ async function refresh(id?: string) {
     residentId = list.resident ?? null
     residentStatus = list.status ?? null
     amAdmin = list.admin === true
+    onlyResident = list.locked === true
     void loadAgents()
     // 还没生成的预制小镇也排在内置小镇里，选中时才生成
     const options = maps.map(mapOption)
@@ -352,7 +370,7 @@ async function refresh(id?: string) {
   }
 }
 enter.onclick = async () => {
-  if (!selected?.available || deleting) return
+  if (!selected?.available || deleting || blocked(selected)) return
   const map = selected
   enter.disabled = true
   $('pause-status').textContent = '正在打开小镇…'
@@ -1037,7 +1055,7 @@ remove.onclick = async () => {
     deleting = false
     remove.disabled = false
     close.disabled = false
-    enter.disabled = !selected?.available
+    enter.disabled = !selected?.available || (!!selected && blocked(selected))
   }
 }
 // 预制小镇重新开始：清掉这一局（地图、居民、进度）、重新生成岛，进镇后重新出开局设置
@@ -1058,7 +1076,7 @@ reset.onclick = async () => {
     await buildPrefab(prefab)
   } catch (error) {
     $('pause-status').textContent = errorText(error)
-    enter.disabled = !selected?.available
+    enter.disabled = !selected?.available || (!!selected && blocked(selected))
   } finally {
     deleting = false
   }

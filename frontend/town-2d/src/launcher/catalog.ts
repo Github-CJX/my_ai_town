@@ -11,6 +11,8 @@ export type TownList = {
   status?: ResidentStatus | null
   /** 只有管理员能安排后台运行、能改速度和天气 */
   admin?: boolean
+  /** 这台服务器只开放常驻的那一个小镇：别的小镇在首页看得见，但进不去 */
+  locked?: boolean
 }
 export async function readTowns(): Promise<TownList> {
   return await api<TownList>('')

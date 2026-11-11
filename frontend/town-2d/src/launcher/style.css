@@ -252,6 +252,11 @@ body:has(.map-launcher) {
   background: var(--ui-accent-fill);
   color: var(--ui-accent-ink);
 }
+.map-option-badge.is-locked {
+  /* 灰的：这台服务器不开放它，别让人以为点一下就能进 */
+  border-color: var(--ui-line);
+  color: var(--ui-ink-muted);
+}
 .launcher-panel-footer {
   display: flex;
   align-items: center;

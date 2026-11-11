@@ -91,6 +91,9 @@ export async function createManager({
   // 世界自己的端口：0 是每次随机。页面的世界连接现在统一从本服务这个端口转进去（`/ws/<镇>`），
   // 对外只要开管理服务这一个端口；想直连世界进程（老办法）再固定它。
   hostPort = Number(process.env.TOWN_HOST_PORT ?? 0) || 0,
+  // 放到公网服务器上时只开放后台常驻的那一个小镇：管理员在首页设好常驻之后，
+  // 任何账号（包括管理员）都只能进它，别的小镇在这儿进不去。
+  onlyResident = process.env.TOWN_ONLY_RESIDENT === '1',
 } = {}) {
   const storage = new Storage(root, source)
   await storage.init()
@@ -161,6 +164,7 @@ export async function createManager({
       resident,
       accounts,
       accountConfig: (user) => accounts.config(config, user),
+      onlyResident,
     }),
   ]
   async function dispatch(req, signal) {

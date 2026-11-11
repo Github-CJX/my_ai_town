@@ -515,6 +515,8 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             return ok(json!({
                 "towns": towns,
                 "resident": resident,
+                // 只开放常驻小镇：首页据此把其余小镇的「进镇」按钮收起来
+                "locked": app.options.only_resident,
                 "status": status,
                 "admin": me.role == Role::Admin,
             }));
@@ -640,6 +642,22 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             app.refuse_displaced(id, automatic)?;
             // 有后台运行的小镇时，别人只能进那一个：管理员想换，先在首页把常驻换过来
             let resident = app.resident.town();
+            // 公网部署：连管理员也不能绕开常驻镇，换镇的唯一办法是先在首页换常驻
+            if app.options.only_resident && resident.as_deref() != Some(id) {
+                let (message, code) = match resident.as_deref() {
+                    Some(resident) => (
+                        format!("这台服务器只开放「{}」", app.storage.name(resident)),
+                        "resident",
+                    ),
+                    None => (
+                        "这台服务器只开放常驻小镇，管理员还没在首页设常驻".to_owned(),
+                        "resident",
+                    ),
+                };
+                let mut error = ApiError::new(403, message);
+                error.code = Some(code.into());
+                return Err(error);
+            }
             if resident.as_deref().is_some_and(|resident| resident != id) && me.role != Role::Admin
             {
                 let resident = resident.unwrap_or_default();

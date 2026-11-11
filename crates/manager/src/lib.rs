@@ -50,11 +50,14 @@ pub struct Options {
     pub max_running: usize,
     pub mock_llm: bool,
     pub stop_on_stdin_close: bool,
+    /// 放到公网服务器上时只开放后台常驻的那一个小镇：连管理员也不能进别的镇。
+    pub only_resident: bool,
 }
 
 const USAGE: &str = "town-manager --root <数据目录> --app <应用数据目录> --web <前端构建目录> \
 --host-bin <host> [--port 0] [--bind 127.0.0.1] [--allow-host 域名] [--host-port 0] \
-[--ready-file 路径] [--session-secret 口令] [--max-running 1] [--mock-llm] [--stop-on-stdin-close]";
+[--ready-file 路径] [--session-secret 口令] [--max-running 1] [--mock-llm] [--stop-on-stdin-close] \
+[--only-resident]";
 
 impl Options {
     pub fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
@@ -63,7 +66,7 @@ impl Options {
         let mut it = args;
         while let Some(arg) = it.next() {
             match arg.as_str() {
-                "--mock-llm" | "--stop-on-stdin-close" => flags.push(arg),
+                "--mock-llm" | "--stop-on-stdin-close" | "--only-resident" => flags.push(arg),
                 "--root" | "--app" | "--web" | "--host-bin" | "--port" | "--ready-file"
                 | "--session-secret" | "--max-running" | "--bind" | "--allow-host"
                 | "--host-port" => {
@@ -112,6 +115,9 @@ impl Options {
             max_running: number("--max-running", 1)?.max(1),
             mock_llm: flags.iter().any(|f| f == "--mock-llm"),
             stop_on_stdin_close: flags.iter().any(|f| f == "--stop-on-stdin-close"),
+            // 只开放常驻小镇：命令行开关，或者服务器上用环境变量打开（桌面端不必动参数）
+            only_resident: flags.iter().any(|f| f == "--only-resident")
+                || std::env::var("TOWN_ONLY_RESIDENT").is_ok_and(|v| v == "1"),
         })
     }
 }

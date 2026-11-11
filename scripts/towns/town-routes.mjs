@@ -207,6 +207,9 @@ export function createTownRoutes({
   resident,
   accounts,
   accountConfig,
+  // 只开放后台常驻的那一个小镇（公网部署时用）：迁移留下的别的小镇在首页看得见，
+  // 但谁进都得先让管理员把常驻换过去。
+  onlyResident = false,
 }) {
   const inTown = (id, fn) => serial('town-' + safeId(id), fn)
   /** 这次请求是谁：agent 是账号自己的东西，没账号就没得谈 */
@@ -282,6 +285,8 @@ export function createTownRoutes({
             resident: town.id === residentId,
           })),
           resident: residentId,
+          // 只开放常驻小镇：首页据此把其余小镇的「进镇」按钮收起来，别让人白点一下吃 403
+          locked: onlyResident,
           // 只有管理员能安排后台运行、能改常驻小镇的速度和天气：首页据此显示那几个按钮
           admin: current(headers)?.role === 'admin',
           // 常驻小镇此刻的速度与天气：首页的控制按钮要显示当前值
@@ -598,6 +603,13 @@ export function createTownRoutes({
         }
         // 有后台运行的小镇时，别人只能进那一个：管理员想换，先在首页把常驻换过来
         const residentId = resident.town()
+        // 公网部署：连管理员也不能绕开常驻镇，换镇的唯一办法是先在首页换常驻
+        if (onlyResident && residentId !== id) {
+          if (!residentId)
+            throw new HttpError(403, '这台服务器只开放常驻小镇，管理员还没在首页设常驻', 'resident')
+          const { name } = await storage.labels(residentId, await storage.map(residentId))
+          throw new HttpError(403, `这台服务器只开放「${name}」`, 'resident')
+        }
         if (residentId && residentId !== id && current(headers)?.role !== 'admin') {
           const { name } = await storage.labels(residentId, await storage.map(residentId))
           throw new HttpError(
