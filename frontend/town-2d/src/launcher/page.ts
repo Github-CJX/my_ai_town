@@ -630,7 +630,18 @@ function renderAgents() {
   const quota = capped
     ? ` · 额度 ${cap.calls_per_day ?? '不限'} 次 / ${cap.tokens_per_day ? tokens(cap.tokens_per_day) : '不限'}`
     : ''
-  agentNote.textContent = `我的 agent · ${count} · ${billing}${used}${unknown}${quota}`
+  // 跨天账本：今天之外的也算上，换天归零不会把这些丢了
+  const week = accountUsage
+    ? accountUsage.history.reduce(
+        (sum, day) => ({ calls: sum.calls + day.calls, tokens: sum.tokens + day.tokens }),
+        { calls: 0, tokens: 0 }
+      )
+    : null
+  const longer =
+    week && week.calls > accountUsage!.totals.calls
+      ? ` · 近 7 天 ${week.calls} 次 / ${tokens(week.tokens)}`
+      : ''
+  agentNote.textContent = `我的 agent · ${count} · ${billing}${used}${unknown}${quota}${longer}`
 
   const strip = document.createElement('div')
   strip.className = 'agent-strip'

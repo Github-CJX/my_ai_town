@@ -11,6 +11,7 @@ import { createModelRoutes } from './towns/models.mjs'
 import { createBuiltinModelRoutes } from './towns/builtin-model.mjs'
 import { createTownRoutes, applySpeed, observe, sendOwnerKeys } from './towns/town-routes.mjs'
 import { createResident, readResident } from './towns/resident.mjs'
+import { foldTowns } from './towns/usage.mjs'
 import { Raw, HttpError, readBody, describe } from './towns/http.mjs'
 import http from 'node:http'
 import fs from 'node:fs/promises'
@@ -268,8 +269,17 @@ export async function createManager({
     }
     await ensureResident()
   }
-  // 每 15 秒看一眼：常驻小镇死了就拉回来（管理员取消常驻之后它自然什么都不做）
-  const heartbeat = setInterval(() => void ensureResident(), 15000)
+  // 每 15 秒看一眼：常驻小镇死了就拉回来（管理员取消常驻之后它自然什么都不做）；
+  // 顺手把各账号的跨天账本折一次，人不在首页也不会把昨天丢掉
+  const foldLedgers = async () => {
+    for (const user of accounts.list()) {
+      await foldTowns({ root, userId: user.id, hosts }).catch(() => {})
+    }
+  }
+  const heartbeat = setInterval(() => {
+    void ensureResident()
+    void foldLedgers()
+  }, 15000)
   heartbeat.unref()
   async function stop() {
     if (stopping) return

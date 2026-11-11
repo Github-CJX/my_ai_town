@@ -250,10 +250,30 @@ export type AccountUsageRow = {
   unmetered: number
 }
 
+/** 账本里某一天的用量：`tokens` 只算服务商报回来的，没报的几次在 `unmetered`（估算值在 `estimated`） */
+export type AccountUsageDay = {
+  day: string
+  calls: number
+  tokens: number
+  input_tokens: number
+  cache_hit_tokens: number
+  unmetered: number
+  estimated: number
+  agents: {
+    agent_id: string
+    name: string
+    calls: number
+    tokens: number
+    unmetered: number
+  }[]
+}
+
 export type AccountUsage = {
   budget: AccountBudget
   totals: { calls: number; tokens: number; unmetered: number }
   agents: AccountUsageRow[]
+  /** 最近几天（新的在前）：跨天留着，小镇换天归零也不会丢 */
+  history: AccountUsageDay[]
 }
 
 /** 这个账号今天用了多少；管理服务没有这个接口（老版本）时返回 null */

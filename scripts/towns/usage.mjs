@@ -90,6 +90,155 @@ export const townName = async (storage, id) => {
 
 const number_of = (value) => (Number.isInteger(value) ? value : 0)
 
+/** 账号的跨天账本存这里：逐日逐人，请求号去重（世界那边的台账只留最近若干条，日计数过一天就归零）。 */
+export const ledgerFile = (root, userId) => path.join(root, 'users', safeId(userId), 'usage.json')
+
+const nowSecs = () => Math.floor(Date.now() / 1000)
+
+/** Unix 秒 → UTC 日期 `YYYY-MM-DD`（和 Rust 那边同一套算法）。 */
+const dayOf = (secs) => new Date(secs * 1000).toISOString().slice(0, 10)
+
+const blankDay = () => ({
+  calls: 0,
+  tokens: 0,
+  input_tokens: 0,
+  cache_hit_tokens: 0,
+  unmetered: 0,
+  estimated: 0,
+})
+
+export async function readLedger(root, userId) {
+  const ledger = { days: {}, seen: {} }
+  let doc = {}
+  try {
+    doc = await readJson(ledgerFile(root, userId))
+  } catch {
+    return ledger
+  }
+  for (const [day, per] of Object.entries(doc?.days ?? {})) {
+    const row = {}
+    for (const [agent, usage] of Object.entries(per ?? {})) {
+      const here = blankDay()
+      for (const key of Object.keys(here)) here[key] = number_of(usage?.[key])
+      row[agent] = here
+    }
+    ledger.days[day] = row
+  }
+  for (const [key, at] of Object.entries(doc?.seen ?? {})) {
+    if (Number.isInteger(at)) ledger.seen[key] = at
+  }
+  return ledger
+}
+
+export async function saveLedger(root, userId, ledger) {
+  await atomicJson(ledgerFile(root, userId), ledger)
+}
+
+/**
+ * 把世界这次的请求台账折进跨天账本：按请求号去重，还在路上的等它落定。
+ * `owners` 是 居民 → agent 编号，不是自己投的那几位不记。
+ */
+export function foldLedger(ledger, town, usage, owners) {
+  const now = nowSecs()
+  for (const request of usage?.requests ?? []) {
+    const resident = request?.resident_id
+    const agent = owners.get(resident)
+    if (!agent) continue
+    // 还在路上的不算：等它落定，下一次折账本时再计一次（旧存档里的中文值也认）
+    if (request.status === 'in_flight' || request.status === '进行中') continue
+    const sentAt = number_of(request.sent_at)
+    const at = sentAt === 0 ? now : sentAt
+    const key = `${town}/${resident}/${at}/${number_of(request.id)}`
+    if (ledger.seen[key] != null) continue
+    ledger.seen[key] = at
+    const day = dayOf(at)
+    if (!ledger.days[day]) ledger.days[day] = {}
+    if (!ledger.days[day][agent]) ledger.days[day][agent] = blankDay()
+    const here = ledger.days[day][agent]
+    here.calls += 1
+    const input = Number.isInteger(request.input_tokens) ? request.input_tokens : null
+    const output = Number.isInteger(request.output_tokens) ? request.output_tokens : null
+    if (input !== null || output !== null) {
+      here.tokens += (input ?? 0) + (output ?? 0)
+      here.input_tokens += input ?? 0
+      here.cache_hit_tokens += number_of(request.cache_hit_tokens)
+    } else {
+      // 没报计量的那次：真花掉的钱是「不知道」，估算值另放一栏，不写成 0 token
+      here.unmetered += 1
+      here.estimated += number_of(request.reserved_tokens)
+    }
+  }
+}
+
+/** 留 30 天的日账、8 天的请求号：再旧的世界那边也早看不到了。 */
+export function pruneLedger(ledger, now = nowSecs()) {
+  const keepDays = dayOf(now - 30 * 86400)
+  for (const day of Object.keys(ledger.days)) if (day < keepDays) delete ledger.days[day]
+  const keepAfter = now - 8 * 86400
+  for (const [key, at] of Object.entries(ledger.seen)) if (at < keepAfter) delete ledger.seen[key]
+}
+
+/** 最近几天的账，新的在前。 */
+export function historyOf(ledger, days, names = new Map()) {
+  return Object.keys(ledger.days)
+    .sort()
+    .reverse()
+    .slice(0, days)
+    .map((day) => {
+      const sums = blankDay()
+      const agents = []
+      for (const [agent, here] of Object.entries(ledger.days[day])) {
+        sums.calls += here.calls
+        sums.tokens += here.tokens
+        sums.input_tokens += here.input_tokens
+        sums.cache_hit_tokens += here.cache_hit_tokens
+        sums.unmetered += here.unmetered
+        sums.estimated += here.estimated
+        agents.push({
+          agent_id: agent,
+          name: names.get(agent) ?? agent,
+          calls: here.calls,
+          tokens: here.tokens,
+          unmetered: here.unmetered,
+        })
+      }
+      return { day, ...sums, agents }
+    })
+}
+
+/** 某个镇此刻的用量（没在跑就是 null）。 */
+async function usageOf(hosts, town) {
+  if (!hosts.isRunning(town)) return null
+  try {
+    return await hosts.query(town, { type: 'get_usage' }, (m) => m.type === 'usage')
+  } catch {
+    return null
+  }
+}
+
+/** 心跳里顺手折一次：人不在首页（没有 GET /usage）也不会把昨天丢掉。 */
+export async function foldTowns({ root, userId, hosts }) {
+  const agents = await listAgents(root, userId)
+  if (!agents.length) return
+  const towns = new Map()
+  const owners = new Map()
+  for (const agent of agents) {
+    for (const [town, record] of Object.entries(agent.deployed ?? {})) {
+      if (!towns.has(town)) towns.set(town, await usageOf(hosts, town))
+      if (!owners.has(town)) owners.set(town, new Map())
+      owners.get(town).set(record.resident, agent.id)
+    }
+  }
+  const ledger = await readLedger(root, userId)
+  const before = JSON.stringify(ledger)
+  for (const [town, usage] of towns) {
+    const mine = owners.get(town)
+    if (usage && mine) foldLedger(ledger, town, usage, mine)
+  }
+  pruneLedger(ledger)
+  if (JSON.stringify(ledger) !== before) await saveLedger(root, userId, ledger)
+}
+
 /**
  * 这个账号今天用了多少：把每个镇里自己那几位居民的用量加起来。
  * 只算已经投出去的居民——定义还在手里的时候不花任何人的钱。
@@ -98,21 +247,17 @@ export async function usageSummary({ root, userId, hosts, storage }) {
   const agents = await listAgents(root, userId)
   const budget = await readBudget(root, userId)
   const towns = new Map()
+  const owners = new Map()
+  const names = new Map()
   const rows = []
   const totals = { calls: 0, tokens: 0, unmetered: 0 }
   for (const agent of agents) {
+    names.set(agent.id, agent.name)
     for (const [town, record] of Object.entries(agent.deployed ?? {})) {
-      if (!towns.has(town)) {
-        let usage = null
-        if (hosts.isRunning(town)) {
-          try {
-            usage = await hosts.query(town, { type: 'get_usage' }, (m) => m.type === 'usage')
-          } catch {
-            usage = null
-          }
-        }
-        towns.set(town, usage)
-      }
+      if (!towns.has(town)) towns.set(town, await usageOf(hosts, town))
+      // 居民 → agent：世界只知道居民，账号这边记着他是谁投的
+      if (!owners.has(town)) owners.set(town, new Map())
+      owners.get(town).set(record.resident, agent.id)
       const usage = towns.get(town)
       const row = (usage?.residents ?? []).find((item) => item.id === record.resident) ?? null
       const mine = (usage?.requests ?? []).filter(
@@ -142,5 +287,14 @@ export async function usageSummary({ root, userId, hosts, storage }) {
       })
     }
   }
-  return { ok: true, budget, totals, agents: rows }
+  // 账本是给「过了今天」看的：世界的日计数会在换天时归零，这里留一份不会丢的
+  const ledger = await readLedger(root, userId)
+  const before = JSON.stringify(ledger)
+  for (const [town, usage] of towns) {
+    const mine = owners.get(town)
+    if (usage && mine) foldLedger(ledger, town, usage, mine)
+  }
+  pruneLedger(ledger)
+  if (JSON.stringify(ledger) !== before) await saveLedger(root, userId, ledger)
+  return { ok: true, budget, totals, agents: rows, history: historyOf(ledger, 7, names) }
 }

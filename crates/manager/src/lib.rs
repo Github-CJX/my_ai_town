@@ -202,6 +202,26 @@ impl App {
         }
     }
 
+    /// 心跳里顺手折一次各账号的跨天账本：人不在首页（没有 `GET /usage`）也不会把昨天丢掉。
+    fn fold_ledgers(&self) {
+        if self.hosts.ids().is_empty() {
+            return;
+        }
+        let homes: Vec<PathBuf> = {
+            let accounts = self.accounts.lock().unwrap();
+            accounts
+                .list()
+                .iter()
+                .map(|user| accounts.home(&user.id))
+                .collect()
+        };
+        for home in homes {
+            if let Err(error) = usage::fold_towns(&self.hosts, &home) {
+                eprintln!("[town-manager] 折账本没成功：{}", error.message);
+            }
+        }
+    }
+
     /// 就不抢回来，告诉页面原因；不然两个页面会来回互相挤。电脑版管理服务按同样的规则。
     fn refuse_displaced(&self, id: &str, automatic: bool) -> Result<(), ApiError> {
         let by = self.displaced.lock().unwrap().get(id).cloned();
@@ -383,6 +403,7 @@ fn serve(options: Options, storage: Storage) -> Result<(), String> {
                 return;
             }
             app.ensure_resident();
+            app.fold_ledgers();
             std::thread::sleep(Duration::from_secs(15));
         });
     }

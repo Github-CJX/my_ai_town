@@ -164,6 +164,8 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     assert.equal(usage.agents[0].resident, deployed.agent.deployed[0].resident)
     assert.equal(typeof usage.agents[0].town_name, 'string')
     assert.deepEqual(usage.budget, {})
+    // 跨天账本：还没说过话，所以是空的（世界那边一有落定的请求就折进来）
+    assert.deepEqual(usage.history, [])
 
     // 自己的每日额度：存下来能读回来，0 不算额度（要清就空着）
     const capped = await api('/budget', { calls_per_day: 30, tokens_per_day: 500000 })
