@@ -513,8 +513,14 @@ function renderAgentActions(agent: HomeAgent, here: MapEntry | undefined) {
       villagers.open({
         agent,
         townId: here?.id ?? null,
-        onSaved: (saved) => {
+        onSaved: (saved, joinAfter) => {
           agentPicked = saved.id
+          // 点的是「保存并加入小镇」：这个人还没在这个镇里，就顺手投进来
+          const already = saved.deployed.some((place) => place.town === here?.id)
+          if (joinAfter && here && !already) {
+            void deployTo(saved, here)
+            return
+          }
           agentSay(`「${saved.name}」的人设改好了。已经投出去的那位不会跟着变，收回再投才更新。`)
           void loadAgents()
         },
@@ -590,9 +596,17 @@ function renderAgents() {
         townId: here?.id ?? null,
         onSaved: (agent, joinAfter) => {
           agentPicked = agent.id
-          agentSay(`已经建好「${agent.name}」了。`)
-          if (joinAfter && here) void deployTo(agent, here)
-          else void loadAgents()
+          // 没有正在跑的小镇时「保存并加入小镇」只存下了定义：说清楚，别让人以为投放了
+          if (joinAfter && here) {
+            void deployTo(agent, here)
+            return
+          }
+          agentSay(
+            joinAfter
+              ? `已经建好「${agent.name}」了。先选中一个跑着的小镇，再投放。`
+              : `已经建好「${agent.name}」了，存进了我的 agent。`
+          )
+          void loadAgents()
         },
       })
     },

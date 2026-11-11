@@ -70,9 +70,15 @@ export function installVillagerEditor(
 
       function render() {
         const handle = renderEditor(ctx, existing, undefined, 'roster')
-        // 编辑器自带的返回按钮写着「返回村中居民」：首页没有名册，改成取消
-        const back = handle.root.querySelector('button')
-        if (back) back.textContent = '取消'
+        // 编辑器自己那颗返回按钮（在镇里写着「← 返回村中居民」）在首页改成取消；
+        // 「保存到村民库」在首页存的是账号里的定义，也跟着改个说法
+        for (const button of handle.root.querySelectorAll('button')) {
+          const text = button.textContent
+          if (text === '← 返回村中居民') button.textContent = '取消'
+          else if (text === '保存到村民库') button.textContent = '保存修改'
+          else if (text === '只存进村民库') button.textContent = '先只保存'
+          else if (text === '取消') button.remove()
+        }
         host.replaceChildren(handle.root)
       }
 
