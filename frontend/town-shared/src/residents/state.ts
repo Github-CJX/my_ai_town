@@ -35,6 +35,8 @@ export interface ResidentsDeps {
   placeNames: () => string[]
   /** 打开村民页时收起居民卡 */
   onOverlayOpen: () => void
+  /** 能不能请人入住：名册大家都能看，新建与从村民库挑选只有管理员能做 */
+  canAdd: () => boolean
 }
 
 export type ResidentsTab = 'roster' | 'library'

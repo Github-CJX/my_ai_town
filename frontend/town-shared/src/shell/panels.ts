@@ -102,6 +102,7 @@ export function createPanels(input: ShellInputs) {
       infoPanel.open(id)
     },
     invite: () => void open.residents(),
+    canInvite: () => avatar.isAdmin(),
     selected: () => infoPanel.selected(),
     avatarActive: () => avatar.active(),
   })
@@ -218,6 +219,7 @@ export function createPanels(input: ShellInputs) {
     library: (cards) => emptyTown.setLibrary(cards),
     // 消耗页算钱：村民按自己用的模型，不给编号时按小镇默认的模型
     price: (id) => priceOf(id ? modelWait.modelOf(id) : models.options()[0]),
+    canAdd: () => avatar.isAdmin(),
   })
   // 点「开始」前：还没连模型先请玩家连上，连上了但有人没选模型就地问一句（modelWait.ts）
   pages.speeds.setGate((go) => modelWait.gate(go))
@@ -237,13 +239,23 @@ export function createPanels(input: ShellInputs) {
     openSettings: () => void session.enter(),
     fixHold: (fix, provider) => fixHold(fix, provider),
   })
-  const open = createOpeners({ avatar, pages, props, books, session })
+  const open = createOpeners({
+    avatar,
+    pages,
+    props,
+    books,
+    session,
+    canAdd: () => avatar.isAdmin(),
+    say: (text) => events.pushLocal(text, true),
+  })
+
   $('open-usage').onclick = open.usage
   $('open-settings').onclick = () => session.enter()
   lineLabel($('open-usage'), 'chart', '消耗')
   lineLabel($('open-settings'), 'settings', '设定')
   const emptyTown = installEmptyTown($('map'), {
     ready: () => !!worldSettings.state()?.ready,
+    canAdd: () => avatar.isAdmin(),
     create: open.newVillager,
     library: open.library,
     requestLibrary: pages.residents.requestLibrary,
@@ -336,15 +348,22 @@ function createOpeners(parts: {
   props: { open(): void; placing: { toggle(): void } | null }
   books: { open(): void }
   session: { inSettings(): boolean }
+  /** 请人入住只有管理员能做：名册照常打开，加人的入口挡一道并说明 */
+  canAdd: () => boolean
+  say: (text: string) => void
 }) {
   const { avatar, pages, props, books, session } = parts
   const guarded = (go: () => void) => async () => {
     if (await avatar.release()) go()
   }
+  const adding = (go: () => void) => async () => {
+    if (!parts.canAdd()) return parts.say('请人入住只有管理员能做')
+    await guarded(go)()
+  }
   return {
     residents: guarded(() => pages.residents.open()),
-    newVillager: guarded(() => pages.residents.create()),
-    library: guarded(() => pages.residents.open('library')),
+    newVillager: adding(() => pages.residents.create()),
+    library: adding(() => pages.residents.open('library')),
     props: guarded(() => props.open()),
     books: guarded(() => books.open()),
     placing: guarded(() => props.placing?.toggle()),
@@ -371,6 +390,8 @@ function createPages(
     joined: (list: JoinOutcome[], failed: string[], model: ModelOption | null) => void
     library: (cards: TemplateCard[]) => void
     price: (residentId?: string) => Price | null
+    /** 请人入住只有管理员能做（村民页里据此藏掉新建与挑选） */
+    canAdd: () => boolean
   }
 ) {
   const { map, events, localeName, send, game } = input
@@ -412,6 +433,7 @@ function createPages(
       infoPanel.collapse()
       panels.overlay(true)
     },
+    canAdd: panels.canAdd,
   })
   const speeds = installSpeedBar(send, session.setSpeed, input.normalSpeed)
   // HD-2D 暂停和自动快进时显示提示，空格开始运行

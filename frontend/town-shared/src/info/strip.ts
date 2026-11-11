@@ -73,6 +73,8 @@ interface StripDeps {
   open: (id: string) => void
   /** 点末尾的「邀请」：打开村民页 */
   invite: () => void
+  /** 能不能请人入住：头像条谁都能看，加人只有管理员 */
+  canInvite: () => boolean
   /** 正在选中谁 */
   selected: () => string | null
   /** 控制化身中：点头像和数字键都不接 */
@@ -232,7 +234,9 @@ export function createResidentStrip(deps: StripDeps) {
     const summary = `${rostered}/${order.length}/${attention}`
     if (summary !== counted) {
       counted = summary
-      root.hidden = !rostered
+      // 没有「邀请」这一格时，空镇子整条没什么可看：连条一起收起来
+      add.hidden = !deps.canInvite()
+      root.hidden = !rostered || (!order.length && add.hidden)
       // 空镇子没什么可收的：收起钮不出，收起过也照样露出「邀请」
       fold.hidden = !order.length
       root.classList.toggle('folded', folded && order.length > 0)

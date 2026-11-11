@@ -219,13 +219,24 @@ impl Hosts {
         command: Option<&Value>,
         want: impl Fn(&Value) -> bool,
     ) -> Result<Value, ApiError> {
+        self.query_in(id, command, want, 5)
+    }
+
+    /// 同上，`secs` 是等回执的秒数：请人入住这种要动存档的，比问一句状态慢。
+    pub fn query_in(
+        &self,
+        id: &str,
+        command: Option<&Value>,
+        want: impl Fn(&Value) -> bool,
+        secs: u64,
+    ) -> Result<Value, ApiError> {
         let endpoint = self
             .endpoint(id)
             .ok_or_else(|| ApiError::bad("这个小镇没在运行"))?;
         if let Some(record) = self.running.lock().unwrap().get_mut(id) {
             record.used = Instant::now();
         }
-        ws::query(&endpoint, command, want)
+        ws::query_in(&endpoint, command, want, Duration::from_secs(secs))
     }
 
     /// 现在跑得怎么样：速度、天气、有没有设好世界观、有没有开天气。没在运行回 None。

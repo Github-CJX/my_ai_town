@@ -352,6 +352,26 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             }
             return ok(status);
         }
+        // 账号自己的 agent：定义放在账号目录里，投进哪个小镇是下面 /:id/deploy 那一步
+        (true, "/agents") => {
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            let agents: Vec<Value> = crate::agents::list(&home)?
+                .iter()
+                .map(crate::agents::Agent::public)
+                .collect();
+            return ok(json!({ "agents": agents, "limit": me.agent_limit }));
+        }
+        (false, "/agents") => {
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            let agent = crate::agents::create(&home, &body(req)?, me.agent_limit)?;
+            return ok(json!({ "ok": true, "agent": agent.public() }));
+        }
+        (false, "/agents/delete") => {
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            let request = body(req)?;
+            crate::agents::remove(&home, request["id"].as_str().unwrap_or_default())?;
+            return ok(json!({ "ok": true }));
+        }
         _ => {}
     }
     let mut parts = rest.trim_start_matches('/').splitn(2, '/');
@@ -550,6 +570,149 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             }
             let marks = positions(&app.storage.town(id)?, &map.document, &request["instances"])?;
             ok(json!({ "positions": marks }))
+        }
+        // 这个镇现在收得下谁：正在跑的世界给一份还能用的模板（投放时从这里挑）
+        (true, "templates") => {
+            if !app.hosts.is_running(id) {
+                return Err(ApiError::new(
+                    409,
+                    "这个小镇没在运行：先进一次，或让它在后台运行",
+                ));
+            }
+            let library =
+                app.hosts
+                    .query(id, Some(&json!({ "type": "get_resident_library" })), |m| {
+                        m["type"] == "resident_library"
+                    })?;
+            let templates: Vec<Value> = library["templates"]
+                .as_array()
+                .map(|cards| {
+                    cards
+                        .iter()
+                        .filter(|card| card["status"] == "available")
+                        .map(|card| {
+                            json!({
+                                "template_id": card["template_id"],
+                                "version": card["version"],
+                                "name": card["name"],
+                                "intro": card["intro"],
+                                "tags": card["tags"],
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            ok(json!({ "templates": templates }))
+        }
+        // 手动投放：把账号里这份定义请进这个镇。世界不自动收人，必须由人点这一下。
+        (false, "deploy") => {
+            let request = body(req)?;
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            let mut agent =
+                crate::agents::read(&home, request["agent_id"].as_str().unwrap_or_default())?;
+            if agent.deployed_in(id).is_some() {
+                return Err(ApiError::new(409, "这个 agent 已经在这个镇里了"));
+            }
+            if !app.hosts.is_running(id) {
+                return Err(ApiError::new(
+                    409,
+                    "这个小镇没在运行：先进一次，或让它在后台运行",
+                ));
+            }
+            // 世界观没设好的世界还不收人：先说清楚缺哪一步，别让世界回一句「请先设置世界观」
+            let state = app
+                .hosts
+                .observe(id)
+                .ok_or_else(|| ApiError::new(409, "这个小镇正在拉起来，稍等一会儿再试"))?;
+            if !state["ready"].as_bool().unwrap_or(false) {
+                return Err(ApiError::new(
+                    409,
+                    "这个小镇还没设定世界观：先进镇里设定一次，再投放",
+                ));
+            }
+            let population =
+                app.hosts
+                    .query(id, Some(&json!({ "type": "get_population" })), |m| {
+                        m["type"] == "population"
+                    })?;
+            let view = &population["population"];
+            let people = view["residents"].as_array().cloned().unwrap_or_default();
+            if people
+                .iter()
+                .any(|person| person["name"] == agent.name.as_str())
+            {
+                return Err(ApiError::new(
+                    409,
+                    format!("镇上已经有叫「{}」的居民了，换一个名字再投", agent.name),
+                ));
+            }
+            let library =
+                app.hosts
+                    .query(id, Some(&json!({ "type": "get_resident_library" })), |m| {
+                        m["type"] == "resident_library"
+                    })?;
+            let cards = library["templates"].as_array().cloned().unwrap_or_default();
+            let usable = cards.iter().any(|card| {
+                card["template_id"] == agent.template_id.as_str()
+                    && card["version"].as_u64() == Some(agent.template_version as u64)
+                    && card["status"] == "available"
+            });
+            if !usable {
+                return Err(ApiError::new(
+                    409,
+                    "这个镇没有这个模板（或者它已经在用了）：换个模板，或在这个镇重新建一个 agent",
+                ));
+            }
+            let op_id = format!("agent-{}-{}", agent.id, crate::token());
+            let mut command = json!({
+                "type": "join_resident",
+                "op_id": op_id,
+                "world_id": view["world_id"],
+                "template_id": agent.template_id,
+                "template_version": agent.template_version,
+                "name": agent.name,
+            });
+            // 想住的落脚点在那个镇存在才填：没有就按世界自己安排
+            if let Some(wanted) = &agent.home {
+                let exists = view["homes"].as_array().is_some_and(|homes| {
+                    homes.iter().any(|home| home["locale"] == wanted.as_str())
+                });
+                if exists {
+                    command["home"] = Value::from(wanted.clone());
+                }
+            }
+            let reply = app
+                .hosts
+                .query_in(
+                    id,
+                    Some(&command),
+                    |m| {
+                        (m["type"] == "resident_joined" && m["outcome"]["op_id"] == op_id.as_str())
+                            || (m["type"] == "join_result" && m["op_id"] == op_id.as_str())
+                    },
+                    20,
+                )
+                .map_err(|error| {
+                    if error.status == 400 {
+                        ApiError::new(409, error.message)
+                    } else {
+                        error
+                    }
+                })?;
+            let outcome = &reply["outcome"];
+            if outcome["ok"].as_bool() != Some(true) {
+                let message = outcome["message"]
+                    .as_str()
+                    .unwrap_or("没能把这个 agent 投进去");
+                return Err(ApiError::new(409, message));
+            }
+            let resident = outcome["resident_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            let name = outcome["name"].as_str().unwrap_or(&agent.name).to_owned();
+            crate::agents::record_deploy(&home, &mut agent, id, &resident, &name)?;
+            ok(json!({ "ok": true, "agent": agent.public() }))
         }
         _ => Err(ApiError::new(404, "操作不存在")),
     }

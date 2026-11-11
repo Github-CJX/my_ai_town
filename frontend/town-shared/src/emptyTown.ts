@@ -14,6 +14,8 @@ export function installEmptyTown(
   deps: {
     /** 世界观已经设好（首次对话框和开局向导关着） */
     ready: () => boolean
+    /** 请人入住只有管理员能做：别人这里只写一句，按钮都不出 */
+    canAdd: () => boolean
     create: () => void
     library: () => void
     /** 要村民库列表（回来时调 setLibrary） */
@@ -40,6 +42,14 @@ export function installEmptyTown(
   map.append(card)
 
   function render() {
+    // 别人进来只看到一句话：请人入住只有管理员能做，按钮一个都不出
+    if (!deps.canAdd()) {
+      card.replaceChildren(
+        el('h2', '小镇里还没有村民'),
+        el('p', '世界已经设好了，等管理员请几位村民搬进来。')
+      )
+      return
+    }
     const picks = cards ? recommended(cards, Math.min(PICKS.length, room)) : []
     const actions = el('div', '', 'empty-town-actions')
     const body: HTMLElement[] = [
@@ -109,7 +119,7 @@ export function installEmptyTown(
     const empty = residents === 0
     document.documentElement.toggleAttribute('data-empty-town', empty)
     const show = empty && deps.ready()
-    if (show && !requested) {
+    if (show && !requested && deps.canAdd()) {
       requested = true
       deps.requestLibrary()
     }

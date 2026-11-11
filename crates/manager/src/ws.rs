@@ -54,7 +54,17 @@ pub fn query(
     command: Option<&Value>,
     want: impl Fn(&Value) -> bool,
 ) -> Result<Value, ApiError> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    query_in(endpoint, command, want, Duration::from_secs(5))
+}
+
+/// 同上，但等多久由调用方定：请人入住要等世界写档，比问一句「现在几倍速」慢得多。
+pub fn query_in(
+    endpoint: &str,
+    command: Option<&Value>,
+    want: impl Fn(&Value) -> bool,
+    timeout: Duration,
+) -> Result<Value, ApiError> {
+    let deadline = Instant::now() + timeout;
     let mut socket = connect(endpoint, Duration::from_millis(200))?;
     if let Some(command) = command {
         socket

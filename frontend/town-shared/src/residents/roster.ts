@@ -86,8 +86,9 @@ function plainRow(ctx: ResidentsContext, r: Registration) {
   return row
 }
 
-/** 新建村民（主按钮）和从村民库挑选 */
+/** 新建村民（主按钮）和从村民库挑选；请人入住只有管理员能做，别人这里不出按钮 */
 function inviteButtons(ctx: ResidentsContext) {
+  if (!ctx.deps.canAdd()) return []
   return [
     button('＋ 新建村民', () => ctx.newVillager('roster'), 'primary'),
     button('从村民库挑选', () => ctx.setTab('library')),
@@ -102,14 +103,17 @@ function plainRoster(ctx: ResidentsContext): ViewHandle {
   box.append(bar)
   if (!residents.length) {
     // 空村：按钮放进大卡片里，页首只留住宅与出生位置
+    const buttons = inviteButtons(ctx)
     const empty = el('div', '', 'rv-empty rv-create')
     const actions = el('div', '', 'row')
-    actions.append(...inviteButtons(ctx))
+    actions.append(...buttons)
     empty.append(
-      el('h3', '还没有村民，来创造第一位吧'),
+      el('h3', buttons.length ? '还没有村民，来创造第一位吧' : '还没有村民'),
       el(
         'p',
-        '写一句话，模型就替你写好人设、挑好长相；也可以自己捏长相、写性格，小丑、外星人、孙悟空都捏得出来。保存后直接请进小镇。',
+        buttons.length
+          ? '写一句话，模型就替你写好人设、挑好长相；也可以自己捏长相、写性格，小丑、外星人、孙悟空都捏得出来。保存后直接请进小镇。'
+          : '名册大家都能看；请人入住只有管理员能做——等管理员请几位村民搬进来。',
         'dim'
       ),
       actions,

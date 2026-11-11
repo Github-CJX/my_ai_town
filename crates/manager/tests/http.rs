@@ -640,3 +640,126 @@ fn resident_town_is_arranged_and_controlled_by_admin_only() {
     );
     assert_eq!(status, 404);
 }
+
+// 账号自己的 agent：定义存在各自的账号目录里，互相看不见；普通账号一个名额，管理员不限
+#[test]
+fn an_account_keeps_its_agents_apart_from_other_accounts() {
+    let manager = Manager::start("agents");
+    let nobody = format!("Cookie: town_session={SECRET}\r\n");
+    let (status, response) = manager.get("/api/towns/agents", &nobody);
+    assert_eq!(status, 401);
+    assert_eq!(json_of(&response)["code"], "account", "{response}");
+
+    // 管理员不限个数：一开始一个也没有
+    let cookie = manager.cookie();
+    let (status, response) = manager.get("/api/towns/agents", &cookie);
+    assert_eq!(status, 200, "{response}");
+    let mine = json_of(&response);
+    assert_eq!(mine["agents"], serde_json::json!([]));
+    assert!(mine["limit"].is_null(), "{mine}");
+
+    let (status, made) = post(
+        &manager,
+        "/agents",
+        &serde_json::json!({
+            "name": "阿岚", "template_id": "library-1", "template_version": 2, "home": "loc_a"
+        }),
+    );
+    assert_eq!(status, 200, "{made}");
+    let agent = &made["agent"];
+    assert_eq!(agent["name"], "阿岚");
+    assert_eq!(agent["home"], "loc_a");
+    assert!(agent["deployed"].as_array().unwrap().is_empty(), "{made}");
+
+    // 同一个账号里不能有两个同名的：镇上两个「阿岚」分不清谁是谁
+    let (status, same) = post(
+        &manager,
+        "/agents",
+        &serde_json::json!({
+            "name": "阿岚", "template_id": "library-2", "template_version": 1
+        }),
+    );
+    assert_eq!(status, 400, "{same}");
+    assert!(
+        same["error"].as_str().unwrap_or_default().contains("同名"),
+        "{same}"
+    );
+    // 名字太长、模板没给：都不收
+    assert_eq!(
+        post(
+            &manager,
+            "/agents",
+            &serde_json::json!({ "name": "一二三四五六七八九十一二三四五六七", "template_id": "library-1", "template_version": 2 }),
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        post(
+            &manager,
+            "/agents",
+            &serde_json::json!({ "name": "没模板", "template_version": 2 }),
+        )
+        .0,
+        400
+    );
+
+    // 朋友只有一个名额：建第二个时回一句人话
+    let friend = manager.friend("朋友", "1357");
+    let friend_cookie = manager.as_user(&friend);
+    let (status, response) = manager.get("/api/towns/agents", &friend_cookie);
+    let theirs = json_of(&response);
+    assert_eq!(status, 200, "{response}");
+    assert!(theirs["agents"].as_array().unwrap().is_empty(), "{theirs}");
+    assert_eq!(theirs["limit"], 1, "{theirs}");
+    let (status, ok) = post_as(
+        &manager,
+        &friend_cookie,
+        "/agents",
+        &serde_json::json!({ "name": "朋友的小人", "template_id": "library-1", "template_version": 2 }),
+    );
+    assert_eq!(status, 200, "{ok}");
+    let (status, full) = post_as(
+        &manager,
+        &friend_cookie,
+        "/agents",
+        &serde_json::json!({ "name": "再来一个", "template_id": "library-2", "template_version": 1 }),
+    );
+    assert_eq!(status, 403, "{full}");
+    assert_eq!(full["code"], "limit", "{full}");
+
+    // 各看各的：管理员这份里没有朋友的
+    let (_, response) = manager.get("/api/towns/agents", &cookie);
+    let mine = json_of(&response);
+    assert_eq!(mine["agents"].as_array().unwrap().len(), 1, "{mine}");
+
+    // 定义写在各自的账号目录里（和 Node 版同一个格式），删掉就没了；朋友的还在
+    let id = agent["id"].as_str().unwrap().to_owned();
+    let me = cookie
+        .split("town_user=")
+        .nth(1)
+        .expect("Cookie 里没有账号编号")
+        .trim()
+        .to_owned();
+    let stored = manager
+        .dir
+        .join("home/users")
+        .join(&me)
+        .join("agents")
+        .join(format!("{id}.json"));
+    let saved = fs::read_to_string(&stored).unwrap_or_default();
+    assert!(saved.contains("阿岚"), "{saved}");
+    let (status, _) = post(&manager, "/agents/delete", &serde_json::json!({ "id": id }));
+    assert_eq!(status, 200);
+    assert!(!stored.exists());
+    let (_, response) = manager.get("/api/towns/agents", &cookie);
+    assert_eq!(json_of(&response)["agents"], serde_json::json!([]));
+    let (_, response) = manager.get("/api/towns/agents", &friend_cookie);
+    assert_eq!(json_of(&response)["agents"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        fs::read_dir(manager.dir.join("home/users").join(&friend).join("agents"))
+            .unwrap()
+            .count(),
+        1
+    );
+}

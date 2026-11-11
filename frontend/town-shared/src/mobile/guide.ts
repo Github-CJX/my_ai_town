@@ -76,6 +76,8 @@ interface GuideDeps {
   normalSpeed: number
   /** 向导结束（开始或跳过）：开始一次性提示；joined 是这次请进来的居民 */
   onFinish: (started: boolean, joined: string[]) => void
+  /** 能不能请人入住：非管理员这一步只说明一句，不列人选、也不请人 */
+  canAdd: () => boolean
 }
 
 type Waiter = { match: (m: ServerMsg) => unknown; resolve: (v: unknown) => void; consume: boolean }
@@ -511,6 +513,15 @@ export function createGuide(d: GuideDeps) {
 
   // 第三步：请居民
   function residents(): HTMLElement[] {
+    // 请人入住只有管理员能做：别人看到的是一句说明，后面「开始」也不会带人进来
+    if (!d.canAdd())
+      return [
+        el(
+          'p',
+          '请人入住只有管理员能做。世界观先设好，等管理员请几位村民搬进来，你就能进来看他们过日子。',
+          'dim'
+        ),
+      ]
     const free = templates.filter((t) => t.status === 'available' && !t.archived)
     // 一处住宅住一个人：空房比默认人数少时只请得下这么多
     const room = roomLeft(population)
@@ -684,7 +695,9 @@ export function createGuide(d: GuideDeps) {
     const existing = population?.residents.map((r) => r.id) ?? []
     const joined: string[] = []
     const thinking = choice ? `，用 ${providerName(choice.provider)} 思考` : ''
-    for (const i of wishes) {
+    // 非管理员不请人：居民那一步已经说明过
+    const mayAdd = d.canAdd()
+    for (const i of mayAdd ? wishes : []) {
       const line = d.suggestions[i]
       steps.push({
         key: `wish:${i}`,
@@ -697,7 +710,7 @@ export function createGuide(d: GuideDeps) {
         },
       })
     }
-    for (const id of picks) {
+    for (const id of mayAdd ? picks : []) {
       const t = templates.find((x) => x.template_id === id)
       if (!t) continue
       steps.push({

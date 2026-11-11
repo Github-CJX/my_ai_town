@@ -55,7 +55,10 @@ function plainToolbar(ctx: ResidentsContext) {
     searchBox(ctx),
     kind,
     archived,
-    button('＋ 新建村民', () => ctx.newVillager('library'), 'primary')
+    // 请人入住只有管理员能做：别人只在这里看库
+    ...(ctx.deps.canAdd()
+      ? [button('＋ 新建村民', () => ctx.newVillager('library'), 'primary')]
+      : [])
   )
   return bar
 }
@@ -77,7 +80,7 @@ function plainCard(ctx: ResidentsContext, c: TemplateCard, onPick: (id: string) 
   card.append(head, el('p', c.intro))
   if (c.tags.length) card.append(el('p', c.tags.join(' · '), 'dim'))
   const actions = el('div', '', 'row')
-  if (c.status === 'available') {
+  if (c.status === 'available' && ctx.deps.canAdd()) {
     const pick = button(picked ? '已选 ✓' : '选这位', () => onPick(c.template_id))
     pick.className = picked ? 'primary' : ''
     pick.setAttribute('aria-pressed', String(picked))

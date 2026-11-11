@@ -2,6 +2,7 @@
 //! 手机版由应用壳启动；桌面版目前仍是 scripts/town-manager.mjs，两边的接口一致，
 //! 建镇（地图生成）暂时只在桌面版。
 mod accounts;
+mod agents;
 mod builtin;
 mod creation;
 pub mod error;

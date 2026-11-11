@@ -123,6 +123,7 @@ export function startGameShell(
       tips.start()
       lookAt(joined[0])
     },
+    canAdd: () => panels.avatar.isAdmin(),
   })
   /** 新居民从入口进镇：镜头挪过去。名册可能晚一帧才带上新人，等一会儿再找 */
   function lookAt(id: string | undefined, tries = 20) {

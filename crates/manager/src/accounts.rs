@@ -320,6 +320,11 @@ impl Accounts {
         Ok(user)
     }
 
+    /// 这个账号自己的目录（users/<id>）：agent 定义这类只属于这个账号的东西放在这里。
+    pub fn home(&self, id: &str) -> PathBuf {
+        self.root.join("users").join(id)
+    }
+
     /// 这个账号该用哪份应用配置：管理员用小镇的公共配置，普通账号用自己目录下的那一份。
     /// 普通账号的服务商名单沿用小镇的，密钥从空开始——他的 Agent 用他自己填的密钥。
     pub fn config(&self, base: &Path, user: &User) -> Result<PathBuf, ApiError> {
