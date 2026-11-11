@@ -27,7 +27,39 @@ function checkName(name) {
   return clean
 }
 
+/**
+ * 这个账号自己选定的模型与密钥（application.json → providers.json + credentials.json）。
+ * 管理员那份就是小镇的密钥；普通账号从空开始，得他自己填。没选模型或没填密钥回 null，
+ * 那时照样能投，只是那名村民会先在镇上等着。
+ */
+export async function apiOf(application) {
+  const doc = await readJson(application)
+  return apiFromPaths(doc.providers_path, doc.credentials_path)
+}
+
+/** 已经知道两份文件在哪时直接读（世界重启后重发密钥也走这里） */
+export async function apiFromPaths(providersPath, credentialsPath) {
+  let providers = {}
+  try {
+    providers = await readJson(providersPath)
+  } catch {}
+  const provider = String(providers.active?.provider ?? '')
+  const model = String(providers.active?.model ?? '')
+  if (!provider || !model) return null
+  let credentials = {}
+  try {
+    credentials = await readJson(credentialsPath)
+  } catch {}
+  const api_key = String(credentials[provider] ?? '')
+  if (!api_key.trim()) return null
+  const base_url = String(
+    (providers.providers ?? []).find((entry) => entry.id === provider)?.base_url ?? ''
+  )
+  return { provider, model, base_url, api_key }
+}
+
 /** 页面看到的 agent：投放记录按小镇列表给出，页面上好显示「在上镇」「在下镇」 */
+
 export function publicAgent(agent) {
   return {
     id: agent.id,

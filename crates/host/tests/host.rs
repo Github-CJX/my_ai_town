@@ -3,6 +3,7 @@
 mod support;
 
 mod avatar;
+mod byok;
 mod commands;
 mod content;
 mod departure;

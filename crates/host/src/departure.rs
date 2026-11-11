@@ -33,6 +33,8 @@ impl Runtime {
         };
         let message = format!("「{name}」已经离开了小镇");
         println!("[host] {message}");
+        // 他走了就把他的密钥一起丢掉：留在内存里也没人用了
+        self.owner_keys.forget(resident);
         // 世界日志立刻发出去：镇子停着不动的时候，留下的村民也能看到这句
         let events = self.world.take_events();
         self.driver.dispatch(&self.world, events, clients);

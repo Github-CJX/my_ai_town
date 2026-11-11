@@ -74,6 +74,7 @@ fn server_variants() -> Vec<String> {
         ResidentJoined,
         JoinResult,
         ResidentRemoved,
+        ResidentKeySaved,
     })
 }
 
@@ -99,6 +100,7 @@ fn client_variants() -> Vec<String> {
         GetModelConfig,
         SetModelConfig,
         SetResidentModel,
+        SetResidentKey,
         RestartBuiltinModel,
         TestModelConnection,
         GetAgentConfig,

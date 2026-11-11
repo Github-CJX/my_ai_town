@@ -502,11 +502,7 @@ fn chat_of(ws: &mut WebSocket<TcpStream>) -> Value {
     let s = state(ws);
     s["interactions"]
         .as_array()
-        .and_then(|v| {
-            v.iter()
-                .find(|i| i["kind"]["kind"] == "talk")
-                .cloned()
-        })
+        .and_then(|v| v.iter().find(|i| i["kind"]["kind"] == "talk").cloned())
         .unwrap_or(Value::Null)
 }
 
@@ -532,7 +528,10 @@ fn two_avatar_pages_talking_both_reach_the_roster() {
         json!({"kind":"enter","name":"阿岚","appearance":{"marker":"我","color":"#387963"}}),
     );
     assert_eq!(entered["ok"], true, "{entered}");
-    let mine = entered["state"]["actor"]["id"].as_str().unwrap().to_string();
+    let mine = entered["state"]["actor"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let mut second = connect_again(&ws);
     let seen = state(&mut second);
     let joined = command(

@@ -3,6 +3,7 @@ import { HttpError } from './http.mjs'
 import { safeId } from './storage.mjs'
 import { positions } from './positions.mjs'
 import {
+  apiOf,
   createAgent,
   listAgents,
   publicAgent,
@@ -74,6 +75,66 @@ export async function observe(hosts, id) {
   }
 }
 
+/**
+ * 把一位村民的密钥交给世界：世界只记内存，回执只有一句人话。
+ * 回 null 表示送进去了；回一句人话表示没送进去（只当提示，不影响人已经投进去这件事）。
+ */
+async function handKey(hosts, id, resident, api) {
+  const requestId = `key-${resident}-${Date.now()}`
+  try {
+    const reply = await hosts.query(
+      id,
+      {
+        type: 'set_resident_key',
+        request_id: requestId,
+        resident,
+        provider: api.provider,
+        base_url: api.base_url,
+        api_key: api.api_key,
+      },
+      (m) => m.type === 'resident_key_saved' && m.request_id === requestId,
+      5000
+    )
+    return reply.ok ? null : reply.message || '世界没有收下这把密钥'
+  } catch (e) {
+    return e.message || '世界没有回应'
+  }
+}
+
+/**
+ * 世界一重新拉起来，内存里的密钥就没了：按账号把投在这个镇里的 agent 的密钥再送一遍。
+ * 送不进去只记一行日志——世界照常跑，村民会先在镇上等着，人还能收回再投一次。
+ */
+export async function sendOwnerKeys({ root, hosts, accounts, accountConfig }, id) {
+  let users = []
+  try {
+    users = accounts.list()
+  } catch {
+    return
+  }
+  for (const user of users) {
+    let api = null
+    try {
+      api = await apiOf(await accountConfig(user))
+    } catch {
+      api = null
+    }
+    if (!api) continue
+    let agents = []
+    try {
+      agents = await listAgents(root, user.id)
+    } catch {
+      agents = []
+    }
+    for (const agent of agents) {
+      const record = agent.deployed?.[id]
+      if (!record) continue
+      const bad = await handKey(hosts, id, record.resident, api)
+      if (bad) console.error(`[town-manager] 给「${agent.name}」重发密钥没成功：${bad}`)
+    }
+  }
+}
+
 export function createTownRoutes({
   source,
   root,
@@ -83,6 +144,8 @@ export function createTownRoutes({
   configOf,
   current,
   resident,
+  accounts,
+  accountConfig,
 }) {
   const inTown = (id, fn) => serial('town-' + safeId(id), fn)
   /** 这次请求是谁：agent 是账号自己的东西，没账号就没得谈 */
@@ -246,6 +309,8 @@ export function createTownRoutes({
               409,
               '这个镇没有这个模板（或者它已经在用了）：换个模板，或在这个镇重新建一个 agent'
             )
+          // 他自己的模型与密钥：世界只记内存，重启后由这里重发
+          const api = await apiOf(await accountConfig(me)).catch(() => null)
           const opId = `agent-${agent.id}-${Date.now()}`
           const command = {
             type: 'join_resident',
@@ -254,18 +319,41 @@ export function createTownRoutes({
             template_id: agent.template_id,
             template_version: agent.template_version,
             name: agent.name,
+            ...(api ? { model: { provider: api.provider, model: api.model } } : {}),
             ...(agent.home && view.homes.some((home) => home.locale === agent.home)
               ? { home: agent.home }
               : {}),
           }
-          const reply = await hosts.query(
-            id,
-            command,
-            (m) =>
-              (m.type === 'resident_joined' && m.outcome?.op_id === opId) ||
-              (m.type === 'join_result' && m.op_id === opId),
-            20_000
-          )
+          const ask = (op) =>
+            hosts.query(
+              id,
+              command,
+              (m) =>
+                (m.type === 'resident_joined' && m.outcome?.op_id === op) ||
+                (m.type === 'join_result' && m.op_id === op),
+              20_000
+            )
+          let reply = await ask(opId)
+          // 世界的服务商名单里没有他账号里选的那家（他自己加过一个服务商）：先让他进来等着，
+          // 别因为这一句就把人挡在门外
+          let stranger = false
+          if (
+            api &&
+            !reply.outcome?.ok &&
+            `${reply.outcome?.message ?? ''}`.includes('模型服务尚未配置')
+          ) {
+            stranger = true
+            delete command.model
+            command.op_id = `${opId}-plain`
+            reply = await hosts.query(
+              id,
+              command,
+              (m) =>
+                (m.type === 'resident_joined' && m.outcome?.op_id === command.op_id) ||
+                (m.type === 'join_result' && m.op_id === command.op_id),
+              20_000
+            )
+          }
           const outcome = reply.outcome
           if (!outcome?.ok) throw new HttpError(409, outcome?.message || '没能投进这个小镇')
           const saved = await serial('agents-' + me.id, () =>
@@ -274,7 +362,23 @@ export function createTownRoutes({
               name: outcome.name ?? agent.name,
             })
           )
-          return { ok: true, agent: publicAgent(saved) }
+          const note = stranger
+            ? `这个镇还不认识他账号里选的服务商（${api.provider}）：人已经投进去了，会先在镇上等着。把这家服务商加进小镇的名单之后，收回他再投一次`
+            : !api
+              ? '他这个账号还没选好模型和密钥：人已经投进去了，会先在镇上等着。你在「设定 · 账号」里配好之后，收回他再投一次'
+              : await handKey(hosts, id, outcome.resident_id ?? saved.deployed?.[id]?.resident, api)
+          return {
+            ok: true,
+            agent: publicAgent(saved),
+            ...(note
+              ? {
+                  note:
+                    stranger || !api
+                      ? note
+                      : `他已经在镇上了，但密钥没送到世界那边（${note}）：先让他等着，过一会儿再投放一次`,
+                }
+              : {}),
+          }
         })
       },
     ],
@@ -344,7 +448,10 @@ export function createTownRoutes({
             'resident'
           )
         }
-        return publicEndpoint(headers, await bringUp(id, headers))
+        const info = await bringUp(id, headers)
+        // 世界是新的，内存里没有密钥：把投在这个镇里的 agent 再送一遍
+        if (hosts.isRunning(id)) await sendOwnerKeys({ root, hosts, accounts, accountConfig }, id)
+        return publicEndpoint(headers, info)
       },
     ],
     [
@@ -378,6 +485,7 @@ export function createTownRoutes({
         await resident.set(id)
         hosts.setResident(id)
         const info = await bringUp(id, headers)
+        if (hosts.isRunning(id)) await sendOwnerKeys({ root, hosts, accounts, accountConfig }, id)
         // 世界观设好的小镇才谈得上「在后台跑」：没设好的先停着，等管理员进镇设一次
         const state = await look(id)
         if (state?.ready) {

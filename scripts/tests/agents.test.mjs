@@ -174,6 +174,8 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     const friendDeploy = await friend('/default-town/deploy', { agent_id: one.agent.id })
     assert.equal(friendDeploy.status, 200, JSON.stringify(friendDeploy))
     assert.equal(friendDeploy.agent.deployed[0].town, 'default-town')
+    // 他还没填自己的密钥：人照样投进去，但要说清楚「先在镇上等着」
+    assert.match(friendDeploy.note ?? '', /还没选好模型和密钥/)
     // 各投各的：管理员的 agent 列表里看不到朋友的
     assert.equal((await api('/agents')).agents.length, 2)
 
@@ -218,6 +220,20 @@ test('an account keeps its own agent definitions and drops one into a town by ha
       !left.population.residents.some((person) => person.id === deployed.agent.deployed[0].resident)
     )
     assert.ok(left.population.residents.some((person) => person.name === '朋友的小人'))
+
+    // 朋友把这个账号自己的模型与密钥填上，再投一次：这回用他自己的密钥，不需要提醒
+    const friendFile = await m.accountConfig({ id: madeUser.user.id, role: 'user' })
+    const friendApp = JSON.parse(await fs.readFile(friendFile, 'utf8'))
+    const providers = JSON.parse(await fs.readFile(friendApp.providers_path, 'utf8'))
+    providers.active = { provider: 'deepseek', model: 'deepseek-chat' }
+    providers.providers = [{ id: 'deepseek', base_url: 'https://api.deepseek.com' }]
+    await fs.writeFile(friendApp.providers_path, JSON.stringify(providers))
+    await fs.writeFile(friendApp.credentials_path, JSON.stringify({ deepseek: 'sk-friend' }))
+    const friendOff = await friend('/default-town/withdraw', { agent_id: one.agent.id })
+    assert.equal(friendOff.status, 200, JSON.stringify(friendOff))
+    const friendAgain = await friend('/default-town/deploy', { agent_id: one.agent.id })
+    assert.equal(friendAgain.status, 200, JSON.stringify(friendAgain))
+    assert.equal(friendAgain.note, undefined, JSON.stringify(friendAgain))
     // 不能再收一次
     assert.equal((await api('/default-town/withdraw', { agent_id: agent.id })).status, 409)
     // 收回来之后就能删了

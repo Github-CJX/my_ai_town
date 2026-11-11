@@ -40,6 +40,31 @@ impl LlmTarget {
         let active = providers.active.as_ref()?;
         Self::configured(providers, credentials, &active.provider, &active.model)
     }
+    /// 用这位村民自己账号里的密钥与地址；地址为空时沿用世界配置里的地址。
+    /// 服务商在世界配置里、账号里也写了地址，都行；两处都没有地址就调不了。
+    pub fn with_own_key(
+        providers: &ProvidersFile,
+        provider: &str,
+        model: &str,
+        base_url: &str,
+        api_key: &str,
+    ) -> Option<Self> {
+        let configured = providers
+            .providers
+            .iter()
+            .find(|p| p.id == provider)
+            .map(|p| p.base_url.clone());
+        let base_url = Some(base_url.trim())
+            .filter(|url| !url.is_empty())
+            .map(str::to_string)
+            .or(configured)?;
+        Some(Self {
+            provider: provider.into(),
+            model: model.into(),
+            base_url,
+            api_key: Some(api_key.into()),
+        })
+    }
 }
 
 /// 只有一条 user 消息的补全：连接测试、生成人物、规划地图。请求正文与回复解析在 agent::completion。

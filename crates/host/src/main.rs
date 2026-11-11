@@ -15,6 +15,7 @@ mod departure;
 mod join;
 mod library_commands;
 mod network;
+mod owner_keys;
 mod prop_commands;
 mod resident_driver;
 mod runtime;
@@ -252,6 +253,7 @@ fn build_runtime(
         library,
         prop_library,
         tasks: host::tasks::TaskPool::new(2, 4),
+        owner_keys: Default::default(),
         save_failed: false,
     })
 }

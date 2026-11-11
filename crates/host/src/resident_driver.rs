@@ -1,6 +1,7 @@
 //! 正式 host 的 Agent 驱动。先保存请求状态，再交给有界网络池。会话按居民登记建立。
 use crate::{
     network::{broadcast_event, Clients},
+    owner_keys::{OwnerKey, OwnerKeys},
     settings::Settings,
     startup::Mode,
 };
@@ -135,6 +136,7 @@ impl ResidentDriver {
         requests: Vec<AgentRequest>,
         population: &Population,
         settings: &Settings,
+        keys: &OwnerKeys,
         clients: &Clients,
     ) -> Result<(), HostError> {
         let mut request_targets = BTreeMap::new();
@@ -145,7 +147,7 @@ impl ResidentDriver {
             let target = if self.mock {
                 Ok(self.target.clone())
             } else {
-                resident_target(&actor, population, settings)
+                resident_target(&actor, population, settings, keys)
             };
             broadcast_event(
                 clients,
@@ -175,6 +177,7 @@ impl ResidentDriver {
         &self,
         population: &Population,
         settings: &Settings,
+        keys: &OwnerKeys,
     ) -> BTreeMap<String, String> {
         if self.mock {
             return BTreeMap::new();
@@ -183,7 +186,9 @@ impl ResidentDriver {
             .residents
             .values()
             .filter_map(|r| {
-                let reason = settings.missing_model(r.model_binding.as_ref())?;
+                let binding = r.model_binding.as_ref();
+                let owner = binding.and_then(|choice| keys.get(&r.id, &choice.provider));
+                let reason = settings.missing_model(binding, owner)?;
                 Some((r.id.clone(), reason))
             })
             .collect()
@@ -338,18 +343,20 @@ fn resident_target(
     actor: &str,
     population: &Population,
     settings: &Settings,
+    keys: &OwnerKeys,
 ) -> Result<LlmTarget, ModelError> {
     let binding = population
         .residents
         .get(actor)
         .and_then(|resident| resident.model_binding.as_ref());
-    if let Some(reason) = settings.missing_model(binding) {
+    let owner: Option<&OwnerKey> = binding.and_then(|choice| keys.get(actor, &choice.provider));
+    if let Some(reason) = settings.missing_model(binding, owner) {
         return Err(ModelError::NotSent(reason));
     }
     let Some(choice) = binding else {
         return Err(ModelError::NotSent("还没有选模型".into()));
     };
-    settings.target(choice).ok_or_else(|| {
+    settings.target(choice, owner).ok_or_else(|| {
         ModelError::NotSent(format!(
             "绑定的模型服务不存在：{}，请到设定中心重新设置",
             choice.provider

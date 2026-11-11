@@ -206,7 +206,10 @@ export async function readTemplates(id: string): Promise<AgentTemplate[]> {
 }
 
 /** 把 agent 投进某个小镇：镇上多一个居民，这段记忆留在这个镇的存档里 */
-export function deployAgent(id: string, agentId: string): Promise<{ ok: true; agent: HomeAgent }> {
+export function deployAgent(
+  id: string,
+  agentId: string
+): Promise<{ ok: true; agent: HomeAgent; note?: string }> {
   return post(id, 'deploy', { agent_id: agentId })
 }
 

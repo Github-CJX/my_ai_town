@@ -184,6 +184,8 @@ impl App {
         }
         match self.hosts.open(&self.storage, &id, &config) {
             Ok(_) => {
+                // 世界是新的，内存里没有密钥：把这个镇里已投放的 agent 再送一遍
+                routes::resend_keys(self, &id);
                 let ready = self
                     .hosts
                     .observe(&id)

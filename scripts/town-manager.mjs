@@ -9,7 +9,7 @@ import {
 import { createCreation } from './towns/creation.mjs'
 import { createModelRoutes } from './towns/models.mjs'
 import { createBuiltinModelRoutes } from './towns/builtin-model.mjs'
-import { createTownRoutes, applySpeed, observe } from './towns/town-routes.mjs'
+import { createTownRoutes, applySpeed, observe, sendOwnerKeys } from './towns/town-routes.mjs'
 import { createResident, readResident } from './towns/resident.mjs'
 import { Raw, HttpError, readBody, describe } from './towns/http.mjs'
 import http from 'node:http'
@@ -144,7 +144,18 @@ export async function createManager({
     ...builtinModel.routes,
     ...creation.routes,
     ...assets.routes,
-    ...createTownRoutes({ source, root, storage, hosts, serial, configOf, current, resident }),
+    ...createTownRoutes({
+      source,
+      root,
+      storage,
+      hosts,
+      serial,
+      configOf,
+      current,
+      resident,
+      accounts,
+      accountConfig: (user) => accounts.config(config, user),
+    }),
   ]
   async function dispatch(req, signal) {
     if (stopping) throw new HttpError(503, '应用正在退出')
@@ -217,6 +228,11 @@ export async function createManager({
       if (!config) return
       await serial('town-' + id, () => hosts.open(id, config))
       residentFailures = 0
+      // 世界是新的，内存里没有密钥：把这个镇里已投放的 agent 再送一遍
+      await sendOwnerKeys(
+        { root, hosts, accounts, accountConfig: (user) => accounts.config(config, user) },
+        id
+      ).catch(() => {})
       // 世界观没设好的小镇先停着：这时候发速度会被世界推回来（「请先设置世界观」）
       const state = await observe(hosts, id)
       if (state?.ready) await applySpeed(hosts, id, resident.speed()).catch(() => {})
@@ -269,7 +285,14 @@ export async function createManager({
       await releaseLock()
     }
   }
-  return { server, storage, hosts, stop }
+  return {
+    server,
+    storage,
+    hosts,
+    accounts,
+    accountConfig: (user) => accounts.config(config, user),
+    stop,
+  }
 }
 
 // 未捕获的错误：记录后退出；process 'exit' 处理器会结束所有 host。

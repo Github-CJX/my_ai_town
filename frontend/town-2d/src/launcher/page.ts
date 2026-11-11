@@ -476,9 +476,11 @@ function renderAgents() {
   const canCreate = !!here && templates.length > 0 && room && !agentBusy
   const count =
     agentLimit === null ? '不限个数' : `还能建 ${Math.max(agentLimit - myAgents.length, 0)} 个`
+  // 投出去的村民跑起来用的是你自己账号的模型与密钥（管理员那份就是小镇的）
+  const billing = amAdmin ? '用的是小镇的模型与密钥' : '用的是你自己的模型与密钥'
   agentNote.textContent = here
-    ? `我的 agent · ${count}`
-    : `我的 agent · ${count} · 建的时候要用正在运行的小镇的模板`
+    ? `我的 agent · ${count} · ${billing}`
+    : `我的 agent · ${count} · 建的时候要用正在运行的小镇的模板 · ${billing}`
   const rows = myAgents.map((agent) => {
     const row = document.createElement('div')
     row.className = 'agent-row'
@@ -554,8 +556,9 @@ async function deployTo(agent: HomeAgent, map: MapEntry) {
   agentTip.hidden = true
   renderAgents()
   try {
-    await deployAgent(map.id, agent.id)
+    const result = await deployAgent(map.id, agent.id)
     agentSay(`「${agent.name}」住进「${map.name}」了。`)
+    if (result.note) agentSay(result.note)
     // 模板被用掉了，下次重新问镇上要一份还能用的
     templatesFor = ''
   } catch (error) {

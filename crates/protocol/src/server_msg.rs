@@ -259,4 +259,11 @@ pub enum ServerMsg {
         ok: bool,
         message: String,
     },
+    /// 给一位村民换上他自己的密钥的结果（只回给发出命令的连接）；
+    /// 回执里不出现密钥，只有一句人话。
+    ResidentKeySaved {
+        request_id: String,
+        ok: bool,
+        message: String,
+    },
 }

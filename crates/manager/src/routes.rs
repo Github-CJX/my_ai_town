@@ -173,6 +173,92 @@ fn user_config(app: &App, user: &User) -> Result<std::path::PathBuf, ApiError> {
     app.accounts.lock().unwrap().config(&app.config, user)
 }
 
+/// 请一位村民进镇：重试时操作编号跟着换，谓词一起换。
+fn join_town(app: &App, town: &str, command: &Value, op_id: &str) -> Result<Value, ApiError> {
+    app.hosts
+        .query_in(
+            town,
+            Some(command),
+            |m| {
+                (m["type"] == "resident_joined" && m["outcome"]["op_id"] == op_id)
+                    || (m["type"] == "join_result" && m["op_id"] == op_id)
+            },
+            20,
+        )
+        .map_err(|error| {
+            if error.status == 400 {
+                ApiError::new(409, error.message)
+            } else {
+                error
+            }
+        })
+}
+
+/// 把某位村民的密钥交给世界：世界只记在内存里，回执只有一句人话。
+fn hand_key(
+    app: &App,
+    town: &str,
+    resident: &str,
+    api: &accounts::ApiAccount,
+) -> Result<(), ApiError> {
+    let request_id = format!("key-{}-{}", resident, crate::token());
+    let command = json!({
+        "type": "set_resident_key",
+        "request_id": request_id.clone(),
+        "resident": resident,
+        "provider": api.provider,
+        "base_url": api.base_url,
+        "api_key": api.api_key,
+    });
+    let reply = app.hosts.query_in(
+        town,
+        Some(&command),
+        |m| m["type"] == "resident_key_saved" && m["request_id"] == request_id.as_str(),
+        5,
+    )?;
+    if reply["ok"].as_bool() == Some(true) {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        409,
+        reply["message"]
+            .as_str()
+            .unwrap_or("世界没有收下密钥")
+            .to_owned(),
+    ))
+}
+
+/// 世界一重新拉起来，内存里的密钥就没了：按账号把投在这个镇里的 agent 再送一遍。
+/// 送不进去只记一行日志——世界照常跑，村民会先等着，人还能再投一次。
+pub(crate) fn resend_keys(app: &App, town: &str) {
+    let prepared = {
+        let accounts = app.accounts.lock().unwrap();
+        accounts
+            .list()
+            .iter()
+            .map(|user| {
+                let home = accounts.home(&user.id);
+                let api = accounts.api(&app.config, user).ok().flatten();
+                (crate::agents::list(&home).unwrap_or_default(), api)
+            })
+            .collect::<Vec<_>>()
+    };
+    for (agents, api) in prepared {
+        let Some(api) = api else { continue };
+        for agent in agents {
+            let Some(record) = agent.deployed_in(town) else {
+                continue;
+            };
+            if let Err(error) = hand_key(app, town, &record.resident, &api) {
+                eprintln!(
+                    "[town-manager] 给「{}」重发密钥没成功：{}",
+                    agent.name, error.message
+                );
+            }
+        }
+    }
+}
+
 fn account_cookie(id: &str) -> String {
     format!("{USER_COOKIE}={id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000")
 }
@@ -410,6 +496,8 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             app.make_room(id)?;
             let _serial = app.town_lock(id);
             let mut info = app.hosts.open(&app.storage, id, &user_config(app, &me)?)?;
+            // 世界重启后密钥没了：把这个镇里已投放的 agent 再送一遍
+            resend_keys(app, id);
             // 页面在世界自己的端口上连；从别的机器访问时主机名要换成它们能连的那个
             let endpoint = public_endpoint(req, info["endpoint"].as_str().unwrap_or_default());
             info["endpoint"] = Value::from(endpoint);
@@ -450,6 +538,7 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             app.make_room(id)?;
             let _serial = app.town_lock(id);
             let mut info = app.hosts.open(&app.storage, id, &user_config(app, &me)?)?;
+            resend_keys(app, id);
             // 世界观设好的小镇才谈得上「在后台跑」：没设好的先停着，等管理员进镇设一次
             let ready = app
                 .hosts
@@ -664,6 +753,8 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 ));
             }
             let op_id = format!("agent-{}-{}", agent.id, crate::token());
+            // 他自己账号的模型与密钥：投出去的村民用他自己的，不再花世界的额度
+            let api = app.accounts.lock().unwrap().api(&app.config, &me)?;
             let mut command = json!({
                 "type": "join_resident",
                 "op_id": op_id,
@@ -672,6 +763,9 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 "template_version": agent.template_version,
                 "name": agent.name,
             });
+            if let Some(api) = &api {
+                command["model"] = json!({ "provider": api.provider, "model": api.model });
+            }
             // 想住的落脚点在那个镇存在才填：没有就按世界自己安排
             if let Some(wanted) = &agent.home {
                 let exists = view["homes"].as_array().is_some_and(|homes| {
@@ -681,24 +775,24 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                     command["home"] = Value::from(wanted.clone());
                 }
             }
-            let reply = app
-                .hosts
-                .query_in(
-                    id,
-                    Some(&command),
-                    |m| {
-                        (m["type"] == "resident_joined" && m["outcome"]["op_id"] == op_id.as_str())
-                            || (m["type"] == "join_result" && m["op_id"] == op_id.as_str())
-                    },
-                    20,
-                )
-                .map_err(|error| {
-                    if error.status == 400 {
-                        ApiError::new(409, error.message)
-                    } else {
-                        error
-                    }
-                })?;
+            let mut reply = join_town(app, id, &command, &op_id)?;
+            // 世界的服务商名单里没有他账号里选的那家（他自己加过一个服务商）：先让他进来等着，
+            // 别因为这一句就把人挡在门外
+            let mut stranger = false;
+            if reply["outcome"]["ok"].as_bool() != Some(true)
+                && api.is_some()
+                && reply["outcome"]["message"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("模型服务尚未配置"))
+            {
+                stranger = true;
+                if let Some(fields) = command.as_object_mut() {
+                    fields.remove("model");
+                }
+                let retry = format!("{op_id}-plain");
+                command["op_id"] = Value::from(retry.clone());
+                reply = join_town(app, id, &command, &retry)?;
+            }
             let outcome = &reply["outcome"];
             if outcome["ok"].as_bool() != Some(true) {
                 let message = outcome["message"]
@@ -711,8 +805,32 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 .unwrap_or_default()
                 .to_owned();
             let name = outcome["name"].as_str().unwrap_or(&agent.name).to_owned();
+            // 密钥随后单独送一次：只在内存里，世界的存盘里没有它
+            let note = if stranger {
+                format!(
+                    "这个镇还不认识他账号里选的服务商（{}）：人已经投进去了，会先在镇上等着。把这家服务商加进小镇的名单之后，收回他再投一次",
+                    api.as_ref().map(|a| a.provider.as_str()).unwrap_or_default()
+                )
+            } else {
+                match &api {
+                    Some(api) => match hand_key(app, id, &resident, api) {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(
+                            "他已经在镇上了，但密钥没送到世界那边（{}）：先让他等着，过一会儿再投放一次",
+                            error.message
+                        ),
+                    },
+                    None => String::from(
+                        "他这个账号还没选好模型和密钥：人已经投进去了，会先在镇上等着。你在「设定 · 账号」里配好之后，收回他再投一次",
+                    ),
+                }
+            };
             crate::agents::record_deploy(&home, &mut agent, id, &resident, &name)?;
-            ok(json!({ "ok": true, "agent": agent.public() }))
+            let mut result = json!({ "ok": true, "agent": agent.public() });
+            if !note.is_empty() {
+                result["note"] = Value::from(note);
+            }
+            ok(result)
         }
         // 收回：请投放出去的那一位离开这个镇，并把这里的投放记录抹掉
         (false, "withdraw") => {

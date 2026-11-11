@@ -167,6 +167,17 @@ pub enum ClientMsg {
         resident: String,
         model: ModelChoice,
     },
+    /// 一位村民用自己的密钥：投他进镇的那个账号填的服务商、地址与密钥。
+    /// 只在 管理服务→世界 方向出现，世界只记在内存里（回 ResidentKeySaved，不回密钥）；
+    /// 世界重启后由管理服务重发，收回村民时随之丢掉。
+    SetResidentKey {
+        request_id: String,
+        resident: String,
+        provider: String,
+        #[serde(default)]
+        base_url: String,
+        api_key: String,
+    },
     /// 重启内置模型的服务，换上刚下好的新版（回 ConfigSaved，再广播 ModelConfig）
     RestartBuiltinModel {
         request_id: String,
@@ -326,6 +337,7 @@ impl ClientMsg {
             | SetSpeed { request_id, .. }
             | SetModelConfig { request_id, .. }
             | SetResidentModel { request_id, .. }
+            | SetResidentKey { request_id, .. }
             | RestartBuiltinModel { request_id }
             | TestModelConnection { request_id, .. }
             | SetPersona { request_id, .. }

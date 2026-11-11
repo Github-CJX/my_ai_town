@@ -3,6 +3,7 @@
 //! 读取失败回通用 Error。
 use crate::{
     network::{send_to, Clients},
+    owner_keys::OwnerKey,
     runtime::{error_msg, Outcome, Runtime},
 };
 use host::{application::Application, builtin, config, llm::LlmTarget, models, HostError};
@@ -44,7 +45,12 @@ impl Settings {
 
     /// 村民的模型现在为什么还用不了，给玩家看；能用时为 None。没选模型、选的服务已删、
     /// 服务没有地址、远程服务还没填密钥都算；本机和局域网里的服务不用密钥。
-    pub(crate) fn missing_model(&self, binding: Option<&ModelChoice>) -> Option<String> {
+    /// `owner` 是这位村民自己账号里的密钥：他填了这个服务商的密钥，就不算「还没填密钥」。
+    pub(crate) fn missing_model(
+        &self,
+        binding: Option<&ModelChoice>,
+        owner: Option<&OwnerKey>,
+    ) -> Option<String> {
         let Some(choice) = binding.filter(|c| !c.model.trim().is_empty()) else {
             return Some("还没有选模型".into());
         };
@@ -57,13 +63,19 @@ impl Settings {
             }
             return (!builtin::ready()).then(|| format!("{}还没下载好", builtin::NAME));
         }
+        let owner =
+            owner.filter(|key| key.provider == choice.provider && !key.api_key.trim().is_empty());
         let Some(entry) = self
             .providers
             .providers
             .iter()
             .find(|p| p.id == choice.provider)
         else {
-            return Some("选的模型服务已经删掉了".into());
+            // 世界的服务商名单里没有，但他自己账号里填了这个服务商：地址齐了就能用
+            return match owner {
+                Some(key) if !key.base_url.trim().is_empty() => None,
+                _ => Some("选的模型服务已经删掉了".into()),
+            };
         };
         let name = self.provider_name(&choice.provider);
         if entry.base_url.trim().is_empty() {
@@ -71,6 +83,7 @@ impl Settings {
         }
         let keyless = local_endpoint(&entry.base_url);
         if !keyless
+            && owner.is_none()
             && self
                 .credentials
                 .get(&choice.provider)
@@ -82,7 +95,11 @@ impl Settings {
     }
 
     /// 村民选的模型怎么调用；服务不在配置里时为 None。内置模型没有地址，文件位置开镇时记在 builtin 里。
-    pub(crate) fn target(&self, choice: &ModelChoice) -> Option<LlmTarget> {
+    pub(crate) fn target(
+        &self,
+        choice: &ModelChoice,
+        owner: Option<&OwnerKey>,
+    ) -> Option<LlmTarget> {
         if choice.provider == builtin::PROVIDER {
             return self.builtin.then(|| LlmTarget {
                 provider: choice.provider.clone(),
@@ -90,6 +107,18 @@ impl Settings {
                 base_url: String::new(),
                 api_key: None,
             });
+        }
+        // 他自己的密钥优先：这位村民用的服务商与他账号里填的一致时用他那把
+        if let Some(key) =
+            owner.filter(|key| key.provider == choice.provider && !key.api_key.trim().is_empty())
+        {
+            return LlmTarget::with_own_key(
+                &self.providers,
+                &choice.provider,
+                &choice.model,
+                &key.base_url,
+                &key.api_key,
+            );
         }
         LlmTarget::configured(
             &self.providers,
@@ -369,6 +398,51 @@ impl Runtime {
         } else {
             outcome
         }
+    }
+
+    /// 投这位村民进镇的账号把他自己的密钥交过来：世界只记在内存里（重启后由管理服务重发），
+    /// 回执只说一句人话——密钥不广播、不落盘、不回读。
+    pub(crate) fn set_resident_key(
+        &mut self,
+        request_id: String,
+        resident: &str,
+        provider: String,
+        base_url: String,
+        api_key: String,
+    ) -> Outcome {
+        let person = self
+            .population
+            .find(Some(resident))
+            .map(|r| (r.id.clone(), r.name.clone()))
+            .ok();
+        let Some((id, name)) = person else {
+            return Outcome::reply(ServerMsg::ResidentKeySaved {
+                request_id,
+                ok: false,
+                message: "名册里没有这位村民（可能已经离开了，或者页面还没刷新）".into(),
+            });
+        };
+        if provider.trim().is_empty() || api_key.trim().is_empty() {
+            return Outcome::reply(ServerMsg::ResidentKeySaved {
+                request_id,
+                ok: false,
+                message: "要把服务商和密钥一起交过来".into(),
+            });
+        }
+        self.owner_keys.set(
+            &id,
+            OwnerKey {
+                provider,
+                base_url,
+                api_key,
+            },
+        );
+        println!("[host] 「{name}」改用他自己账号的密钥");
+        Outcome::reply(ServerMsg::ResidentKeySaved {
+            request_id,
+            ok: true,
+            message: format!("「{name}」以后用他自己账号的密钥"),
+        })
     }
 
     /// 模型换了会体现在 world_settings 里，一并广播。

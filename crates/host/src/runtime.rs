@@ -3,6 +3,7 @@
 use crate::{
     join::JoinRequest,
     network::{broadcast, broadcast_event, send_to, Clients},
+    owner_keys::OwnerKeys,
     resident_driver::ResidentDriver,
     settings::Settings,
     startup::WorldSetup,
@@ -38,6 +39,8 @@ pub(crate) struct Runtime {
     pub prop_library: host::props::PropLibrary,
     /// 连接测试、模板生成这类一次性模型调用的有界池。
     pub tasks: TaskPool,
+    /// 村民自己账号里填的密钥（只在内存里；世界重启后由管理服务重发）。
+    pub owner_keys: OwnerKeys,
     /// 上一次存盘是否失败；只在状态变化时写日志，避免每秒刷屏。
     pub save_failed: bool,
 }
@@ -204,6 +207,7 @@ impl Runtime {
             | ClientMsg::GetModelConfig
             | ClientMsg::SetModelConfig { .. }
             | ClientMsg::SetResidentModel { .. }
+            | ClientMsg::SetResidentKey { .. }
             | ClientMsg::RestartBuiltinModel { .. }
             | ClientMsg::TestModelConnection { .. }
             | ClientMsg::GetAgentConfig { .. }
@@ -379,6 +383,13 @@ impl Runtime {
                 resident,
                 model,
             } => self.set_resident_model(request_id, &resident, model),
+            SetResidentKey {
+                request_id,
+                resident,
+                provider,
+                base_url,
+                api_key,
+            } => self.set_resident_key(request_id, &resident, provider, base_url, api_key),
             RestartBuiltinModel { request_id } => self.restart_builtin_model(request_id),
             TestModelConnection {
                 request_id,
@@ -489,7 +500,9 @@ impl Runtime {
         self.avatar_tick(clients);
         let content_before = self.world.contents().revision();
         let inventory_before = self.world.inventory().revision();
-        let missing = self.driver.missing_models(&self.population, &self.settings);
+        let missing =
+            self.driver
+                .missing_models(&self.population, &self.settings, &self.owner_keys);
         self.driver.runtime.wait_for_models(&self.world, &missing);
         // 谁都还不能思考（都在等模型）时时间停着，化身照样能走：世界照走的话他们只会一路饿着
         let running = self.speed > 0.0
@@ -528,6 +541,7 @@ impl Runtime {
             requests,
             &self.population,
             &self.settings,
+            &self.owner_keys,
             clients,
         ) {
             eprintln!("[host] {error}");
@@ -737,7 +751,8 @@ fn world_id_of(msg: &ClientMsg) -> Option<&str> {
         | ClientMsg::GetNotebookDetail { .. }
         | ClientMsg::GetAgentLimits
         | ClientMsg::SetAgentLimits { .. }
-        | ClientMsg::RemoveResident { .. } => None,
+        | ClientMsg::RemoveResident { .. }
+        | ClientMsg::SetResidentKey { .. } => None,
     }
 }
 
@@ -787,6 +802,7 @@ fn requires_ready(msg: &ClientMsg) -> bool {
         | ClientMsg::GetNotebookDetail { .. }
         | ClientMsg::GetAgentLimits
         | ClientMsg::SetAgentLimits { .. }
-        | ClientMsg::RemoveResident { .. } => false,
+        | ClientMsg::RemoveResident { .. }
+        | ClientMsg::SetResidentKey { .. } => false,
     }
 }

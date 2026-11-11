@@ -135,6 +135,16 @@ fn check_pin(pin: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// 一个账号自己的模型服务：服务商、模型、端点、密钥。
+/// 密钥只在 管理服务→世界 方向出现（世界只记内存，不落盘、不回读）；管理员的这份就是小镇的密钥。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiAccount {
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    pub api_key: String,
+}
+
 /// `accounts.json` 读进内存；第一次启动时建好默认管理员。
 pub struct Accounts {
     root: PathBuf,
@@ -357,6 +367,42 @@ impl Accounts {
         write_json(&path, &doc)?;
         Ok(path)
     }
+
+    /// 这个账号自己选定的模型与密钥：投放他的 agent 时随人一起交给世界（世界只记内存）。
+    /// 管理员用的就是小镇那份配置，也就是「世界自己的密钥」；普通账号是 users/<id>/config 那份，
+    /// 密钥从空开始，得他自己在「设定 · 账号」里填。没选模型或没填密钥回 None——
+    /// 照样能投，只是那名村民会先在镇上等着。
+    pub fn api(&self, base: &Path, user: &User) -> Result<Option<ApiAccount>, ApiError> {
+        let application = self.config(base, user)?;
+        let doc = read_json(&application)?;
+        let providers_path = doc["providers_path"].as_str().unwrap_or_default();
+        let credentials_path = doc["credentials_path"].as_str().unwrap_or_default();
+        let providers = read_json(Path::new(providers_path)).unwrap_or_else(|_| json!({}));
+        let provider = providers["active"]["provider"].as_str().unwrap_or_default();
+        let model = providers["active"]["model"].as_str().unwrap_or_default();
+        if provider.is_empty() || model.is_empty() {
+            return Ok(None);
+        }
+        let credentials = read_json(Path::new(credentials_path)).unwrap_or_else(|_| json!({}));
+        let api_key = credentials[provider].as_str().unwrap_or_default();
+        if api_key.trim().is_empty() {
+            return Ok(None);
+        }
+        let base_url = providers["providers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["id"] == provider)
+            .and_then(|entry| entry["base_url"].as_str())
+            .unwrap_or_default()
+            .to_owned();
+        Ok(Some(ApiAccount {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            base_url,
+            api_key: api_key.to_owned(),
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -409,6 +455,77 @@ mod tests {
                 .expect("解开")
                 .avatar_id,
             None
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 投放用的模型与密钥是这个账号自己的：管理员那份就是小镇的，普通账号从空开始、填了才有
+    #[test]
+    fn an_account_deploys_with_its_own_model_and_key() {
+        let root = temp_root();
+        let base = root.join("application.json");
+        write_json(
+            &base,
+            &json!({
+                "providers_path": root.join("providers.json").to_string_lossy(),
+                "credentials_path": root.join("credentials.json").to_string_lossy(),
+            }),
+        )
+        .expect("写应用配置");
+        write_json(
+            &root.join("providers.json"),
+            &json!({
+                "active": { "provider": "deepseek", "model": "deepseek-chat" },
+                "providers": [{ "id": "deepseek", "base_url": "https://api.deepseek.com" }],
+            }),
+        )
+        .expect("写服务商");
+        write_json(
+            &root.join("credentials.json"),
+            &json!({ "deepseek": "sk-world" }),
+        )
+        .expect("写密钥");
+
+        let mut accounts = Accounts::load(&root).expect("建账号表");
+        accounts.setup("管理员", "2468").expect("建管理员");
+        let admin = accounts.admin().expect("账号表里总有管理员");
+        let world = accounts.api(&base, &admin).expect("读管理员配置");
+        assert_eq!(
+            world,
+            Some(ApiAccount {
+                provider: "deepseek".into(),
+                model: "deepseek-chat".into(),
+                base_url: "https://api.deepseek.com".into(),
+                api_key: "sk-world".into(),
+            }),
+            "管理员投放用的是小镇那份密钥"
+        );
+
+        let friend = accounts.create("朋友", "1357").expect("建普通账号");
+        assert_eq!(
+            accounts.api(&base, &friend).expect("读普通账号配置"),
+            None,
+            "普通账号的密钥从空开始"
+        );
+        let file = accounts.config(&base, &friend).expect("账号自己的配置");
+        let doc = read_json(&file).expect("读账号配置");
+        let providers_path = PathBuf::from(doc["providers_path"].as_str().unwrap_or_default());
+        let credentials_path = PathBuf::from(doc["credentials_path"].as_str().unwrap_or_default());
+        let mut providers = read_json(&providers_path).expect("读账号服务商");
+        providers["active"] = json!({ "provider": "moonshot", "model": "kimi-k2" });
+        providers["providers"] =
+            json!([{ "id": "moonshot", "base_url": "https://api.moonshot.cn" }]);
+        write_json(&providers_path, &providers).expect("写账号服务商");
+        write_json(&credentials_path, &json!({ "moonshot": "sk-friend" })).expect("写账号密钥");
+        assert_eq!(
+            accounts.api(&base, &friend).expect("再读普通账号配置"),
+            Some(ApiAccount {
+                provider: "moonshot".into(),
+                model: "kimi-k2".into(),
+                base_url: "https://api.moonshot.cn".into(),
+                api_key: "sk-friend".into(),
+            }),
+            "他自己填的那份才算数"
         );
         std::fs::remove_dir_all(&root).ok();
     }

@@ -873,6 +873,11 @@ pub fn server_samples() -> Vec<ServerMsg> {
             ok: true,
             message: "「小禾」已经离开小镇".into(),
         },
+        ServerMsg::ResidentKeySaved {
+            request_id: "r8".into(),
+            ok: true,
+            message: "「小禾」以后用他自己账号的密钥".into(),
+        },
     ]
 }
 
@@ -1568,6 +1573,13 @@ pub fn client_samples() -> Vec<ClientMsg> {
         ClientMsg::RemoveResident {
             request_id: "r7".into(),
             resident: "resident_xiaohe".into(),
+        },
+        ClientMsg::SetResidentKey {
+            request_id: "r8".into(),
+            resident: "resident_xiaohe".into(),
+            provider: "deepseek".into(),
+            base_url: "https://api.deepseek.com".into(),
+            api_key: "sk-sample-key".into(),
         },
         ClientMsg::GetDiary {
             resident: Some("resident_ashu".into()),
