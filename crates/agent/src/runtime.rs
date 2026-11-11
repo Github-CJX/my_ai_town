@@ -471,7 +471,7 @@ impl ResidentRuntime {
         }
         // 不在交谈轮次说明交谈已结束，本场对话记录不再需要。
         s.chat = Default::default();
-        if !world.interactions().has_talk_invitation(&s.actor_id) {
+        if !world.interactions().has_open_invitation(&s.actor_id) {
             if let Some(batch) = crate::notebook::plan_reflection(world, s) {
                 let docs = self.docs(world, s);
                 let fitted = reflection::fit_reflection(
@@ -942,13 +942,15 @@ fn wants_request(world: &World, s: &Session) -> bool {
         && !world.awaiting_followers(&s.actor_id);
     let responding =
         world.interactions().has_talk_invitation(&s.actor_id) && world.talk_available(&s.actor_id);
+    // 亲近（牵手/靠/抱）不必等交谈轮次：对方伸出手了，本人得答一句答应还是躲开。
+    let close = world.interactions().has_close_invitation(&s.actor_id);
     // 交谈的成员和同行里跟着走的人占着活动，只在轮到自己说话时想；带路人边走边说也是轮到才想。
     let turn = world.chat_turn(&s.actor_id);
     a.actions.agent_controlled
         && a.present()
         && a.possession.is_none()
         && !a.needs.incapacitated()
-        && ((a.current.action.is_none() && idle) || responding || turn)
+        && ((a.current.action.is_none() && idle) || responding || close || turn)
         && (a.current.interaction.is_none() || turn)
         && s.in_flight.is_none()
         && !s

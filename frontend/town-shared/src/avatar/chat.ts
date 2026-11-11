@@ -8,6 +8,7 @@ import type {
   InteractionKind,
 } from './types'
 import { panelButton, pendingTalk, personName, runningTalk, runningWalk } from './view'
+import { TOUCH_OFFERS, touchOffer } from './close'
 import { button, el } from '../dom'
 import { clock } from '../format'
 import { isTouch } from '../platform'
@@ -452,7 +453,17 @@ function nearbyPeople(v: ChatView) {
         !idle || !available || !!invitation
       )
     )
-    people.append(row)
+    // 亲近也要自己开口：从前只有 agent 能牵、能靠、能抱，玩家连按钮都没有
+    const close = el('div')
+    close.className = 'avatar-person-close'
+    for (const o of TOUCH_OFFERS)
+      close.append(
+        panelButton(o.label, () => interact(touchOffer(n.id, o.gesture)), !idle || !available)
+      )
+    const near = el('div')
+    near.className = 'avatar-near'
+    near.append(row, close)
+    people.append(near)
   }
   for (const c of state.nearby_chats ?? [])
     if (!c.members.includes(v.actor.id))

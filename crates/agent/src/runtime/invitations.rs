@@ -5,7 +5,7 @@ use crate::{
     tools::ToolName,
 };
 use kernel::World;
-use protocol::{FactKind, GroupStatus};
+use protocol::{FactKind, GroupStatus, InteractionStatus};
 use serde_json::json;
 
 impl ResidentRuntime {
@@ -23,16 +23,28 @@ impl ResidentRuntime {
         let mut invited = false;
         for notice in notices {
             s.cursors.last_notice = notice.event_id;
-            let talk = notice.objects.iter().any(|id| {
+            // 谁发来的邀请都算：交谈、同行、牵手/靠/抱。亲近不发话，但也要本人答一句才动手。
+            let mine = notice.objects.iter().any(|id| {
                 world.interactions().of(&s.actor_id, id).is_some_and(|i| {
-                    i.kind.has_chat()
+                    i.event_ids
+                        .get(&s.actor_id)
+                        .is_some_and(|ids| ids.contains(&notice.event_id))
+                })
+            });
+            let offer = notice.objects.iter().any(|id| {
+                world.interactions().of(&s.actor_id, id).is_some_and(|i| {
+                    i.partner == s.actor_id
+                        && i.status == InteractionStatus::Offered
                         && i.event_ids
                             .get(&s.actor_id)
                             .is_some_and(|ids| ids.contains(&notice.event_id))
                 })
             });
-            if talk {
+            if offer {
                 invited = true;
+            } else if mine {
+                // 邀请的进展（自己答过的结果、过期、对方撤销）：结果已经回到对话里，
+                // 都不该打断手上的安排——躲开一次不等于要停下手上的活。
             } else if s.pending.iter().any(|p| matches!(p, PendingTool::Actions { group_id, .. }
                 if world.action_group(&s.actor_id, group_id).is_some_and(|g| g.status == GroupStatus::Running))) {
                 world.interrupt_actions(&s.actor_id, &notice.text);
@@ -41,7 +53,7 @@ impl ResidentRuntime {
                 world.interrupt_actions(&s.actor_id, &notice.text);
             }
         }
-        if !invited || !world.interactions().has_talk_invitation(&s.actor_id) {
+        if !invited || !world.interactions().has_open_invitation(&s.actor_id) {
             return;
         }
         s.wake_up();
@@ -59,7 +71,7 @@ impl ResidentRuntime {
                         .filter(|g| g.status == GroupStatus::Running)
                     {
                         let notice = format!(
-                            "收到交谈邀请，原动作仍在继续。可以用 {} 接受或拒绝；接受才会中断，最终动作结果另行通知。",
+                            "收到邀请，原动作仍在继续。可以用 {} 接受或拒绝；接受才会中断，最终动作结果另行通知。",
                             ToolName::ReplyInvitation
                         );
                         self.complete_tool(

@@ -669,10 +669,11 @@ fn execute_interaction(
     call: &ToolCall,
     command: InteractionCommand,
 ) -> Result<ToolOutcome, ToolError> {
-    // 收到交谈或同行邀请时可以在普通动作继续执行期间答复，其他工具仍遵守原等待规则。
+    // 有人向你开口时（交谈、同行、牵手都可以）能在普通动作继续执行期间先答一句：
+    // 忙的时候答应亲近要被内核拦下，但「现在不行」总要说得出口。其他工具仍遵守原等待规则。
     let talk_reply = matches!(&command, InteractionCommand::Reply { interaction_id, .. }
         if ctx.world.interactions().of(&ctx.session.actor_id, interaction_id)
-            .is_some_and(|i| i.kind.has_chat()));
+            .is_some_and(|i| i.kind.has_chat() || i.partner == ctx.session.actor_id));
     if !talk_reply || ctx.session.pending.iter().any(PendingTool::blocks_request) {
         require_idle(ctx, "先等待当前工具结果，再处理互动")?;
     }

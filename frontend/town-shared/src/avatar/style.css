@@ -589,6 +589,18 @@
 .avatar-person span {
   flex: 1;
 }
+/* 每个人下面一行亲近按钮：牵一下手、靠一会儿、抱一下 */
+.avatar-near {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.avatar-person-close {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
 .avatar-composer {
   display: flex;
   align-items: flex-end;

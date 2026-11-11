@@ -346,6 +346,80 @@ fn invitation_reply_repairs_format_without_assuming_consent() {
 }
 
 #[test]
+/// 亲近邀请（牵手/靠/抱）也要唤醒本人：从前只认交谈与同行，玩家发的「抱一下？」会一直躺着没人答，
+/// 还会顺着通知把他正在做的事搅断。现在照样唤醒，但不打断手头的事。
+fn a_close_invitation_wakes_a_busy_resident_without_interrupting() {
+    let mut w = world();
+    let mut r = runtime(&mut w, Limits::default());
+    w.spawn("r2", "想抱的人", "loc_a").unwrap();
+    w.enable_agent("r2").unwrap();
+    let q = request(&mut r, &mut w);
+    reply(
+        &mut r,
+        &mut w,
+        &q,
+        "run_actions",
+        json!({"actions":[
+            {"intent":{"verb":"停留","duration_minutes":1000}},
+            {"intent":{"verb":"停留","duration_minutes":10}}
+        ]}),
+    );
+    w.step(1.);
+    let group = w
+        .actor("r1")
+        .unwrap()
+        .actions
+        .groups
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    command(
+        &mut w,
+        "r2",
+        "warm-hug",
+        Command::Offer {
+            partner_id: "r1".into(),
+            interaction: InteractionKind::Touch {
+                gesture: protocol::Gesture::Hug,
+            },
+            message: "抱一下？".into(),
+        },
+    );
+    let q = request(&mut r, &mut w);
+    assert_eq!(
+        w.action_group("r1", &group).unwrap().status,
+        protocol::GroupStatus::Running
+    );
+    assert!(agent::context::paired(&q.messages));
+    // 手上还忙着，先躲开：亲近要两人都空下来才能开始，忙的时候只能答「现在不行」。
+    reply(
+        &mut r,
+        &mut w,
+        &q,
+        "reply_invitation",
+        json!({"interaction_id":"warm-hug","accept":false,"message":"我手上还有事，等会儿吧"}),
+    );
+    r.poll(&mut w, true);
+    let said = r
+        .session("r1")
+        .unwrap()
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::Tool)
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    let item = w.interactions().of("r1", "warm-hug").unwrap();
+    assert_eq!(item.status, InteractionStatus::Declined, "{said}");
+    assert_eq!(item.reply.as_deref(), Some("我手上还有事，等会儿吧"));
+    assert_eq!(
+        w.action_group("r1", &group).unwrap().status,
+        protocol::GroupStatus::Running
+    );
+}
+
+#[test]
 fn invalid_chat_id_reports_the_real_id_without_sending_the_rejected_message() {
     let mut w = world();
     let mut r = runtime(&mut w, Limits::default());

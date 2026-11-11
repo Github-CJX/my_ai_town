@@ -160,11 +160,26 @@ impl Interactions {
         self.items.get(id).filter(|i| i.includes(actor))
     }
 
-    /// 有人向本人发出、尚未回应的交谈或同行邀请：忙着也能考虑，接受才中断手头的事。
+    /// 有人向本人发出、尚未回应的交谈或同行邀请：要等交谈轮次才接话。
     pub fn has_talk_invitation(&self, actor: &str) -> bool {
         self.items
             .values()
             .any(|i| i.partner == actor && i.status == Status::Offered && i.kind.has_chat())
+    }
+
+    /// 有人向本人发出、尚未回应的邀请（交谈、同行、亲近都算）：忙着也能考虑，接受才中断手头的事。
+    pub fn has_open_invitation(&self, actor: &str) -> bool {
+        self.items
+            .values()
+            .any(|i| i.partner == actor && i.status == Status::Offered)
+    }
+
+    /// 有人向本人发出、尚未回应的亲近（牵手/靠/抱）或不占交谈的邀请：
+    /// 不用等交谈轮次，也要本人答一句才动手。
+    pub fn has_close_invitation(&self, actor: &str) -> bool {
+        self.items
+            .values()
+            .any(|i| i.partner == actor && i.status == Status::Offered && !i.kind.has_chat())
     }
 
     /// 玩家（化身或附身）发给这个人、还没回应、发出不到 TALK_HOLD_MINUTES 的交谈或同行邀请。
