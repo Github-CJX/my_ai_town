@@ -41,6 +41,8 @@ pub(crate) struct Runtime {
     pub tasks: TaskPool,
     /// 村民自己账号里填的密钥（只在内存里；世界重启后由管理服务重发）。
     pub owner_keys: OwnerKeys,
+    /// 谁是谁的化身：按票面账号编号记，存在存档旁边的文件里（见 owners.rs）。
+    pub owners: host::owners::Owners,
     /// 上一次存盘是否失败；只在状态变化时写日志，避免每秒刷屏。
     pub save_failed: bool,
 }
@@ -514,6 +516,8 @@ impl Runtime {
             return Outcome::reply(error_msg(message));
         }
         println!("[host] 世界已重置：{}，已暂停", self.world.clock());
+        // 旧化身编号全部作废：归属也一起忘掉，免得新世界沿用旧绑定（事务成功之后才动文件）。
+        self.owners.clear();
         Outcome::none()
             .and_all(ServerMsg::WorldReset {
                 clock: self.world.clock(),

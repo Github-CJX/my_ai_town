@@ -299,7 +299,8 @@ impl Hosts {
     /// 管理服务自己用的地址：在世界口令签的服务票上，找世界问事、请人入住都靠它。
     fn signed_endpoint(&self, id: &str) -> Option<String> {
         let ticket = self.ticket(id, None, true)?;
-        self.endpoint(id).map(|endpoint| with_ticket(&endpoint, &ticket))
+        self.endpoint(id)
+            .map(|endpoint| with_ticket(&endpoint, &ticket))
     }
 
     /// 签一张票：`user` 是登录账号、`admin` 是它在小镇里的角色；服务票不带账号。

@@ -11,6 +11,7 @@ pub mod fnv;
 pub mod library;
 pub mod llm;
 pub mod models;
+pub mod owners;
 pub mod persistence;
 pub mod population;
 pub mod process;

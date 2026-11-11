@@ -13,7 +13,10 @@ const SECRET: &str = "world-secret";
 const EXPIRES: u64 = 4_000_000_000;
 
 fn admin_ticket() -> String {
-    sign(SECRET, &Ticket::user("u-admin", true, "town-ticket", EXPIRES))
+    sign(
+        SECRET,
+        &Ticket::user("u-admin", true, "town-ticket", EXPIRES),
+    )
 }
 
 fn plain_ticket() -> String {
@@ -23,17 +26,26 @@ fn plain_ticket() -> String {
     )
 }
 
-/// 开了口令的小镇：连接地址上必须带 `session` 和 `ticket`。
+/// 指定账号的票：世界只拿它认化身归属。
+fn user_ticket(id: &str) -> String {
+    sign(SECRET, &Ticket::user(id, false, "town-ticket", EXPIRES))
+}
+
+/// 开了口令的小镇：连接地址上必须带 `session` 和 `ticket`。用二维地图，化身才走得动。
 fn town_with_token() -> Town {
     let mut town = Town::new();
-    town.args = vec!["--connection-token".into(), SECRET.into()];
+    town.args = map_args(MAP_2D);
+    town.args.push("--connection-token".into());
+    town.args.push(SECRET.into());
     town
 }
 
 fn plain_socket(town: &Town, query: &str) -> Result<WebSocket<TcpStream>, String> {
     let port = town.port.expect("世界应该已经在监听");
     let stream = TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
     tungstenite::client(format!("ws://127.0.0.1:{port}/?{query}"), stream)
         .map(|(ws, _)| ws)
         .map_err(|e| e.to_string())
@@ -122,6 +134,95 @@ fn a_plain_ticket_cannot_possess_a_resident() {
     let text = refused.to_string();
     assert!(text.contains("只有管理员可以附身村民"), "{text}");
     assert_eq!(refused["ok"], false, "{text}");
+
+    town.kill();
+}
+
+/// 一个账号一具身体：普通账号碰别人的化身会被世界拒掉；自己的那具关了页面回来还是它。
+#[test]
+fn an_account_can_only_control_its_own_avatar() {
+    use crate::avatar::{command, state};
+
+    let mut town = town_with_token();
+    town.query = Some(format!("session={SECRET}&ticket={}", admin_ticket()));
+    let mut admin = town.start();
+    until(&mut admin, |m| m["type"] == "roster");
+
+    let mut a = plain_socket(
+        &town,
+        &format!("session={SECRET}&ticket={}", user_ticket("u-a")),
+    )
+    .expect("账号 A 的票应该能连上");
+    until(&mut a, |m| m["type"] == "roster");
+    let first = state(&mut a);
+    let entered = command(
+        &mut a,
+        &first,
+        1,
+        json!({"kind": "enter", "name": "阿甲", "appearance": {"marker": "甲", "color": "#387963"}}),
+    );
+    assert_eq!(entered["ok"], true, "{entered}");
+    let mine = entered["state"]["actor"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!mine.is_empty(), "{entered}");
+    // A 交还（离场但账号还记着这具身体），B 再来拿它。交还用进场之后的代次。
+    let left = command(
+        &mut a,
+        &entered["state"].clone(),
+        2,
+        json!({"kind": "leave"}),
+    );
+    assert_eq!(left["ok"], true, "{left}");
+
+    // 账号 B 拿 A 的编号进场：不是「这个角色正在别的页面手里」，而是「不是你的」。
+    let mut b = plain_socket(
+        &town,
+        &format!("session={SECRET}&ticket={}", user_ticket("u-b")),
+    )
+    .expect("账号 B 的票应该能连上");
+    until(&mut b, |m| m["type"] == "roster");
+    let second = state(&mut b);
+    let stolen = command(
+        &mut b,
+        &second,
+        1,
+        json!({"kind": "enter", "name": "阿乙", "appearance": {"marker": "乙", "color": "#387963"}, "avatar": mine}),
+    );
+    assert_eq!(stolen["ok"], false, "{stolen}");
+    let message = stolen["message"].as_str().unwrap_or_default();
+    assert!(message.contains("这个化身是别的账号的"), "{message}");
+
+    // 不带编号进场：B 拿到的是自己的一具，不是 A 那具。
+    let own = command(
+        &mut b,
+        &second,
+        2,
+        json!({"kind": "enter", "name": "阿乙", "appearance": {"marker": "乙", "color": "#387963"}}),
+    );
+    assert_eq!(own["ok"], true, "{own}");
+    let theirs = own["state"]["actor"]["id"].as_str().unwrap_or_default();
+    assert_ne!(theirs, mine, "{own}");
+
+    // B 带自己的编号再进场（换个页面回来）仍然可以。
+    let back = command(
+        &mut b,
+        &own["state"],
+        3,
+        json!({"kind": "enter", "name": "阿乙", "appearance": {"marker": "乙", "color": "#387963"}, "avatar": theirs}),
+    );
+    assert_eq!(back["ok"], true, "{back}");
+
+    // A 回来，接着当原来那具（账号记住的是人，不是页面）。
+    let again = command(
+        &mut a,
+        &left["state"],
+        3,
+        json!({"kind": "enter", "name": "阿甲", "appearance": {"marker": "甲", "color": "#387963"}}),
+    );
+    assert_eq!(again["ok"], true, "{again}");
+    assert_eq!(again["state"]["actor"]["id"], mine.as_str(), "{again}");
 
     town.kill();
 }

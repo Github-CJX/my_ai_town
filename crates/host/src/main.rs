@@ -238,6 +238,11 @@ fn build_runtime(
     } else {
         0.0
     };
+    // 化身归属跟着存档走：存档旁边一个 `<存档>.owners.json`，没有存档（--no-save）就只在内存里。
+    let owners_path = args
+        .save_file
+        .as_ref()
+        .map(|path| std::path::PathBuf::from(format!("{}.owners.json", path.display())));
     Ok(Runtime {
         setup,
         avatar_controls: Default::default(),
@@ -254,6 +259,7 @@ fn build_runtime(
         prop_library,
         tasks: host::tasks::TaskPool::new(2, 4),
         owner_keys: Default::default(),
+        owners: host::owners::Owners::open(owners_path),
         save_failed: false,
     })
 }

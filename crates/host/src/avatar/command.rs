@@ -120,12 +120,15 @@ impl Runtime {
         if request.request_id.len() > kernel::ID_MAX_BYTES {
             return;
         }
-        let (ok, code, message) =
-            match self.run_avatar_command(connection, &request, crate::network::allows_admin(clients, connection))
-            {
-                Ok(note) => (true, AvatarResultCode::Ok, note),
-                Err(rejection) => (false, rejection.code, rejection.message),
-            };
+        let (ok, code, message) = match self.run_avatar_command(
+            connection,
+            &request,
+            crate::network::allows_admin(clients, connection),
+            crate::network::account_of(clients, connection).as_deref(),
+        ) {
+            Ok(note) => (true, AvatarResultCode::Ok, note),
+            Err(rejection) => (false, rejection.code, rejection.message),
+        };
         let quiet = matches!(request.command, Command::View | Command::Heartbeat);
         network::send_to(
             clients,
@@ -144,12 +147,13 @@ impl Runtime {
     }
 
     /// 世界、就绪、控制代次与去重检查都过了，才进事务。成功时返回给玩家看的说明（多数为空）。
-    /// `admin` 是这条连接握手时验过的票：附身村民要管理员。
+    /// `admin` 是这条连接握手时验过的票：附身村民要管理员；`account` 是票面的账号编号，用来认化身归属。
     fn run_avatar_command(
         &mut self,
         connection: u64,
         request: &AvatarRequest,
         admin: bool,
+        account: Option<&str>,
     ) -> Result<String, Rejection> {
         let AvatarRequest {
             world_id,
@@ -196,7 +200,7 @@ impl Runtime {
         if self.save_failed {
             return Err(AvatarFailure::SaveNotRecovered.into());
         }
-        self.commit_avatar_command(connection, *sequence, command, lifecycle)
+        self.commit_avatar_command(connection, *sequence, command, lifecycle, admin, account)
     }
 
     /// 同一代次同一序号的命令已经执行过：内容一样算重发成功，不一样拒绝。
@@ -228,10 +232,12 @@ impl Runtime {
         sequence: u64,
         command: &Command,
         lifecycle: bool,
+        admin: bool,
+        account: Option<&str>,
     ) -> Result<String, Rejection> {
         let actor_before = self.controlled_avatar(connection);
         let outcome = self.transact(|rt| {
-            let note = rt.apply_avatar_command(connection, command)?;
+            let note = rt.apply_avatar_command(connection, command, admin, account)?;
             // 交还之后控制账本已经清掉，不能把村民这条命令记进化身的回执账本。
             let leave = matches!(command, Command::Leave);
             let actor = if leave {
@@ -274,13 +280,22 @@ impl Runtime {
         &mut self,
         connection: u64,
         command: &Command,
+        admin: bool,
+        account: Option<&str>,
     ) -> Result<String, AvatarFailure> {
         match command {
             Command::Enter {
                 avatar,
                 name,
                 appearance,
-            } => self.enter(connection, avatar.as_deref(), name, appearance),
+            } => self.enter(
+                connection,
+                avatar.as_deref(),
+                name,
+                appearance,
+                account,
+                admin,
+            ),
             Command::Possess { resident } => self.take_over(connection, resident),
             Command::Resume { token } => self.resume_control(connection, token),
             Command::Leave => self.release_player(connection),
@@ -379,12 +394,15 @@ impl Runtime {
     /// 进入化身。同一连接重复进入算成功；这个连接已经在控制别人时拒绝。
     /// 别的连接在控制别的化身不影响这里进场：多人同镇各有各的化身。
     /// 带上编号就接着当那个化身（离开过的回到上次的位置），不带由内核分配。
+    /// `account` 是票面的账号编号：一个账号一具身体，别人的化身不能拿（管理员例外）。
     fn enter(
         &mut self,
         connection: u64,
         who: Option<&str>,
         name: &str,
         appearance: &Appearance,
+        account: Option<&str>,
+        admin: bool,
     ) -> Result<(), AvatarFailure> {
         if let Some(lease) = self.lease(connection) {
             // 这个连接若正附身某个村民，先交还再进化身：一次只控制一个目标。
@@ -407,39 +425,111 @@ impl Runtime {
                 if self.avatar_held_by_other(connection, id) {
                     return Err(AvatarFailure::Occupied("这个角色正在别的页面手里"));
                 }
+                self.own(id, account, admin)?;
                 self.world.avatar_enter_as(id, name, appearance.clone())?
             }
-            None => {
-                // 关掉页面又回来，想接着用同一个名字：同名且没人握着的化身就地接着当
-                // （在场就留在原地，离场就回上次的位置），免得每次开关标签页都多留一个魂儿在名册里。
-                let reuse = self
-                    .world
-                    .avatars()
-                    .find(|a| {
-                        a.name.trim() == name.trim()
-                            && !self.avatar_held_by_other(connection, &a.id)
-                    })
-                    .map(|a| a.id.clone());
-                match reuse {
-                    Some(id) => {
-                        // 接管前把断线的旧控制清掉，否则它在恢复窗口到期时会把刚接手的这具身体带走。
-                        let stale: Vec<u64> = self
-                            .avatar_controls
-                            .iter()
-                            .filter(|(c, control)| **c != connection && control.avatar == id)
-                            .map(|(c, _)| *c)
-                            .collect();
-                        for dead in stale {
-                            self.avatar_controls.remove(&dead);
-                        }
-                        self.world.avatar_enter_as(&id, name, appearance.clone())?
+            None => match self.mine(account, admin) {
+                // 这个账号已经有身体了：回来还是它，改名不换人。
+                Some(id) => {
+                    if self.avatar_held_by_other(connection, &id) {
+                        return Err(AvatarFailure::Occupied("这个角色正在别的页面手里"));
                     }
-                    None => self.world.avatar_enter(name, appearance.clone())?,
+                    self.world.avatar_enter_as(&id, name, appearance.clone())?
                 }
-            }
+                None => {
+                    // 关掉页面又回来，想接着用同一个名字：同名且没人握着的化身就地接着当
+                    // （在场就留在原地，离场就回上次的位置），免得每次开关标签页都多留一个魂儿在名册里。
+                    let reuse = self
+                        .world
+                        .avatars()
+                        .find(|a| {
+                            a.name.trim() == name.trim()
+                                && !self.avatar_held_by_other(connection, &a.id)
+                                && self.free(&a.id, account)
+                        })
+                        .map(|a| a.id.clone());
+                    match reuse {
+                        Some(id) => {
+                            self.own(&id, account, admin)?;
+                            // 接管前把断线的旧控制清掉，否则它在恢复窗口到期时会把刚接手的这具身体带走。
+                            let stale: Vec<u64> = self
+                                .avatar_controls
+                                .iter()
+                                .filter(|(c, control)| **c != connection && control.avatar == id)
+                                .map(|(c, _)| *c)
+                                .collect();
+                            for dead in stale {
+                                self.avatar_controls.remove(&dead);
+                            }
+                            self.world.avatar_enter_as(&id, name, appearance.clone())?
+                        }
+                        None => {
+                            // 不带编号的新人由宿主挑一具没人认领的身体：内核的 avatar_join
+                            // 会把「离场的主化身」复用给任何连接，那样第二个账号会接手第一个
+                            // 账号的身体。所以编号在这里定，再按编号进场。
+                            let fresh = self.fresh_id(account);
+                            self.own(&fresh, account, admin)?;
+                            self.world
+                                .avatar_enter_as(&fresh, name, appearance.clone())?
+                        }
+                    }
+                }
+            },
         };
         self.grant_control(connection, avatar);
         Ok(())
+    }
+
+    /// 给这个账号挑一具化身编号：主编号空着、或者离场且没人认领，就用它；否则往后找 @N。
+    /// 「在场」的主编号不借人：第二个页面要的是第二具身体，不是接手第一个人的。
+    fn fresh_id(&self, account: Option<&str>) -> String {
+        let base = kernel::avatar::ID;
+        let idle = |id: &str| match self.world.avatars().find(|a| a.id == id) {
+            None => true,
+            Some(avatar) => !avatar.present() && self.free(id, account),
+        };
+        if idle(base) {
+            return base.into();
+        }
+        (2..)
+            .map(|n| format!("{base}@{n}"))
+            .find(|id| !self.world.avatars().any(|a| a.id == *id))
+            .expect("化身编号不会用完")
+    }
+
+    /// 认领一具化身：管理员不受归属限制（也不改别人的归属），普通账号碰别人的就拒绝。
+    fn own(
+        &mut self,
+        avatar: &str,
+        account: Option<&str>,
+        admin: bool,
+    ) -> Result<(), AvatarFailure> {
+        let Some(account) = account else {
+            return Ok(());
+        };
+        match self.owners.claim(avatar, account) {
+            Ok(_) => Ok(()),
+            Err(_) if admin => Ok(()),
+            Err(_) => Err(AvatarFailure::Rejected(
+                "这个化身是别的账号的：换一个名字，或者让管理员接管".into(),
+            )),
+        }
+    }
+
+    /// 这个账号已经有哪具化身（管理员不受归属限制，返回 None 走新建）。
+    fn mine(&self, account: Option<&str>, admin: bool) -> Option<String> {
+        if admin {
+            return None;
+        }
+        account.and_then(|account| self.owners.owned_by(account).map(str::to_owned))
+    }
+
+    /// 这具化身能不能被这个账号接着当：没人认领，或者本来就是这个账号的。
+    fn free(&self, avatar: &str, account: Option<&str>) -> bool {
+        match self.owners.owner_of(avatar) {
+            None => true,
+            Some(owner) => Some(owner) == account,
+        }
     }
 
     /// 附身村民：内核接管，村民会话清掉在途请求与等待。同一连接对同一村民重复附身算成功。

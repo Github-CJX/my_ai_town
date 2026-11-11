@@ -92,11 +92,18 @@ impl Table {
 
     /// 这一次请求花多少：微元（元 × 1 000 000）的整数，免得浮点加着加着漂。
     /// `input` 含缓存命中的部分，命中部分按 `cache` 价算。
-    pub fn cost_micros(&self, model: Option<&str>, input: u64, cache: u64, output: u64) -> Option<u64> {
+    pub fn cost_micros(
+        &self,
+        model: Option<&str>,
+        input: u64,
+        cache: u64,
+        output: u64,
+    ) -> Option<u64> {
         let price = self.price_of(model)?;
         let hit = cache.min(input);
         let miss = input - hit;
-        let total = miss as f64 * price.input + hit as f64 * price.cache + output as f64 * price.output;
+        let total =
+            miss as f64 * price.input + hit as f64 * price.cache + output as f64 * price.output;
         // 单价是「元 / 百万 token」，乘上 token 数正好就是微元
         Some(total.round().max(0.0) as u64)
     }
@@ -125,7 +132,10 @@ mod tests {
         // 只写模型名也认
         assert!(table.price_of(Some("deepseek-chat")).is_some());
         // 价目表里没有的模型：不是 0，是「不知道」
-        assert_eq!(table.cost_micros(Some("mock/agent-wiring-fixture"), 1, 0, 1), None);
+        assert_eq!(
+            table.cost_micros(Some("mock/agent-wiring-fixture"), 1, 0, 1),
+            None
+        );
         assert_eq!(table.cost_micros(None, 1, 0, 1), None);
     }
 

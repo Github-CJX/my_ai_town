@@ -162,7 +162,10 @@ mod tests {
         let raw = sign(secret, &ticket);
         let now = 999;
         assert_eq!(verify(secret, Some("town-a"), &raw, now).unwrap(), ticket);
-        assert_eq!(verify(secret, Some("town-a"), &raw, now).unwrap().admin(), false);
+        assert_eq!(
+            verify(secret, Some("town-a"), &raw, now).unwrap().admin(),
+            false
+        );
         assert!(verify(secret, Some("town-b"), &raw, now)
             .unwrap_err()
             .contains("不是这个镇"));

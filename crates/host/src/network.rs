@@ -37,6 +37,8 @@ pub(crate) struct Peer {
     inputs: Vec<(Instant, ClientMsg)>,
     /// 这条连接是不是管理员：握手时验票得出的，之后按连接查，不看消息里自称什么。
     admin: bool,
+    /// 票面里的账号编号（不透明）：世界只拿它认化身归属，不认账号本身。
+    user: Option<String>,
 }
 
 impl Peer {
@@ -65,6 +67,14 @@ pub(crate) fn allows_admin(clients: &Clients, connection: u64) -> bool {
         .unwrap()
         .get(&connection)
         .is_some_and(|peer| peer.admin)
+}
+/// 这条连接是谁（票面里的账号编号）。没有口令的世界或服务票没有账号，返回 None。
+pub(crate) fn account_of(clients: &Clients, connection: u64) -> Option<String> {
+    clients
+        .lock()
+        .unwrap()
+        .get(&connection)
+        .and_then(|peer| peer.user.clone())
 }
 pub(crate) enum NetworkEvent {
     /// 客户端命令；消息体比断线事件大得多，装箱后队列里每项占用一样小。
@@ -128,7 +138,7 @@ pub(crate) fn listen(
             let Ok(socket) = stream.try_clone() else {
                 continue;
             };
-            let Some((ws, admin)) = handshake(
+            let Some((ws, admin, user)) = handshake(
                 stream,
                 token.as_deref(),
                 town.as_deref(),
@@ -145,6 +155,7 @@ pub(crate) fn listen(
                     socket,
                     inputs: Vec::new(),
                     admin,
+                    user,
                 },
             );
             let to_sim = to_sim.clone();
@@ -160,18 +171,19 @@ pub(crate) fn listen(
 }
 
 /// 握手：校验会话口令与入场票，成功后先发世界身份。任何一步失败都丢弃这条连接。
-/// 返回 ws 与「这条连接是不是管理员」。
+/// 返回 ws、「这条连接是不是管理员」与票面里的账号编号。
 fn handshake(
     stream: TcpStream,
     token: Option<&str>,
     town: Option<&str>,
     greeting: Option<&str>,
-) -> Option<(WebSocket<TcpStream>, bool)> {
+) -> Option<(WebSocket<TcpStream>, bool, Option<String>)> {
     stream.set_nodelay(true).ok();
     stream.set_read_timeout(Some(READ_WAIT)).ok();
     stream.set_write_timeout(Some(WRITE_TIMEOUT)).ok();
     let expected = token.map(|t| format!("session={t}"));
     let mut admin = false;
+    let mut user = None;
     let accepted = tungstenite::accept_hdr(stream, |request: &Request, response: Response| {
         let Some(expected) = &expected else {
             // 没有口令的世界不验票（本机自己开的小镇、测试夹具）：整条连接算管理员
@@ -189,6 +201,8 @@ fn handshake(
             (false, _) => "世界连接已失效，请从小镇列表重新进入",
             (true, Some(Ok(ticket))) => {
                 admin = ticket.admin();
+                // 服务票没有账号（管理服务自己来查）；用户票才有。
+                user = Some(ticket.u).filter(|who| !who.is_empty());
                 return Ok(response);
             }
             (true, Some(Err(problem))) => return Err(rejection(&problem)),
@@ -202,7 +216,7 @@ fn handshake(
             return None;
         }
     }
-    Some((ws, admin))
+    Some((ws, admin, user))
 }
 
 /// `session=<口令>` 里的口令就是签票用的密钥。

@@ -277,7 +277,10 @@ impl Accounts {
             .position(|u| u.id == id)
             .ok_or_else(|| ApiError::bad("没有这个账号"))?;
         if self.users[index].role == Role::Admin {
-            return Err(ApiError::new(409, "管理员账号删不掉：没有账号就没人能进这个管理服务了"));
+            return Err(ApiError::new(
+                409,
+                "管理员账号删不掉：没有账号就没人能进这个管理服务了",
+            ));
         }
         let user = self.users.remove(index);
         let home = self.home(&user.id);
@@ -508,10 +511,19 @@ mod tests {
         let member = accounts.create("阿岚", "1357").expect("建普通账号");
         // 旧密码不对也能换——忘了才走这条
         accounts.reset_pin(&member.id, "4321").expect("重置密码");
-        assert!(accounts.select(&member.id, Some("1357")).is_err(), "旧密码不该认");
+        assert!(
+            accounts.select(&member.id, Some("1357")).is_err(),
+            "旧密码不该认"
+        );
         assert!(accounts.select(&member.id, Some("4321")).is_ok());
-        assert!(accounts.reset_pin(&member.id, "12").is_err(), "密码要 4–8 位");
-        assert!(accounts.reset_pin("u-nobody", "4321").is_err(), "没有这个账号");
+        assert!(
+            accounts.reset_pin(&member.id, "12").is_err(),
+            "密码要 4–8 位"
+        );
+        assert!(
+            accounts.reset_pin("u-nobody", "4321").is_err(),
+            "没有这个账号"
+        );
         // 他目录里建一个 agent：删账号时连目录一起删
         let home = accounts.home(&member.id);
         crate::agents::create(&home, &json!({ "fields": { "name": "阿岚" } }), None)

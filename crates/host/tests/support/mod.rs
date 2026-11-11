@@ -204,11 +204,11 @@ impl Town {
                     .map(|query| format!("/?{query}"))
                     .unwrap_or_default();
                 // 握手可能被拒（没带票、票过期、票对不上）：这本身就是用例要的结果，别 panic
-                let mut ws = match tungstenite::client(format!("ws://127.0.0.1:{port}{query}"), stream)
-                {
-                    Ok((ws, _)) => ws,
-                    Err(e) => return Err(format!("握手被拒：{e}")),
-                };
+                let mut ws =
+                    match tungstenite::client(format!("ws://127.0.0.1:{port}{query}"), stream) {
+                        Ok((ws, _)) => ws,
+                        Err(e) => return Err(format!("握手被拒：{e}")),
+                    };
                 self.port = Some(port);
                 if self.setup {
                     configure_world(&mut ws);

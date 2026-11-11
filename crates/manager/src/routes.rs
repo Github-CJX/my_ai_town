@@ -440,7 +440,10 @@ fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Respo
                 }
             }
             let user = app.accounts.lock().unwrap().remove(id)?;
-            Ok(Response::json(200, &json!({ "ok": true, "removed": user.public() })))
+            Ok(Response::json(
+                200,
+                &json!({ "ok": true, "removed": user.public() }),
+            ))
         }
         (false, "/users/pin") => {
             let me = me.ok_or_else(account_needed)?;
@@ -605,8 +608,7 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 if !app.hosts.is_running(&town) {
                     continue;
                 }
-                if let Err(error) =
-                    crate::usage::push(&app.hosts, &town, &agents, &budget, &me.id)
+                if let Err(error) = crate::usage::push(&app.hosts, &town, &agents, &budget, &me.id)
                 {
                     notes.push(format!(
                         "「{}」还没接受这个额度（{}）",

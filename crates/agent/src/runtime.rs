@@ -293,7 +293,9 @@ impl ResidentRuntime {
         let mut group_in_flight: BTreeMap<String, u32> = BTreeMap::new();
         let mut group_recent: BTreeMap<String, u32> = BTreeMap::new();
         for (id, session) in &self.state.sessions {
-            let Some(group) = self.group_of(id) else { continue };
+            let Some(group) = self.group_of(id) else {
+                continue;
+            };
             if session.in_flight.is_some() {
                 *group_in_flight.entry(group).or_insert(0) += 1;
             }
