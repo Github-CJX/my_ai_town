@@ -338,6 +338,51 @@ impl Runtime {
         }
     }
 
+    /// 账号限额：给一位村民定他自己的每日额度；两项都不给就回到全镇限额。
+    /// 因为到了上限而停着的村民，要点「开始」才接着跑。
+    pub(crate) fn set_resident_budget(
+        &mut self,
+        request_id: String,
+        resident: &str,
+        calls_per_day: Option<u64>,
+        tokens_per_day: Option<u64>,
+    ) -> Outcome {
+        let person = self
+            .population
+            .find(Some(resident))
+            .map(|r| (r.id.clone(), r.name.clone()))
+            .ok();
+        let Some((id, name)) = person else {
+            return Outcome::reply(ServerMsg::ResidentBudgetSaved {
+                request_id,
+                ok: false,
+                message: "名册里没有这位村民（可能已经离开了，或者页面还没刷新）".into(),
+            });
+        };
+        let budget = agent::budget::DailyBudget {
+            calls_per_day,
+            tokens_per_day,
+        };
+        let back_to_town = budget.is_none();
+        match self.driver.runtime.set_actor_budget(&id, Some(budget)) {
+            Ok(()) => Outcome::reply(ServerMsg::ResidentBudgetSaved {
+                request_id,
+                ok: true,
+                message: if back_to_town {
+                    format!("「{name}」回到全镇的额度")
+                } else {
+                    format!("「{name}」自己的每日额度已记下，马上生效")
+                },
+            })
+            .persisted(),
+            Err(error) => Outcome::reply(ServerMsg::ResidentBudgetSaved {
+                request_id,
+                ok: false,
+                message: error.to_string(),
+            }),
+        }
+    }
+
     pub(crate) fn model_config_msg(&self) -> ServerMsg {
         ServerMsg::ModelConfig {
             active: self.settings.providers.active.clone(),

@@ -195,6 +195,11 @@ impl Runtime {
                 ok: false,
                 message,
             },
+            ClientMsg::SetResidentBudget { request_id, .. } => ServerMsg::ResidentBudgetSaved {
+                request_id: request_id.clone(),
+                ok: false,
+                message,
+            },
             // 没有专用回执：门槛只可能拦下其中的 SetSpeed。
             ClientMsg::Avatar { .. }
             | ClientMsg::AvatarInput { .. }
@@ -426,6 +431,12 @@ impl Runtime {
             GetAgentLimits => Outcome::reply(self.driver.limits_view(&self.world)),
             GetUsage => Outcome::reply(self.driver.usage_view(&self.world)),
             SetAgentLimits { request_id, limits } => self.set_agent_limits(request_id, limits),
+            SetResidentBudget {
+                request_id,
+                resident,
+                calls_per_day,
+                tokens_per_day,
+            } => self.set_resident_budget(request_id, &resident, calls_per_day, tokens_per_day),
         }
     }
 
@@ -752,7 +763,8 @@ fn world_id_of(msg: &ClientMsg) -> Option<&str> {
         | ClientMsg::GetAgentLimits
         | ClientMsg::SetAgentLimits { .. }
         | ClientMsg::RemoveResident { .. }
-        | ClientMsg::SetResidentKey { .. } => None,
+        | ClientMsg::SetResidentKey { .. }
+        | ClientMsg::SetResidentBudget { .. } => None,
     }
 }
 
@@ -803,6 +815,7 @@ fn requires_ready(msg: &ClientMsg) -> bool {
         | ClientMsg::GetAgentLimits
         | ClientMsg::SetAgentLimits { .. }
         | ClientMsg::RemoveResident { .. }
-        | ClientMsg::SetResidentKey { .. } => false,
+        | ClientMsg::SetResidentKey { .. }
+        | ClientMsg::SetResidentBudget { .. } => false,
     }
 }

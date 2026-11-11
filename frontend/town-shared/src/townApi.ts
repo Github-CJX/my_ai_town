@@ -223,6 +223,55 @@ export function deleteAgent(id: string): Promise<{ ok: true }> {
   return home('/agents/delete', { id })
 }
 
+/** 账号自己的每日额度：限定投出去的 agent 每天最多用多少；空着的那项用小镇自己的上限 */
+export type AccountBudget = {
+  calls_per_day?: number
+  tokens_per_day?: number
+}
+
+/** 投出去的某一位今天用了多少（世界按居民记，管理服务换回账号的 agent） */
+export type AccountUsageRow = {
+  agent_id: string
+  name: string
+  town: string
+  town_name: string
+  /** 那个小镇此刻在不在运行：没在跑就记 0（不是「没花」，是「不知道」） */
+  running: boolean
+  resident: string
+  resident_name: string
+  calls: number
+  tokens: number
+  input_tokens: number
+  cache_hit_tokens: number
+  replies: number
+  in_flight: number
+  paused: unknown
+  /** 服务商没回计量的次数：花费不明 */
+  unmetered: number
+}
+
+export type AccountUsage = {
+  budget: AccountBudget
+  totals: { calls: number; tokens: number; unmetered: number }
+  agents: AccountUsageRow[]
+}
+
+/** 这个账号今天用了多少；管理服务没有这个接口（老版本）时返回 null */
+export async function readUsage(): Promise<AccountUsage | null> {
+  try {
+    return await home<AccountUsage>('/usage')
+  } catch {
+    return null
+  }
+}
+
+/** 存额度：两项都可以不带（= 回到小镇自己的上限），顺手发给正在跑的小镇 */
+export function saveBudget(
+  body: AccountBudget
+): Promise<{ ok: true; budget: AccountBudget; notes: string[] }> {
+  return home('/budget', body)
+}
+
 /** 某个小镇现在能用的村民模板：小镇没在运行时拿不到 */
 export async function readTemplates(id: string): Promise<AgentTemplate[]> {
   const response = await fetch(`/api/towns/${encodeURIComponent(id)}/templates`, {

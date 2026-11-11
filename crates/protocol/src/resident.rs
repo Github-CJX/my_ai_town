@@ -324,6 +324,9 @@ pub struct RequestView {
     pub output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_hit_tokens: Option<u64>,
+    /// 服务商没回计量：token 只有预留的估算值，不是 0。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmetered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -533,6 +533,42 @@ body:has(.map-launcher) {
   padding: 18px 20px 22px;
   overflow: auto;
 }
+/* 额度弹层：比建村民那个窄，只是一张表单 */
+#budget-dialog {
+  width: min(460px, calc(100vw - 32px));
+}
+.budget-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.budget-title {
+  margin: 0;
+  font-size: 17px;
+}
+.budget-note {
+  margin: 0;
+  color: var(--ui-ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.budget-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.budget-field input {
+  width: 140px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: var(--ui-fill-strong);
+  color: var(--ui-ink);
+  font-size: 13px;
+}
 .enter-game {
   display: flex;
   min-height: 52px;

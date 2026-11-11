@@ -154,6 +154,27 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     assert.equal(mine[0].status, 'joined')
     assert.equal(mine[0].resident_id, deployed.agent.deployed[0].resident)
 
+    // 用量按账号记：这位今天在这个镇里花了多少能看见（刚投进去还没说话，所以是 0 次）
+    const usage = await api('/usage')
+    assert.equal(usage.status, 200, JSON.stringify(usage))
+    assert.equal(usage.totals.calls, 0)
+    assert.equal(usage.agents.length, 1)
+    assert.equal(usage.agents[0].agent_id, agent.id)
+    assert.equal(usage.agents[0].running, true)
+    assert.equal(usage.agents[0].resident, deployed.agent.deployed[0].resident)
+    assert.equal(typeof usage.agents[0].town_name, 'string')
+    assert.deepEqual(usage.budget, {})
+
+    // 自己的每日额度：存下来能读回来，0 不算额度（要清就空着）
+    const capped = await api('/budget', { calls_per_day: 30, tokens_per_day: 500000 })
+    assert.equal(capped.status, 200, JSON.stringify(capped))
+    assert.equal(capped.budget.calls_per_day, 30)
+    assert.deepEqual(capped.notes, [])
+    assert.equal((await api('/usage')).budget.tokens_per_day, 500000)
+    const zero = await api('/budget', { calls_per_day: 0 })
+    assert.equal(zero.status, 400)
+    assert.match(zero.error, /大于 0/)
+
     // 同一个人不再投第二遍
     const again = await api('/default-town/deploy', { agent_id: agent.id })
     assert.equal(again.status, 409)
@@ -184,11 +205,21 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     })
     assert.equal(full.status, 403)
     assert.equal(full.code, 'limit')
+    // 他给自己设了每日额度：投放时这份额度会跟着发给镇上那位居民
+    const friendBudget = await friend('/budget', { calls_per_day: 20 })
+    assert.equal(friendBudget.status, 200, JSON.stringify(friendBudget))
+    assert.deepEqual(friendBudget.notes, [])
     const friendDeploy = await friend('/default-town/deploy', { agent_id: one.agent.id })
     assert.equal(friendDeploy.status, 200, JSON.stringify(friendDeploy))
     assert.equal(friendDeploy.agent.deployed[0].town, 'default-town')
     // 他还没填自己的密钥：人照样投进去，但要说清楚「先在镇上等着」
     assert.match(friendDeploy.note ?? '', /还没选好模型和密钥/)
+    // 额度送到了，不该混进密钥那条提醒里
+    assert.doesNotMatch(friendDeploy.note ?? '', /每日额度/)
+    // 额度只算他自己的：管理员的用量里没有他这一位
+    const myUsage = await api('/usage')
+    assert.ok(!myUsage.agents.some((row) => row.agent_id === one.agent.id))
+    assert.equal(myUsage.budget.calls_per_day, 30)
     // 各投各的：管理员的 agent 列表里看不到朋友的
     assert.equal((await api('/agents')).agents.length, 2)
 

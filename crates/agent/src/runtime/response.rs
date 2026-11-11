@@ -158,6 +158,14 @@ impl ResidentRuntime {
                 self.state.bytes_per_token =
                     smoothed.clamp(*BYTES_PER_TOKEN_RANGE.start(), *BYTES_PER_TOKEN_RANGE.end());
             }
+        } else {
+            // 服务商没回计量：把预留的估算退回账上，台账标成「无计量」——
+            // 不把这次请求当成 0 token，也不让那笔预留永久挂在账上。
+            self.state.lifetime.refund(stamp.reserved_tokens);
+            if s.daily.day == stamp.day {
+                s.daily.refund(stamp.reserved_tokens);
+            }
+            self.ledger_unmetered(round.id);
         }
         self.ledger_reply(round.id, env.latency_ms, round.usage.as_ref());
         let data = json!({

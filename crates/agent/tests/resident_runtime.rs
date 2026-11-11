@@ -1,6 +1,6 @@
 use crate::support::*;
 use agent::{
-    budget::Limits,
+    budget::{DailyBudget, Limits},
     context,
     runtime::ResidentRuntime,
     session::{GoalStatus, PauseKind},
@@ -715,4 +715,77 @@ fn structured_local_turns_move_use_props_and_reject_partial_or_ambiguous_replies
                                 == json!({"prop_id":"bench","verb":"制作器物"})
                     })
         }));
+}
+
+#[test]
+fn one_resident_can_carry_its_owners_daily_budget_and_an_unmetered_reply_gives_the_reserve_back() {
+    let mut w = world();
+    let mut r = runtime(&mut w, Limits::default());
+    let town = r.state().limits.clone();
+    // 默认全镇一份：所有人一样，没有自己的额度
+    assert_eq!(
+        r.daily_limits("r1"),
+        (town.calls_per_day, town.tokens_per_day)
+    );
+    assert!(r.state().budgets.is_empty());
+
+    let own = DailyBudget {
+        calls_per_day: Some(40),
+        tokens_per_day: Some(town.tokens_per_day / 2),
+    };
+    r.set_actor_budget("r1", Some(own.clone())).unwrap();
+    assert_eq!(
+        r.daily_limits("r1"),
+        (40, town.tokens_per_day / 2),
+        "自己的额度只管自己那两项"
+    );
+    assert_eq!(
+        r.daily_limits("r2"),
+        (town.calls_per_day, town.tokens_per_day),
+        "另一位村民照旧用全镇限额"
+    );
+    // 不合规的额度拒收，原本的额度不变
+    let broken = DailyBudget {
+        calls_per_day: Some(0),
+        tokens_per_day: None,
+    };
+    let refused = r.set_actor_budget("r1", Some(broken)).unwrap_err();
+    assert!(refused.to_string().contains("Agent 预算配置无效"));
+    assert_eq!(r.daily_limits("r1"), (40, town.tokens_per_day / 2));
+
+    // 服务商没回计量：发出时悲观落账的预留要退回去，台账标成「无计量」
+    let q = request(&mut r, &mut w);
+    let charged = r.session("r1").unwrap().daily.tokens;
+    assert!(charged > 0, "发出请求时先按估算落账");
+    let call = tool_call(&format!("c{}", q.stamp.id), "observe", json!({}));
+    assert!(r.on_reply(
+        &mut w,
+        &q.actor_id,
+        q.stamp.id,
+        q.stamp.epoch,
+        Ok(agent::conversation::ModelReply {
+            thought: "先看看情况。".into(),
+            calls: vec![call],
+            usage: None,
+        }),
+        25
+    ));
+    let s = r.session("r1").unwrap();
+    assert_eq!(
+        s.daily.tokens, 0,
+        "没回计量就把预留退回，不能把估算值当真实花费留在账上"
+    );
+    assert_eq!(s.daily.calls, 1, "调用确实发出过一次，调用数不退");
+    let row = r.state().requests.back().unwrap();
+    assert!(row.unmetered, "台账要标出这一笔没有真实计量");
+    assert_eq!(row.reserved_tokens, charged);
+
+    // 清掉自己的额度就回到全镇限额
+    r.set_actor_budget("r1", Some(DailyBudget::default()))
+        .unwrap();
+    assert!(!r.state().budgets.contains_key("r1"));
+    assert_eq!(
+        r.daily_limits("r1"),
+        (town.calls_per_day, town.tokens_per_day)
+    );
 }

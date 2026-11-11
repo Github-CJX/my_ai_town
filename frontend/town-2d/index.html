@@ -103,6 +103,30 @@
     <dialog id="villager-dialog" class="villager-dialog" aria-label="我的 agent">
       <div class="villager-sheet" id="villager-view"></div>
     </dialog>
+    <!-- 账号自己的每日额度：限定投出去的 agent 每天最多花多少 -->
+    <dialog id="budget-dialog" class="villager-dialog" aria-label="每日额度">
+      <div class="villager-sheet budget-sheet">
+        <h2 class="budget-title">这个账号的每日额度</h2>
+        <p class="budget-note">
+          投出去的 agent 每天最多用多少。空着的那一项照小镇自己的上限算（镇里「设定 ·
+          花费上限」）。到顶了他会停下来不花钱，第二天自己接着跑。
+        </p>
+        <label class="budget-field">
+          <span>每天最多调用</span>
+          <input id="budget-calls" type="number" min="1" step="1" placeholder="不限" />
+        </label>
+        <label class="budget-field">
+          <span>每天最多 token</span>
+          <input id="budget-tokens" type="number" min="1" step="1000" placeholder="不限" />
+        </label>
+        <p id="budget-tip" class="agent-tip" role="status" hidden></p>
+        <div class="agent-actions">
+          <button id="budget-save" class="agent-deploy">存下来</button>
+          <button id="budget-clear">回到小镇的上限</button>
+          <button id="budget-close">取消</button>
+        </div>
+      </div>
+    </dialog>
     <script type="module" src="/src/launcher/page.ts"></script>
   </body>
 </html>

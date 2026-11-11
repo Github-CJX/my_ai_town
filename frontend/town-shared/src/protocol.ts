@@ -567,6 +567,8 @@ export interface RequestView {
   input_tokens?: number
   output_tokens?: number
   cache_hit_tokens?: number
+  /** 服务商没回计量：token 只有预留的估算值，不是 0 */
+  unmetered?: boolean
 }
 export interface AgentUsage {
   lifetime_calls: number
@@ -770,6 +772,7 @@ export type ServerMsg =
   | { type: 'join_result'; op_id: string; outcome?: JoinOutcome }
   | { type: 'resident_removed'; request_id: string; ok: boolean; message: string }
   | { type: 'resident_key_saved'; request_id: string; ok: boolean; message: string }
+  | { type: 'resident_budget_saved'; request_id: string; ok: boolean; message: string }
 
 /** 意图的结束谓词；线上取值就是中文 */
 type UntilPredicate = '天亮' | '天黑'
@@ -954,6 +957,13 @@ export type ClientMsg =
     }
   | { type: 'set_persona'; request_id: string; resident: string; text: string }
   | { type: 'set_agent_limits'; request_id: string; limits: AgentLimits }
+  | {
+      type: 'set_resident_budget'
+      request_id: string
+      resident: string
+      calls_per_day?: number
+      tokens_per_day?: number
+    }
 
 type Life = 'alive' | 'dead'
 /** 生命历史里一条记录的来源 */

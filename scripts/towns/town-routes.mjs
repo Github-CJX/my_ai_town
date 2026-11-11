@@ -14,6 +14,7 @@ import {
   removeAgent,
   updateAgent,
 } from './agents.mjs'
+import { hasBudget, pushBudget, readBudget, saveBudget, townName, usageSummary } from './usage.mjs'
 
 /** 天气可以选的那几种（与 protocol 的 WeatherKind 一致） */
 const WEATHER = ['clear', 'overcast', 'light_rain', 'rain', 'heavy_rain', 'thunderstorm', 'snow']
@@ -150,6 +151,21 @@ export async function sendOwnerKeys({ root, hosts, accounts, accountConfig }, id
     return
   }
   for (const user of users) {
+    let agents = []
+    try {
+      agents = await listAgents(root, user.id)
+    } catch {
+      agents = []
+    }
+    // 每日额度也补一遍：世界重启后存档里还在，重置过的镇就没有了
+    const budget = await readBudget(root, user.id)
+    if (hasBudget(budget)) {
+      try {
+        await pushBudget(hosts, id, agents, budget)
+      } catch (e) {
+        console.error(`[town-manager] 重发「${user.name}」的每日额度没成功：${e.message}`)
+      }
+    }
     let api = null
     try {
       api = await apiOf(await accountConfig(user))
@@ -157,12 +173,6 @@ export async function sendOwnerKeys({ root, hosts, accounts, accountConfig }, id
       api = null
     }
     if (!api) continue
-    let agents = []
-    try {
-      agents = await listAgents(root, user.id)
-    } catch {
-      agents = []
-    }
     for (const agent of agents) {
       const record = agent.deployed?.[id]
       if (!record) continue
@@ -304,6 +314,36 @@ export function createTownRoutes({
         const me = mine(headers)
         const agent = await serial('agents-' + me.id, () => updateAgent(root, me.id, body))
         return { ok: true, agent: publicAgent(agent) }
+      },
+    ],
+    [
+      // 今天用了多少：世界按居民记，这里换回账号的 agent 再加起来
+      'GET',
+      /^\/api\/towns\/usage$/,
+      async ({ headers }) => {
+        const me = mine(headers)
+        return usageSummary({ root, userId: me.id, hosts, storage })
+      },
+    ],
+    [
+      // 账号自己的每日额度：存下来，顺手发给正在跑的小镇
+      'POST',
+      /^\/api\/towns\/budget$/,
+      async ({ body, headers }) => {
+        const me = mine(headers)
+        const budget = await saveBudget(root, me.id, body)
+        const agents = await listAgents(root, me.id)
+        const notes = []
+        const towns = new Set(agents.flatMap((agent) => Object.keys(agent.deployed ?? {})))
+        for (const town of towns) {
+          if (!hosts.isRunning(town)) continue
+          try {
+            await pushBudget(hosts, town, agents, budget)
+          } catch (e) {
+            notes.push(`「${await townName(storage, town)}」还没接受这个额度（${e.message}）`)
+          }
+        }
+        return { ok: true, budget, notes }
       },
     ],
     [
@@ -455,22 +495,33 @@ export function createTownRoutes({
               name: outcome.name ?? agent.name,
             })
           )
+          // 他自己设过每日额度的话，跟着发给镇上这位居民（世界按居民记，投别人不受影响）
+          const budget = await readBudget(root, me.id)
+          let budgetNote = ''
+          if (hasBudget(budget)) {
+            try {
+              await pushBudget(hosts, id, [saved], budget)
+            } catch (e) {
+              budgetNote = `他自己的每日额度没送到世界那边（${e.message}）：先按全镇额度算`
+            }
+          }
           const note = stranger
             ? `这个镇还不认识他账号里选的服务商（${api.provider}）：人已经投进去了，会先在镇上等着。把这家服务商加进小镇的名单之后，收回他再投一次`
             : !api
               ? '他这个账号还没选好模型和密钥：人已经投进去了，会先在镇上等着。你在「设定 · 账号」里配好之后，收回他再投一次'
-              : await handKey(hosts, id, outcome.resident_id ?? saved.deployed?.[id]?.resident, api)
+              : await handKey(hosts, id, saved.deployed?.[id]?.resident, api)
+          const said = [
+            note
+              ? stranger || !api
+                ? note
+                : `他已经在镇上了，但密钥没送到世界那边（${note}）：先让他等着，过一会儿再投放一次`
+              : '',
+            budgetNote,
+          ].filter(Boolean)
           return {
             ok: true,
             agent: publicAgent(saved),
-            ...(note
-              ? {
-                  note:
-                    stranger || !api
-                      ? note
-                      : `他已经在镇上了，但密钥没送到世界那边（${note}）：先让他等着，过一会儿再投放一次`,
-                }
-              : {}),
+            ...(said.length ? { note: said.join('；') } : {}),
           }
         })
       },

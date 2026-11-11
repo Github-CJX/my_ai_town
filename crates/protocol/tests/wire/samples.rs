@@ -808,6 +808,7 @@ pub fn server_samples() -> Vec<ServerMsg> {
                 input_tokens: Some(3_400),
                 output_tokens: Some(200),
                 cache_hit_tokens: Some(1_000),
+                unmetered: false,
             }],
         },
         ServerMsg::ResidentLibrary {
@@ -877,6 +878,11 @@ pub fn server_samples() -> Vec<ServerMsg> {
             request_id: "r8".into(),
             ok: true,
             message: "「小禾」以后用他自己账号的密钥".into(),
+        },
+        ServerMsg::ResidentBudgetSaved {
+            request_id: "r9".into(),
+            ok: true,
+            message: "「小禾」自己的每日额度已记下，马上生效".into(),
         },
     ]
 }
@@ -1608,6 +1614,18 @@ pub fn client_samples() -> Vec<ClientMsg> {
         ClientMsg::SetAgentLimits {
             request_id: "req-1".into(),
             limits: limits(),
+        },
+        ClientMsg::SetResidentBudget {
+            request_id: "req-2".into(),
+            resident: "resident_xiaohe".into(),
+            calls_per_day: Some(120),
+            tokens_per_day: Some(600_000),
+        },
+        ClientMsg::SetResidentBudget {
+            request_id: "req-3".into(),
+            resident: "resident_xiaohe".into(),
+            calls_per_day: None,
+            tokens_per_day: None,
         },
     ]
 }

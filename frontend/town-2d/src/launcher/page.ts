@@ -18,6 +18,9 @@ import {
   deployAgent,
   keepRunning,
   readAgents,
+  readUsage,
+  saveBudget,
+  type AccountUsage,
   type HomeAgent,
   type ResidentStatus,
   withdrawAgent,
@@ -432,6 +435,70 @@ let agentLimit: number | null = null
 /** 头像条上选中了谁：下面那排按钮只对这位生效 */
 let agentPicked: string | null = null
 let agentBusy = false
+/** 这个账号今天用了多少（管理服务是旧版/没问到时是 null） */
+let accountUsage: AccountUsage | null = null
+
+/** 数字摆好看些：一万以上按 k 说，不再显示零碎 */
+function tokens(count: number) {
+  if (count < 1000) return `${count} token`
+  const scale = count >= 10_000 ? 0 : 1
+  return `${(count / 1000).toFixed(scale)}k token`
+}
+
+// 额度弹层：账号自己的每日上限，存下来顺手发给正在跑的小镇
+const budgetDialog = $('budget-dialog') as HTMLDialogElement
+const budgetCalls = $('budget-calls') as HTMLInputElement
+const budgetTokens = $('budget-tokens') as HTMLInputElement
+const budgetTip = $('budget-tip')
+
+function budgetSay(text: string) {
+  budgetTip.textContent = text
+  budgetTip.hidden = !text
+}
+
+function openBudget() {
+  const budget = accountUsage?.budget ?? {}
+  budgetCalls.value = budget.calls_per_day ? String(budget.calls_per_day) : ''
+  budgetTokens.value = budget.tokens_per_day ? String(budget.tokens_per_day) : ''
+  budgetSay('')
+  budgetDialog.showModal()
+}
+
+/** 空着 = 回到小镇自己的上限；填了就要大于 0 */
+function budgetOf(input: HTMLInputElement) {
+  const text = input.value.trim()
+  if (!text) return undefined
+  const value = Number(text)
+  if (!Number.isInteger(value) || value <= 0)
+    throw new Error('额度要填不小于 1 的整数（不想限就空着）')
+  return value
+}
+
+async function storeBudget(body: { calls_per_day?: number; tokens_per_day?: number }) {
+  try {
+    const reply = await saveBudget(body)
+    budgetDialog.close()
+    agentSay(
+      reply.notes.length ? reply.notes.join('；') : '每日额度存下来了，正在跑的小镇马上就按它算。'
+    )
+    await loadAgents()
+  } catch (error) {
+    budgetSay(errorText(error))
+  }
+}
+
+$('budget-close').addEventListener('click', () => budgetDialog.close())
+$('budget-save').addEventListener('click', () => {
+  try {
+    void storeBudget({
+      calls_per_day: budgetOf(budgetCalls),
+      tokens_per_day: budgetOf(budgetTokens),
+    })
+  } catch (error) {
+    budgetSay(errorText(error))
+  }
+})
+$('budget-clear').addEventListener('click', () => void storeBudget({}))
 
 const townName = (id: string) => maps.find((map) => map.id === id)?.name ?? id
 function agentSay(text: string) {
@@ -450,6 +517,7 @@ async function loadAgents() {
   agentLimit = data.limit
   if (!myAgents.some((agent) => agent.id === agentPicked)) agentPicked = myAgents[0]?.id ?? null
   agentBox.hidden = false
+  accountUsage = await readUsage()
   renderAgents()
 }
 
@@ -549,7 +617,20 @@ function renderAgents() {
     agentLimit === null ? '不限个数' : `还能建 ${Math.max(agentLimit - myAgents.length, 0)} 个`
   // 投出去的村民跑起来用的是你自己账号的模型与密钥（管理员那份就是小镇的）
   const billing = amAdmin ? '用的是小镇的模型与密钥' : '用的是你自己的模型与密钥'
-  agentNote.textContent = `我的 agent · ${count} · ${billing}`
+  // 今天花了多少：世界按居民记，管理服务换回这个账号的 agent
+  const used = accountUsage
+    ? ` · 今天 ${accountUsage.totals.calls} 次 / ${tokens(accountUsage.totals.tokens)}`
+    : ''
+  const unknown =
+    accountUsage && accountUsage.totals.unmetered > 0
+      ? `（其中 ${accountUsage.totals.unmetered} 次服务商没回计量）`
+      : ''
+  const cap = accountUsage?.budget ?? {}
+  const capped = cap.calls_per_day || cap.tokens_per_day
+  const quota = capped
+    ? ` · 额度 ${cap.calls_per_day ?? '不限'} 次 / ${cap.tokens_per_day ? tokens(cap.tokens_per_day) : '不限'}`
+    : ''
+  agentNote.textContent = `我的 agent · ${count} · ${billing}${used}${unknown}${quota}`
 
   const strip = document.createElement('div')
   strip.className = 'agent-strip'
@@ -624,7 +705,22 @@ function renderAgents() {
   strip.append(add)
 
   const picked = myAgents.find((agent) => agent.id === agentPicked)
-  agentList.replaceChildren(...(picked ? [strip, renderAgentActions(picked, here)] : [strip]))
+  // 额度是账号自己的：不跟着选中的 agent 走，所以单独一行
+  const wallet = document.createElement('div')
+  wallet.className = 'agent-actions'
+  const limit = button(
+    '每日额度',
+    () => {
+      agentTip.hidden = true
+      openBudget()
+    },
+    'agent-budget'
+  )
+  limit.title = '限定这个账号投出去的 agent 每天最多用多少'
+  wallet.append(limit)
+  agentList.replaceChildren(
+    ...(picked ? [strip, renderAgentActions(picked, here), wallet] : [strip, wallet])
+  )
 }
 
 async function deployTo(agent: HomeAgent, map: MapEntry) {

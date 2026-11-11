@@ -293,6 +293,7 @@ fn hand_key(
 }
 
 /// 世界一重新拉起来，内存里的密钥就没了：按账号把投在这个镇里的 agent 再送一遍。
+/// 每日额度也一起补一遍——世界重启后存档里还在，重置过的镇就没有了。
 /// 送不进去只记一行日志——世界照常跑，村民会先等着，人还能再投一次。
 pub(crate) fn resend_keys(app: &App, town: &str) {
     let prepared = {
@@ -303,11 +304,25 @@ pub(crate) fn resend_keys(app: &App, town: &str) {
             .map(|user| {
                 let home = accounts.home(&user.id);
                 let api = accounts.api(&app.config, user).ok().flatten();
-                (crate::agents::list(&home).unwrap_or_default(), api)
+                (
+                    user.name.clone(),
+                    crate::agents::list(&home).unwrap_or_default(),
+                    api,
+                    home,
+                )
             })
             .collect::<Vec<_>>()
     };
-    for (agents, api) in prepared {
+    for (who, agents, api, home) in prepared {
+        let budget = crate::usage::read(&home);
+        if budget.calls_per_day.is_some() || budget.tokens_per_day.is_some() {
+            if let Err(error) = crate::usage::push(&app.hosts, town, &agents, &budget) {
+                eprintln!(
+                    "[town-manager] 重发「{who}」的每日额度没成功：{}",
+                    error.message
+                );
+            }
+        }
         let Some(api) = api else { continue };
         for agent in agents {
             let Some(record) = agent.deployed_in(town) else {
@@ -527,6 +542,35 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             let home = app.accounts.lock().unwrap().home(&me.id);
             let agent = crate::agents::update(&home, &body(req)?)?;
             return ok(json!({ "ok": true, "agent": agent.public() }));
+        }
+        // 今天用了多少：世界按居民记，这里换回账号的 agent 再加起来
+        (true, "/usage") => {
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            return ok(crate::usage::summary(&app.hosts, &app.storage, &home)?);
+        }
+        // 账号自己的每日额度：存下来，顺手发给正在跑的小镇
+        (false, "/budget") => {
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            let budget = crate::usage::save(&home, &body(req)?)?;
+            let agents = crate::agents::list(&home)?;
+            let mut notes = Vec::new();
+            let mut towns = std::collections::BTreeSet::new();
+            for agent in &agents {
+                towns.extend(agent.deployed.keys().cloned());
+            }
+            for town in towns {
+                if !app.hosts.is_running(&town) {
+                    continue;
+                }
+                if let Err(error) = crate::usage::push(&app.hosts, &town, &agents, &budget) {
+                    notes.push(format!(
+                        "「{}」还没接受这个额度（{}）",
+                        app.storage.name(&town),
+                        error.message
+                    ));
+                }
+            }
+            return ok(json!({ "ok": true, "budget": budget, "notes": notes }));
         }
         _ => {}
     }
@@ -930,7 +974,7 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 .to_owned();
             let name = outcome["name"].as_str().unwrap_or(&agent.name).to_owned();
             // 密钥随后单独送一次：只在内存里，世界的存盘里没有它
-            let note = if stranger {
+            let mut note = if stranger {
                 format!(
                     "这个镇还不认识他账号里选的服务商（{}）：人已经投进去了，会先在镇上等着。把这家服务商加进小镇的名单之后，收回他再投一次",
                     api.as_ref().map(|a| a.provider.as_str()).unwrap_or_default()
@@ -950,6 +994,21 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 }
             };
             crate::agents::record_deploy(&home, &mut agent, id, &resident, &name)?;
+            // 他自己设过每日额度的话，跟着发给镇上这位居民（世界按居民记，投别人不受影响）
+            let budget = crate::usage::read(&home);
+            if budget.calls_per_day.is_some() || budget.tokens_per_day.is_some() {
+                if let Err(error) =
+                    crate::usage::push(&app.hosts, id, std::slice::from_ref(&agent), &budget)
+                {
+                    if !note.is_empty() {
+                        note.push('；');
+                    }
+                    note.push_str(&format!(
+                        "他自己的每日额度没送到世界那边（{}）：先按全镇额度算",
+                        error.message
+                    ));
+                }
+            }
             let mut result = json!({ "ok": true, "agent": agent.public() });
             if !note.is_empty() {
                 result["note"] = Value::from(note);

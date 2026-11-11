@@ -216,6 +216,28 @@ fn within<T: PartialOrd + std::fmt::Display>(
     )
 }
 
+/// 一位居民自己的每日额度：只覆盖每日调用与每日 token，其余沿用全镇限额。
+/// 两项都可以空着，空着的那项就沿用全镇限额；两项都空等于没有自己的额度。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DailyBudget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calls_per_day: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_per_day: Option<u64>,
+}
+impl DailyBudget {
+    pub fn is_none(&self) -> bool {
+        self.calls_per_day.is_none() && self.tokens_per_day.is_none()
+    }
+    /// 用这份额度把全镇限额里的每日两项换掉，得到这个人实际的每日上限。
+    pub fn apply_to(&self, limits: &Limits) -> (u64, u64) {
+        (
+            self.calls_per_day.unwrap_or(limits.calls_per_day),
+            self.tokens_per_day.unwrap_or(limits.tokens_per_day),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Account {
     pub day: i64,
@@ -238,6 +260,10 @@ impl Account {
     pub(crate) fn charge(&mut self, tokens: u64) {
         self.calls = self.calls.saturating_add(1);
         self.tokens = self.tokens.saturating_add(tokens);
+    }
+    /// 模型没回真实计量：把预留的 token 退回账上（调用确实发出过一次，调用数不退）。
+    pub(crate) fn refund(&mut self, reserved: u64) {
+        self.tokens = self.tokens.saturating_sub(reserved);
     }
     /// 用真实计量替换预留值，并累计输入与缓存命中，供命中率显示。
     pub(crate) fn reconcile(&mut self, reserved: u64, usage: &Usage) {

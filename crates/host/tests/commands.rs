@@ -152,6 +152,49 @@ fn budget_exhaustion_pauses_the_town_until_limits_change_and_a_speed_is_chosen()
     assert!(running["holds"].is_null());
 }
 
+/// 账号的 agent 可以带一份自己的每日额度：只改这一位，发 `null`/不带就是回到全镇额度。
+#[test]
+fn a_resident_can_carry_its_owners_daily_budget_and_give_it_back() {
+    let mut town = Town::new();
+    town.persistent = false;
+    let mut ws = town.start();
+    until(&mut ws, |m| m["type"] == "roster");
+    let id = join_id(&mut ws, "tpl_a");
+    let saved = reply(
+        &mut ws,
+        json!({"type":"set_resident_budget","request_id":"test-budget","resident":id,
+            "calls_per_day":30,"tokens_per_day":500_000}),
+        "resident_budget_saved",
+    );
+    assert_eq!(saved["ok"], true);
+    assert_eq!(saved["request_id"], "test-budget");
+    assert!(saved["message"]
+        .as_str()
+        .unwrap()
+        .contains("自己的每日额度已记下"));
+    // 两样都不带等于撤掉自己的额度
+    let back = reply(
+        &mut ws,
+        json!({"type":"set_resident_budget","request_id":"test-budget-back","resident":id}),
+        "resident_budget_saved",
+    );
+    assert_eq!(back["ok"], true);
+    assert!(back["message"].as_str().unwrap().contains("回到全镇的额度"));
+    // 名册里没有的人：回执仍然带 request_id，页面不会一直等
+    let nobody = reply(
+        &mut ws,
+        json!({"type":"set_resident_budget","request_id":"test-budget-nobody",
+            "resident":"resident_nobody","calls_per_day":30}),
+        "resident_budget_saved",
+    );
+    assert_eq!(nobody["ok"], false);
+    assert_eq!(nobody["request_id"], "test-budget-nobody");
+    assert!(nobody["message"]
+        .as_str()
+        .unwrap()
+        .contains("名册里没有这位村民"));
+}
+
 /// 自动快进：村民在等模型回复时世界按正常速度走，回复因此不会过时；大家都在做一件还要好一阵的事时
 /// 世界加快（名册的 pace 是正常速度的倍数）。固定回复模型每次要 0.6 秒，先看一眼道具，再等 30 分钟。
 /// 走路时不快进由内核的快进空档保证（temporal_integrity.rs）。

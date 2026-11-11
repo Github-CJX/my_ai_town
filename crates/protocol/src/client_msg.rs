@@ -314,6 +314,16 @@ pub enum ClientMsg {
         request_id: String,
         limits: AgentLimits,
     },
+    /// 给一位村民定自己的每日额度（账号限额）；两项都不给就回到全镇限额。
+    /// 回 ResidentBudgetSaved。
+    SetResidentBudget {
+        request_id: String,
+        resident: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calls_per_day: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_per_day: Option<u64>,
+    },
 }
 
 impl ClientMsg {
@@ -350,6 +360,7 @@ impl ClientMsg {
             | GetNotebook { request_id, .. }
             | GetNotebookDetail { request_id, .. }
             | SetAgentLimits { request_id, .. }
+            | SetResidentBudget { request_id, .. }
             | RemoveResident { request_id, .. } => Some(request_id),
             JoinResident { op_id, .. } | GetResidentJoinResult { op_id, .. } => Some(op_id),
             AvatarInput { .. }

@@ -12,6 +12,7 @@ mod positions;
 mod resident;
 mod routes;
 pub mod storage;
+mod usage;
 mod ws;
 
 use error::ApiError;

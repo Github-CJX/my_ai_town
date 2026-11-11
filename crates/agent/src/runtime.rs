@@ -51,6 +51,9 @@ pub struct RuntimeState {
     pub next_session: u64,
     pub sessions: BTreeMap<String, Session>,
     pub limits: Limits,
+    /// 按居民自己的每日额度（账号限额由管理服务发下来）；没有的沿用全镇限额。
+    #[serde(default)]
+    pub budgets: BTreeMap<String, crate::budget::DailyBudget>,
     pub lifetime: Account,
     pub last_dispatched: Option<String>,
     /// 每 token 的正文字节数，按服务商返回的 usage 指数平均校准。
@@ -206,6 +209,7 @@ impl ResidentRuntime {
             next_session: 0,
             sessions: BTreeMap::new(),
             limits,
+            budgets: BTreeMap::new(),
             lifetime: Account::default(),
             last_dispatched: None,
             bytes_per_token: bytes_per_token_default(),
@@ -470,9 +474,26 @@ impl ResidentRuntime {
         }
     }
 
+    /// 这位居民实际的每日上限：有自己的额度就用它，没有就沿用全镇限额。
+    pub fn daily_limits(&self, actor: &str) -> (u64, u64) {
+        match self.state.budgets.get(actor) {
+            Some(budget) => budget.apply_to(&self.state.limits),
+            None => (
+                self.state.limits.calls_per_day,
+                self.state.limits.tokens_per_day,
+            ),
+        }
+    }
+
     /// 总额度先于当日额度；任一不足即停。
     fn check_budget(&self, s: &Session, reserve: u64) -> Result<(), BudgetShortfall> {
         let limits = &self.state.limits;
+        let (daily_calls, daily_tokens) = self.daily_limits(&s.actor_id);
+        let daily_scope = if self.state.budgets.contains_key(&s.actor_id) {
+            "今天的调用或 token 预算耗尽（这位 agent 自己的限额）"
+        } else {
+            "今天的调用或 token 预算耗尽"
+        };
         let scopes = [
             (
                 "运行时总调用或 token 预算耗尽",
@@ -480,12 +501,7 @@ impl ResidentRuntime {
                 limits.total_calls,
                 limits.total_tokens,
             ),
-            (
-                "今天的调用或 token 预算耗尽",
-                &s.daily,
-                limits.calls_per_day,
-                limits.tokens_per_day,
-            ),
+            (daily_scope, &s.daily, daily_calls, daily_tokens),
         ];
         for (scope, account, calls_limit, tokens_limit) in scopes {
             if account.calls >= calls_limit || account.tokens.saturating_add(reserve) > tokens_limit
@@ -722,6 +738,32 @@ impl ResidentRuntime {
     /// 有人停在等模型上；有人在等时 host 不自动快进。
     pub fn waiting_for_model(&self) -> bool {
         self.state.sessions.values().any(Session::waiting_for_model)
+    }
+
+    /// 给一位居民定自己的每日额度（账号限额）：None 或两项都空表示回到全镇限额。
+    /// 规则与设定中心一致：调用须大于 0，每日 token 不小于模型窗口加单次输出上限。
+    pub fn set_actor_budget(
+        &mut self,
+        actor: &str,
+        budget: Option<crate::budget::DailyBudget>,
+    ) -> Result<(), AgentError> {
+        match budget {
+            Some(budget) if !budget.is_none() => {
+                let mut probe = self.state.limits.clone();
+                if let Some(calls) = budget.calls_per_day {
+                    probe.calls_per_day = calls;
+                }
+                if let Some(tokens) = budget.tokens_per_day {
+                    probe.tokens_per_day = tokens;
+                }
+                probe.validate().map_err(AgentError::Limits)?;
+                self.state.budgets.insert(actor.to_owned(), budget);
+            }
+            _ => {
+                self.state.budgets.remove(actor);
+            }
+        }
+        Ok(())
     }
 
     /// 设定中心改额度：只改额度类字段，并发与上下文窗口沿用当前值。

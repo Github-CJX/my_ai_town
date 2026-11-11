@@ -266,4 +266,10 @@ pub enum ServerMsg {
         ok: bool,
         message: String,
     },
+    /// 给一位村民定自己的每日额度（账号限额）的结果
+    ResidentBudgetSaved {
+        request_id: String,
+        ok: bool,
+        message: String,
+    },
 }

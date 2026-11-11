@@ -36,6 +36,9 @@ pub struct RequestRecord {
     pub output_tokens: Option<u64>,
     #[serde(default)]
     pub cache_hit_tokens: Option<u64>,
+    /// 模型没回真实计量：账上只有预留的估算值，不是 0。
+    #[serde(default)]
+    pub unmetered: bool,
 }
 
 impl RequestRecord {
@@ -57,6 +60,7 @@ impl RequestRecord {
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
             cache_hit_tokens: self.cache_hit_tokens,
+            unmetered: self.unmetered,
         }
     }
 }
@@ -97,6 +101,7 @@ impl ResidentRuntime {
             input_tokens: None,
             output_tokens: None,
             cache_hit_tokens: None,
+            unmetered: false,
         });
         while self.state.requests.len() > LEDGER_LIMIT {
             self.state.requests.pop_front();
@@ -111,6 +116,13 @@ impl ResidentRuntime {
                 r.output_tokens = Some(u.output_tokens);
                 r.cache_hit_tokens = Some(u.cache_hit_tokens);
             }
+        }
+    }
+
+    /// 模型没回计量：标成「无计量」，页面据此显示估算而不是 0。
+    pub(super) fn ledger_unmetered(&mut self, id: u64) {
+        if let Some(r) = self.ledger_entry(id) {
+            r.unmetered = true;
         }
     }
 
