@@ -608,3 +608,47 @@ fn two_avatar_pages_talking_both_reach_the_roster() {
     assert_eq!(line(&seen, &theirs)["speech"]["text"], "我也听见了");
     town.shutdown();
 }
+
+/// 玩家化身能向镇上的村民提「抱一下」：世界收下这条邀请，双方都看见它在等回答。
+/// 从前只有 agent 能提亲近，页面连一条 interact 都不发——这一条盯的是世界那一侧本来就通。
+#[test]
+fn an_avatar_can_offer_a_gesture_to_a_resident() {
+    let mut town = Town::new();
+    town.args = map_args(MAP_2D);
+    let mut ws = town.start();
+    let resident = join_id(&mut ws, "tpl_b");
+    send(
+        &mut ws,
+        json!({"type":"set_speed","request_id":"go","speed":1}),
+    );
+    until(&mut ws, |m| m["type"] == "roster" && m["speed"] == 1.0);
+    let s = state(&mut ws);
+    let entered = command(
+        &mut ws,
+        &s,
+        1,
+        json!({"kind":"enter","name":"阿岚","appearance":{"marker":"我","color":"#387963"}}),
+    );
+    assert_eq!(entered["ok"], true, "{entered}");
+    let s = state(&mut ws);
+    let offered = command(
+        &mut ws,
+        &s,
+        2,
+        json!({"kind":"interact","revision":s["actor"]["revision"],
+            "command":{"operation":"offer","partner_id":resident,"interaction":{"kind":"touch","gesture":"hug"},"message":"抱一下？"}}),
+    );
+    assert_eq!(offered["ok"], true, "{offered}");
+    let stated = offered["state"]["interactions"]
+        .as_array()
+        .and_then(|list| {
+            list.iter()
+                .find(|i| i["kind"]["kind"] == "touch" && i["partner"] == resident.as_str())
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    assert_eq!(stated["kind"]["gesture"], "hug", "{offered}");
+    assert_eq!(stated["status"], "offered", "{offered}");
+    assert_eq!(stated["partner"], resident.as_str(), "{offered}");
+    town.shutdown();
+}
