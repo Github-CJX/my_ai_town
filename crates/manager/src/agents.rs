@@ -216,6 +216,14 @@ pub fn record_deploy(
     save(home, agent)
 }
 
+/// 收回来之后抹掉这个镇的记录：人不在镇上了，定义里也不该再写着他在。
+pub fn record_withdraw(home: &Path, agent: &mut Agent, town: &str) -> Result<(), ApiError> {
+    if agent.deployed.remove(town).is_none() {
+        return Err(ApiError::new(409, "这个 agent 不在这个镇里"));
+    }
+    save(home, agent)
+}
+
 /// 删一个定义：还投在某个小镇里的删不掉（记录和镇上的人得对得上）
 pub fn remove(home: &Path, id: &str) -> Result<(), ApiError> {
     let agent = read(home, id)?;

@@ -210,6 +210,14 @@ export function deployAgent(id: string, agentId: string): Promise<{ ok: true; ag
   return post(id, 'deploy', { agent_id: agentId })
 }
 
+/** 请投放出去的那一位离开某个小镇：镇上少一个人，这段记忆留在那个镇的存档里 */
+export function withdrawAgent(
+  id: string,
+  agentId: string
+): Promise<{ ok: true; agent: HomeAgent; message?: string }> {
+  return post(id, 'withdraw', { agent_id: agentId })
+}
+
 /** 重新打开小镇：世界进程不在了，管理服务就从存档把它拉起来。返回新的连接地址和打开凭证。
  *  automatic 是断线后自动重开：被另一个页面进的小镇挤掉时不抢回来，抛 TownDisplaced */
 export function reopenTown(id: string, automatic = true) {

@@ -431,6 +431,27 @@ impl Interactions {
         None
     }
 
+    /// 这个人走了：还没结束的互动一律收尾（记中断，不算失败），最近台词索引一起清掉。
+    /// 已经过去的交谈记录留在表里，和他聊过的人还能回看说过什么。
+    pub(crate) fn forget(&mut self, actors: &mut Actors, now: f64, actor: &str) {
+        let open: Vec<String> = self
+            .items
+            .values()
+            .filter(|i| !i.status.terminal() && i.includes(actor))
+            .map(|i| i.id.clone())
+            .collect();
+        for id in open {
+            self.end(
+                actors,
+                now,
+                &id,
+                Status::Interrupted,
+                Some("对方离开了小镇".into()),
+            );
+        }
+        self.latest_speech.remove(actor);
+    }
+
     pub(crate) fn end(
         &mut self,
         actors: &mut Actors,

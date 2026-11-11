@@ -11,6 +11,7 @@
 //! 启动阶段的错误（配置损坏、存档不匹配）打印后退出；运行中的客户端命令不会让进程退出。
 
 mod avatar;
+mod departure;
 mod join;
 mod library_commands;
 mod network;

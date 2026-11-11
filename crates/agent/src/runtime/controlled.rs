@@ -47,6 +47,22 @@ impl ResidentRuntime {
         self.state.sessions.insert(actor.into(), session);
         Ok(())
     }
+    /// 这个人要离开了：会话连同在途请求一起丢掉（迟到的回复不执行，预留用量保留），
+    /// 而且**不放回去**——世界那边名册里已经没有这个人了。
+    pub fn forget(&mut self, actor: &str) {
+        let Some(mut session) = self.state.sessions.remove(actor) else {
+            return;
+        };
+        if let Some(stamp) = session.drop_in_flight() {
+            self.ledger_close(
+                stamp.id,
+                RequestStatus::Dropped,
+                "村民离开了小镇，迟到的回复不执行；预留用量保留",
+            );
+        }
+        // 还挂着的等待和待办一起作废：他不会再醒来处理这些了
+        session.pending.clear();
+    }
     /// 与世界事务一起回退，不递增请求代次，也不重新加载或修改记忆文件。
     pub fn control_checkpoint(&self) -> ControlCheckpoint {
         ControlCheckpoint {

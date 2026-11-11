@@ -187,6 +187,11 @@ impl Runtime {
                 ok: false,
                 message,
             },
+            ClientMsg::RemoveResident { request_id, .. } => ServerMsg::ResidentRemoved {
+                request_id: request_id.clone(),
+                ok: false,
+                message,
+            },
             // 没有专用回执：门槛只可能拦下其中的 SetSpeed。
             ClientMsg::Avatar { .. }
             | ClientMsg::AvatarInput { .. }
@@ -352,6 +357,10 @@ impl Runtime {
                 clients,
             ),
             GetResidentJoinResult { world_id, op_id } => self.join_result(&world_id, op_id),
+            RemoveResident {
+                request_id,
+                resident,
+            } => self.remove_resident(request_id, &resident, clients),
             GetChatHistory {
                 resident,
                 request_id,
@@ -727,7 +736,8 @@ fn world_id_of(msg: &ClientMsg) -> Option<&str> {
         | ClientMsg::GetNotebook { .. }
         | ClientMsg::GetNotebookDetail { .. }
         | ClientMsg::GetAgentLimits
-        | ClientMsg::SetAgentLimits { .. } => None,
+        | ClientMsg::SetAgentLimits { .. }
+        | ClientMsg::RemoveResident { .. } => None,
     }
 }
 
@@ -776,6 +786,7 @@ fn requires_ready(msg: &ClientMsg) -> bool {
         | ClientMsg::GetNotebook { .. }
         | ClientMsg::GetNotebookDetail { .. }
         | ClientMsg::GetAgentLimits
-        | ClientMsg::SetAgentLimits { .. } => false,
+        | ClientMsg::SetAgentLimits { .. }
+        | ClientMsg::RemoveResident { .. } => false,
     }
 }

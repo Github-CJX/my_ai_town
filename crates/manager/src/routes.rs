@@ -714,6 +714,60 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             crate::agents::record_deploy(&home, &mut agent, id, &resident, &name)?;
             ok(json!({ "ok": true, "agent": agent.public() }))
         }
+        // 收回：请投放出去的那一位离开这个镇，并把这里的投放记录抹掉
+        (false, "withdraw") => {
+            let request = body(req)?;
+            let home = app.accounts.lock().unwrap().home(&me.id);
+            let mut agent =
+                crate::agents::read(&home, request["agent_id"].as_str().unwrap_or_default())?;
+            let Some(record) = agent.deployed_in(id).cloned() else {
+                return Err(ApiError::new(409, "这个 agent 不在这个镇里"));
+            };
+            if !app.hosts.is_running(id) {
+                return Err(ApiError::new(
+                    409,
+                    "这个小镇没在运行：先进一次，或让它在后台运行，才收得回来",
+                ));
+            }
+            let request_id = format!("withdraw-{}-{}", agent.id, crate::token());
+            let reply = app
+                .hosts
+                .query_in(
+                    id,
+                    Some(&json!({
+                        "type": "remove_resident",
+                        "request_id": request_id,
+                        "resident": record.resident,
+                    })),
+                    |m| m["type"] == "resident_removed" && m["request_id"] == request_id.as_str(),
+                    20,
+                )
+                .map_err(|error| {
+                    if error.status == 400 {
+                        ApiError::new(409, error.message)
+                    } else {
+                        error
+                    }
+                })?;
+            if reply["ok"].as_bool() != Some(true) {
+                let message = reply["message"]
+                    .as_str()
+                    .unwrap_or("没能请他离开")
+                    .to_owned();
+                // 世界那边本来就没这个人了（重置过、或存档换过）：记录跟着清掉，不然这个 agent 永远删不掉
+                if message.contains("名册里没有") {
+                    crate::agents::record_withdraw(&home, &mut agent, id)?;
+                    return ok(json!({ "ok": true, "agent": agent.public(), "note": message }));
+                }
+                return Err(ApiError::new(409, message));
+            }
+            crate::agents::record_withdraw(&home, &mut agent, id)?;
+            let message = reply["message"]
+                .as_str()
+                .unwrap_or("已经离开了小镇")
+                .to_owned();
+            ok(json!({ "ok": true, "agent": agent.public(), "message": message }))
+        }
         _ => Err(ApiError::new(404, "操作不存在")),
     }
 }

@@ -37,6 +37,13 @@ const LOST_MINUTES: f64 = 6.0;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WalkTrails(BTreeMap<String, WalkTrail>);
 
+impl WalkTrails {
+    /// 这个人走了：他留下的足迹一起清掉，免得后来的人跟着一个不在的人走。
+    pub(crate) fn forget(&mut self, actor: &str) {
+        self.0.remove(actor);
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct WalkTrail {
     trail: Trail,

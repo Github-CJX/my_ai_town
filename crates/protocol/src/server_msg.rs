@@ -253,4 +253,10 @@ pub enum ServerMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outcome: Option<JoinOutcome>,
     },
+    /// 请一位村民离开的结果（只回给发出命令的连接）：成功时随后的 Population 里已经没有他
+    ResidentRemoved {
+        request_id: String,
+        ok: bool,
+        message: String,
+    },
 }

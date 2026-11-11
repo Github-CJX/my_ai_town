@@ -112,6 +112,17 @@ export async function recordDeploy(root, userId, agent, townId, record) {
   return agent
 }
 
+/** 收回来之后抹掉这个镇的记录：人不在镇上了，定义里也不该再写着他在 */
+export async function recordWithdraw(root, userId, agent, townId) {
+  const town = safeId(townId)
+  if (!agent.deployed?.[town]) throw new HttpError(409, '这个 agent 不在这个镇里')
+  const deployed = { ...agent.deployed }
+  delete deployed[town]
+  agent.deployed = deployed
+  await atomicJson(agentFile(root, userId, agent.id), agent)
+  return agent
+}
+
 /** 删一个 agent 定义：还在某个小镇里活着的不让删，免得记录和镇上的人对不上 */
 export async function removeAgent(root, userId, id) {
   const agent = await readAgent(root, userId, id)

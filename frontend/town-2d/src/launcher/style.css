@@ -403,6 +403,11 @@ body:has(.map-launcher) {
   border-color: var(--ui-danger);
   background: none;
 }
+.agent-row .agent-recall {
+  color: var(--ui-warn, inherit);
+  border-color: var(--ui-line);
+  background: none;
+}
 .agent-create {
   display: flex;
   flex-direction: column;

@@ -868,6 +868,11 @@ pub fn server_samples() -> Vec<ServerMsg> {
             op_id: "op1".into(),
             outcome: Some(join_outcome()),
         },
+        ServerMsg::ResidentRemoved {
+            request_id: "r7".into(),
+            ok: true,
+            message: "「小禾」已经离开小镇".into(),
+        },
     ]
 }
 
@@ -1559,6 +1564,10 @@ pub fn client_samples() -> Vec<ClientMsg> {
         ClientMsg::GetResidentJoinResult {
             world_id: "w1".into(),
             op_id: "op1".into(),
+        },
+        ClientMsg::RemoveResident {
+            request_id: "r7".into(),
+            resident: "resident_xiaohe".into(),
         },
         ClientMsg::GetDiary {
             resident: Some("resident_ashu".into()),

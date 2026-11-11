@@ -73,6 +73,7 @@ fn server_variants() -> Vec<String> {
         JoinPreview,
         ResidentJoined,
         JoinResult,
+        ResidentRemoved,
     })
 }
 
@@ -116,6 +117,7 @@ fn client_variants() -> Vec<String> {
         PreviewResidentJoin,
         JoinResident,
         GetResidentJoinResult,
+        RemoveResident,
         GetDiary,
         GetNotebook,
         GetNotebookDetail,

@@ -8,6 +8,7 @@ import {
   publicAgent,
   readAgent,
   recordDeploy,
+  recordWithdraw,
   removeAgent,
 } from './agents.mjs'
 
@@ -274,6 +275,41 @@ export function createTownRoutes({
             })
           )
           return { ok: true, agent: publicAgent(saved) }
+        })
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/([a-z0-9-]+)\/withdraw$/,
+      async ({ params: [id], body, headers }) => {
+        const me = mine(headers)
+        id = safeId(id)
+        const agent = await readAgent(root, me.id, body?.agent_id)
+        const record = agent.deployed?.[id]
+        if (!record) throw new HttpError(409, '这个 agent 不在这个镇里')
+        if (!hosts.isRunning(id))
+          throw new HttpError(409, '这个小镇没在运行：先进一次，或让它在后台运行，才收得回来')
+        return inTown(id, async () => {
+          const requestId = `withdraw-${agent.id}-${Date.now()}`
+          const reply = await hosts.query(
+            id,
+            { type: 'remove_resident', request_id: requestId, resident: record.resident },
+            (m) => m.type === 'resident_removed' && m.request_id === requestId,
+            20_000
+          )
+          const save = (again) =>
+            serial('agents-' + me.id, () => recordWithdraw(root, me.id, again, id))
+          if (!reply.ok) {
+            const message = reply.message || '没能请他离开'
+            // 世界那边本来就没这个人了（重置过、或存档换过）：记录跟着清掉，不然这个 agent 永远删不掉
+            if (message.includes('名册里没有')) {
+              const again = await save(agent)
+              return { ok: true, agent: publicAgent(again), note: message }
+            }
+            throw new HttpError(409, message)
+          }
+          const again = await save(agent)
+          return { ok: true, agent: publicAgent(again), message: reply.message }
         })
       },
     ],

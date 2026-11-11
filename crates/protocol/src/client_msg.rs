@@ -275,6 +275,11 @@ pub enum ClientMsg {
         world_id: String,
         op_id: String,
     },
+    /// 请一位村民离开小镇（回 ResidentRemoved）：只在管理服务里由投放它的账号用，村民自己不会发
+    RemoveResident {
+        request_id: String,
+        resident: String,
+    },
     /// 读日志（回 Diary）
     GetDiary {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -332,7 +337,8 @@ impl ClientMsg {
             | ArchiveResidentTemplate { request_id, .. }
             | GetNotebook { request_id, .. }
             | GetNotebookDetail { request_id, .. }
-            | SetAgentLimits { request_id, .. } => Some(request_id),
+            | SetAgentLimits { request_id, .. }
+            | RemoveResident { request_id, .. } => Some(request_id),
             JoinResident { op_id, .. } | GetResidentJoinResult { op_id, .. } => Some(op_id),
             AvatarInput { .. }
             | GetWorldSettings

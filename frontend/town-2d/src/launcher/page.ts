@@ -23,6 +23,7 @@ import {
   type AgentTemplate,
   type HomeAgent,
   type ResidentStatus,
+  withdrawAgent,
 } from 'town-shared/townApi'
 import { warmSelectedGame } from '../startupWarmup'
 import { createMusicController } from 'town-shared/audio/music'
@@ -506,7 +507,22 @@ function renderAgents() {
       }
       row.append(deploy)
     }
-    // 已经住进某个镇的定义删不掉（记录和镇上的人得对得上）
+    // 已经住进某个镇的定义删不掉（记录和镇上的人得对得上）：要删先收回来
+    for (const place of agent.deployed) {
+      const recall = document.createElement('button')
+      recall.type = 'button'
+      recall.className = 'agent-recall'
+      recall.textContent = agent.deployed.length > 1 ? `收回「${townName(place.town)}」` : '收回'
+      const live = selected?.id === place.town && !!selected.running
+      recall.disabled = agentBusy || !live
+      recall.title = live
+        ? `请「${agent.name}」离开「${townName(place.town)}」`
+        : '先选中那个小镇、让它跑着，才收得回来'
+      recall.onclick = () => {
+        if (live) void recallFrom(agent, place.town)
+      }
+      row.append(recall)
+    }
     if (!agent.deployed.length) {
       const drop = document.createElement('button')
       drop.type = 'button'
@@ -540,6 +556,32 @@ async function deployTo(agent: HomeAgent, map: MapEntry) {
   try {
     await deployAgent(map.id, agent.id)
     agentSay(`「${agent.name}」住进「${map.name}」了。`)
+    // 模板被用掉了，下次重新问镇上要一份还能用的
+    templatesFor = ''
+  } catch (error) {
+    agentSay(errorText(error))
+  } finally {
+    agentBusy = false
+    void loadAgents()
+  }
+}
+
+async function recallFrom(agent: HomeAgent, town: string) {
+  if (agentBusy) return
+  if (
+    !window.confirm(
+      `请「${agent.name}」离开「${townName(town)}」？他在这里的经历留在小镇的存档里。`
+    )
+  )
+    return
+  agentBusy = true
+  agentTip.hidden = true
+  renderAgents()
+  try {
+    await withdrawAgent(town, agent.id)
+    agentSay(`「${agent.name}」已经离开「${townName(town)}」了，模板也空出来了。`)
+    // 模板空出来一个，下次重新问镇上要一份
+    templatesFor = ''
   } catch (error) {
     agentSay(errorText(error))
   } finally {

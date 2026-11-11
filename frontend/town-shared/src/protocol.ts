@@ -768,6 +768,7 @@ export type ServerMsg =
   | { type: 'join_preview'; preview: JoinPreview }
   | { type: 'resident_joined'; outcome: JoinOutcome }
   | { type: 'join_result'; op_id: string; outcome?: JoinOutcome }
+  | { type: 'resident_removed'; request_id: string; ok: boolean; message: string }
 
 /** 意图的结束谓词；线上取值就是中文 */
 type UntilPredicate = '天亮' | '天黑'
@@ -916,6 +917,8 @@ export type ClientMsg =
       model?: ModelChoice
     }
   | { type: 'get_resident_join_result'; world_id: string; op_id: string }
+  /** 请一位村民离开：只在管理服务里由投放它的账号用，村民自己不会发 */
+  | { type: 'remove_resident'; request_id: string; resident: string }
   | { type: 'get_agent_config' | 'get_diary'; resident?: string }
   | { type: 'get_notebook'; resident: string; request_id: string; query: NotebookQuery }
   | {

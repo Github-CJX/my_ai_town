@@ -58,6 +58,15 @@ impl Inventory {
     pub(crate) fn forget(&mut self, id: &str) {
         self.locations.remove(id);
     }
+    /// 这个人走了：随身带的东西放回地图上它原本的位置（位置表里不留条目）。
+    pub(crate) fn release(&mut self, actor: &str) {
+        let before = self.locations.len();
+        self.locations
+            .retain(|_, l| !matches!(l, Location::Carried { actor: owner } if owner == actor));
+        if self.locations.len() != before {
+            self.bump();
+        }
+    }
     pub(crate) fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }

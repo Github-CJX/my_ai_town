@@ -134,6 +134,35 @@ impl World {
         Ok(())
     }
 
+    /// 请一位村民离开小镇：正在进行的互动收尾、随身的东西放回原处、住宅空出来。
+    /// 世界只做「人不在名册里了」这件事，不留记忆；日志里留一句，留下的村民看得见。
+    pub fn leave(&mut self, id: &str) -> Result<String> {
+        let actor = self
+            .actors
+            .get(id)
+            .ok_or_else(|| KernelError::population(format!("没有编号为 {id} 的村民")))?;
+        let name = actor.name.clone();
+        let home = actor.home.clone();
+        let info = actor.event_info();
+        self.release_possession_of(id);
+        self.interactions.forget(&mut self.actors, self.minutes, id);
+        self.inventory.release(id);
+        self.walk_trails.forget(id);
+        // 谁在哪里见过谁：下次看的时候重算，别留着已经不在了的人
+        self.places_seen = None;
+        self.actors.remove(id);
+        self.affordances.mark_dirty();
+        let text = match home {
+            Some(home) => format!(
+                "{name}离开了小镇，住过的「{}」空了出来。",
+                self.topo.locale_name(&home)
+            ),
+            None => format!("{name}离开了小镇。"),
+        };
+        self.log(info, text);
+        Ok(name)
+    }
+
     /// 入口存在；有住宅时住宅须可分配、未被占用、从入口可达。
     fn entry_problems(&self, entry: &Entry, home: Option<&str>, problems: &mut Vec<String>) {
         if !self.topo.is_dwell(entry.locale) {

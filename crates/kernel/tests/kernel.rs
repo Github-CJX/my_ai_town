@@ -3,6 +3,7 @@ mod common;
 
 mod agent_actions;
 mod avatar;
+mod departure;
 mod exploration;
 mod force;
 mod game_mode;

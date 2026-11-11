@@ -183,14 +183,49 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     assert.equal((await api('/agents')).agents.length, 1)
 
     // 定义放在这个账号自己的目录下，里面不写别人的东西
-    const saved = JSON.parse(
-      await fs.readFile(
-        path.join(root, 'users', me.current.id, 'agents', `${agent.id}.json`),
-        'utf8'
-      )
+    const path0 = path.join(root, 'users', me.current.id, 'agents', `${agent.id}.json`)
+    const before = JSON.parse(await fs.readFile(path0, 'utf8'))
+    assert.equal(before.name, '阿岚')
+    assert.equal(before.deployed['default-town'].resident, deployed.agent.deployed[0].resident)
+
+    // 收回：不在这个镇里的、小镇没在运行的，都说清楚原因
+    const third = await api('/agents', {
+      name: '阿石',
+      template_id: 'tpl_not_in_town',
+      template_version: 1,
+    })
+    assert.equal(third.status, 200, JSON.stringify(third))
+    const notThere = await api('/default-town/withdraw', { agent_id: third.agent.id })
+    assert.equal(notThere.status, 409)
+    assert.match(notThere.error, /不在这个镇里/)
+    assert.equal((await api('/default-town/close', {})).closed, true)
+    const away = await api('/default-town/withdraw', { agent_id: agent.id })
+    assert.equal(away.status, 409)
+    assert.match(away.error, /没在运行/)
+    await api('/default-town/open', {})
+
+    // 真的收回：镇上没有这个人了，定义里也抹掉了这里的记录
+    const back = await api('/default-town/withdraw', { agent_id: agent.id })
+    assert.equal(back.status, 200, JSON.stringify(back))
+    assert.match(back.message, /离开了小镇/)
+    assert.deepEqual(back.agent.deployed, [])
+    const left = await m.hosts.query(
+      'default-town',
+      { type: 'get_population' },
+      (msg) => msg.type === 'population'
     )
-    assert.equal(saved.name, '阿岚')
-    assert.equal(saved.deployed['default-town'].resident, deployed.agent.deployed[0].resident)
+    assert.ok(
+      !left.population.residents.some((person) => person.id === deployed.agent.deployed[0].resident)
+    )
+    assert.ok(left.population.residents.some((person) => person.name === '朋友的小人'))
+    // 不能再收一次
+    assert.equal((await api('/default-town/withdraw', { agent_id: agent.id })).status, 409)
+    // 收回来之后就能删了
+    assert.equal((await api('/agents/delete', { id: agent.id })).status, 200)
+    assert.deepEqual(
+      (await api('/agents')).agents.map((a) => a.name),
+      ['阿石']
+    )
   } finally {
     await m?.stop()
     await fs.rm(root, { recursive: true, force: true })
