@@ -140,7 +140,7 @@ export async function createManager({
     })
   const builtinModel = createBuiltinModelRoutes({ source, configOf })
   const routes = [
-    ...createAccountRoutes({ accounts }),
+    ...createAccountRoutes({ accounts, storage }),
     ...createModelRoutes({ source, configOf, serial }),
     ...builtinModel.routes,
     ...creation.routes,

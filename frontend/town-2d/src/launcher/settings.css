@@ -193,6 +193,19 @@ button.model-line {
   font-size: 12px;
   line-height: 1.4;
 }
+/* 账号行右边：切换 / 重置密码 / 删掉——排在一条线上，窄屏自己换行 */
+.set-row .account-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.set-row .account-actions > * {
+  flex: none;
+}
+.set-row .account-actions .account-drop {
+  color: var(--danger);
+}
 @media (max-width: 719px) {
   .home-settings {
     width: 100%;

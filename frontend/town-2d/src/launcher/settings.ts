@@ -290,6 +290,19 @@ export function installHomeSettings(deps: {
   )
   switchRow.append(switchWho, switchPin, switchPinTip, switchActions)
   const checkSwitchPin = watchPin(switchPin, switchPinTip)
+  // 管理员替别人重置密码：忘了密码的出路（自己改密码那条要输原来的密码）
+  const resetWho = el('span', '', 'account-switch-name')
+  const resetPin = pinInput('新的 4–8 位数字密码')
+  const resetPinTip = pinTip()
+  const resetRow = el('div', '', 'account-create')
+  resetRow.hidden = true
+  const resetActions = el('div', '', 'account-actions')
+  resetActions.append(
+    button('换成这个密码', () => void enterReset(), 'account-add'),
+    button('取消', () => hideReset(), 'account-cancel')
+  )
+  resetRow.append(resetWho, resetPin, resetPinTip, resetActions)
+  const checkResetPin = watchPin(resetPin, resetPinTip)
   const accountNote = el('p', '', 'page-status')
   accountNote.setAttribute('role', 'status')
   accounts.append(
@@ -303,6 +316,7 @@ export function installHomeSettings(deps: {
     accountRows,
     accountCreate,
     switchRow,
+    resetRow,
     accountNote
   )
   const sound = createSoundPage(false, { music: deps.music, effects: effectsPreference })
@@ -342,6 +356,8 @@ export function installHomeSettings(deps: {
   let accountReady = true
   /** 正在等密码的那个账号：点「切换」时他锁着 */
   let pending: HomeAccount | null = null
+  /** 管理员正在替谁重置密码 */
+  let resetting: HomeAccount | null = null
 
   async function renderAccounts() {
     try {
@@ -371,11 +387,17 @@ export function installHomeSettings(deps: {
             : '正在用这个档案 · 还没进化身'
           : [avatar, locked].filter(Boolean).join(' · ') ||
             (user.role === 'admin' ? '可以给这台电脑加账号' : '还没进化身')
-        return settingRow(
-          label,
-          sub,
-          current ? chip('当前') : button('切换', () => askSwitch(user))
-        )
+        // 右边的按钮：自己的档案只标「当前」；管理员还能替别人重置密码、删账号
+        const actions = el('div', '', 'account-actions')
+        if (current) actions.append(chip('当前'))
+        else actions.append(button('切换', () => askSwitch(user)))
+        if (who!.admin && user.role !== 'admin' && !current) {
+          actions.append(
+            button('重置密码', () => askReset(user)),
+            button('删掉', () => void removeAccount(user), 'account-drop')
+          )
+        }
+        return settingRow(label, sub, actions)
       })
     )
     accountCreate.hidden = setup || !who.admin || who.users.length >= who.max
@@ -419,6 +441,52 @@ export function installHomeSettings(deps: {
     if (!pending) return
     if (!checkSwitchPin()) return
     void switchAccount(pending.id, switchPin.value)
+  }
+
+  /** 管理员点「重置密码」：忘了密码才走这条，所以不问他原来那个 */
+  function askReset(user: HomeAccount) {
+    resetting = user
+    resetWho.textContent = `把「${user.name}」的密码换成`
+    resetPin.value = ''
+    resetPinTip.hidden = true
+    resetRow.hidden = false
+    resetPin.focus()
+  }
+
+  function hideReset() {
+    resetting = null
+    resetRow.hidden = true
+    resetPin.value = ''
+    resetPinTip.hidden = true
+  }
+
+  async function enterReset() {
+    if (!resetting || !checkResetPin()) return
+    const name = resetting.name
+    try {
+      await api('/users/reset', { id: resetting.id, pin: resetPin.value })
+      hideReset()
+      await renderAccounts()
+      accountNote.textContent = `已把「${name}」的密码换掉：告诉他新密码，让他登进来自己再改一次。`
+    } catch (error) {
+      accountNote.textContent = errorText(error)
+    }
+  }
+
+  /** 删账号：他建的 agent、用量、密钥一起删。还有 agent 投放着的，管理服务会拦下来先让撤回 */
+  async function removeAccount(user: HomeAccount) {
+    const sure = window.confirm(
+      `删掉「${user.name}」这个账号？他建的 agent、用掉的量和密钥都一起删，删了就找不回来。`
+    )
+    if (!sure) return
+    try {
+      await api('/users/delete', { id: user.id })
+      hideReset()
+      await renderAccounts()
+      accountNote.textContent = `已删「${user.name}」。`
+    } catch (error) {
+      accountNote.textContent = errorText(error)
+    }
   }
 
   async function switchAccount(id: string, pin?: string) {

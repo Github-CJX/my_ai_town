@@ -400,6 +400,48 @@ fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Respo
                 account_cookie(&user.id),
             ))
         }
+        // 忘了密码：管理员在这里替他换一个，不要旧密码
+        (false, "/users/reset") => {
+            let me = me.ok_or_else(account_needed)?;
+            if me.role != Role::Admin {
+                return Err(ApiError::new(403, "只有管理员可以重置别人的密码"));
+            }
+            let request = body(req)?;
+            let user = app.accounts.lock().unwrap().reset_pin(
+                request["id"].as_str().unwrap_or_default(),
+                request["pin"].as_str().unwrap_or_default(),
+            )?;
+            Ok(Response::json(
+                200,
+                &json!({ "ok": true, "user": user.public() }),
+            ))
+        }
+        // 删账号：档案和他目录里的东西一起删。管理员删不掉自己；还有 agent 投放着的先撤回，
+        // 不然小镇里会留下一个没有主的居民。
+        (false, "/users/delete") => {
+            let me = me.ok_or_else(account_needed)?;
+            if me.role != Role::Admin {
+                return Err(ApiError::new(403, "只有管理员可以删账号"));
+            }
+            let request = body(req)?;
+            let id = request["id"].as_str().unwrap_or_default();
+            let home = app.accounts.lock().unwrap().home(id);
+            for agent in crate::agents::list(&home)? {
+                if let Some((town, here)) = agent.deployed.iter().next() {
+                    return Err(ApiError::new(
+                        409,
+                        format!(
+                            "「{}」还在「{}」里（{}）：先在小镇里撤回他的 agent，再删账号",
+                            agent.name,
+                            app.storage.name(town),
+                            here.name
+                        ),
+                    ));
+                }
+            }
+            let user = app.accounts.lock().unwrap().remove(id)?;
+            Ok(Response::json(200, &json!({ "ok": true, "removed": user.public() })))
+        }
         (false, "/users/pin") => {
             let me = me.ok_or_else(account_needed)?;
             let request = body(req)?;

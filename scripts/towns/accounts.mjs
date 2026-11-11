@@ -6,8 +6,10 @@
 import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { listAgents } from './agents.mjs'
 import { HttpError, Raw } from './http.mjs'
 import { atomicJson, readJson } from './storage.mjs'
+import { townName } from './usage.mjs'
 export const USER_COOKIE = 'town_user'
 export const MAX_USERS = 8
 const MAX_NAME = 16
@@ -150,6 +152,29 @@ export class Accounts {
     await this.save()
     return user
   }
+  /** 管理员重置别人的密码：忘了密码才走这条，所以不要旧密码；是不是管理员由路由那边校验 */
+  async resetPin(id, pin) {
+    const user = this.find(id)
+    if (!user) throw new HttpError(400, '没有这个账号')
+    checkPin(pin)
+    user.pin = sealPin(String(pin))
+    await this.save()
+    return user
+  }
+  /**
+   * 管理员删掉一个账号：档案和他的目录（agent、用量、价格覆盖）一起删。
+   * 管理员自己删不掉——一个账号都没有的管理服务谁也进不去。
+   */
+  async remove(id) {
+    const index = this.#users.findIndex((u) => u.id === id)
+    if (index < 0) throw new HttpError(400, '没有这个账号')
+    if (this.#users[index].role === 'admin')
+      throw new HttpError(409, '管理员账号删不掉：没有账号就没人能进这个管理服务了')
+    const [user] = this.#users.splice(index, 1)
+    await fs.rm(path.join(this.root, 'users', user.id), { recursive: true, force: true })
+    await this.save()
+    return user
+  }
   /** 切到某个账号：锁着的账号要密码 */
   select(id, pin) {
     const user = this.find(id)
@@ -230,7 +255,7 @@ function makeUser(name, role, agent_limit) {
  * 账号接口：第一次建管理员、当前是谁、管理员建号、切换档案、改密码。手机上的管理服务
  * （crates/manager/src/routes.rs 的 accounts_api）路径与回答一致。
  */
-export function createAccountRoutes({ accounts }) {
+export function createAccountRoutes({ accounts, storage }) {
   const me = (headers) => accounts.current(cookieId(headers))
   return [
     [
@@ -289,6 +314,39 @@ export function createAccountRoutes({ accounts }) {
         if (!current) throw accountNeeded()
         const user = await accounts.setPin(current.id, body?.current, body?.pin)
         return { ok: true, current: publicUser(user) }
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/users\/reset$/,
+      async ({ body, headers }) => {
+        // 忘了密码：管理员在这里替他换一个，不要旧密码
+        if (me(headers)?.role !== 'admin') throw new HttpError(403, '只有管理员可以重置别人的密码')
+        const id = typeof body?.id === 'string' ? body.id : ''
+        return { ok: true, user: publicUser(await accounts.resetPin(id, body?.pin)) }
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/users\/delete$/,
+      async ({ body, headers }) => {
+        if (me(headers)?.role !== 'admin') throw new HttpError(403, '只有管理员可以删账号')
+        const id = typeof body?.id === 'string' ? body.id : ''
+        // 还有 agent 投放着的先撤回：不然小镇里会留下一个没有主的居民
+        const agents = await listAgents(accounts.root, id)
+        const away = agents
+          .flatMap((agent) =>
+            Object.entries(agent.deployed ?? {}).map(([town, here]) => ({ agent, town, here }))
+          )
+          .at(0)
+        if (away) {
+          const name = storage ? await townName(storage, away.town) : away.town
+          throw new HttpError(
+            409,
+            `「${away.agent.name}」还在「${name}」里（${away.here?.name ?? ''}）：先在小镇里撤回他的 agent，再删账号`
+          )
+        }
+        return { ok: true, removed: publicUser(await accounts.remove(id)) }
       },
     ],
     [

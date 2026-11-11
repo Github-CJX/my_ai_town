@@ -253,6 +253,46 @@ impl Accounts {
         Ok(user)
     }
 
+    /// 管理员重置别人的密码：忘了密码才走这条，所以不要旧密码；是不是管理员由路由那边校验。
+    pub fn reset_pin(&mut self, id: &str, pin: &str) -> Result<User, ApiError> {
+        let index = self
+            .users
+            .iter()
+            .position(|u| u.id == id)
+            .ok_or_else(|| ApiError::bad("没有这个账号"))?;
+        check_pin(pin)?;
+        self.users[index].pin = Some(seal_pin(pin));
+        let user = self.users[index].clone();
+        self.save()?;
+        Ok(user)
+    }
+
+    /// 管理员删掉一个账号：档案和他的目录（agent、用量、价格覆盖）一起删。
+    /// 管理员自己删不掉——一个账号都没有的管理服务谁也进不去。还有 agent 投放着的，
+    /// 由调用方先让他撤回（这里看不到小镇名字，给的提示只有编号）。
+    pub fn remove(&mut self, id: &str) -> Result<User, ApiError> {
+        let index = self
+            .users
+            .iter()
+            .position(|u| u.id == id)
+            .ok_or_else(|| ApiError::bad("没有这个账号"))?;
+        if self.users[index].role == Role::Admin {
+            return Err(ApiError::new(409, "管理员账号删不掉：没有账号就没人能进这个管理服务了"));
+        }
+        let user = self.users.remove(index);
+        let home = self.home(&user.id);
+        if let Err(error) = std::fs::remove_dir_all(&home) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(ApiError::new(
+                    500,
+                    format!("账号删了，但他的目录没删干净：{error}"),
+                ));
+            }
+        }
+        self.save()?;
+        Ok(user)
+    }
+
     /// 换密码：原来的密码对得上才换；既有的密码不能靠「不知道旧密码」改掉。
     pub fn set_pin(
         &mut self,
@@ -456,6 +496,37 @@ mod tests {
                 .avatar_id,
             None
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 忘了密码：管理员能替他换一个（不要旧密码）；删账号时档案和目录一起没，管理员自己删不掉
+    #[test]
+    fn an_admin_resets_a_forgotten_pin_and_removes_the_account() {
+        let root = temp_root();
+        let mut accounts = Accounts::load(&root).expect("建账号表");
+        let admin = accounts.setup("阿管", "2468").expect("建管理员");
+        let member = accounts.create("阿岚", "1357").expect("建普通账号");
+        // 旧密码不对也能换——忘了才走这条
+        accounts.reset_pin(&member.id, "4321").expect("重置密码");
+        assert!(accounts.select(&member.id, Some("1357")).is_err(), "旧密码不该认");
+        assert!(accounts.select(&member.id, Some("4321")).is_ok());
+        assert!(accounts.reset_pin(&member.id, "12").is_err(), "密码要 4–8 位");
+        assert!(accounts.reset_pin("u-nobody", "4321").is_err(), "没有这个账号");
+        // 他目录里建一个 agent：删账号时连目录一起删
+        let home = accounts.home(&member.id);
+        crate::agents::create(&home, &json!({ "fields": { "name": "阿岚" } }), None)
+            .expect("建 agent");
+        assert!(home.join("agents").exists());
+        let removed = accounts.remove(&member.id).expect("删账号");
+        assert_eq!(removed.name, "阿岚");
+        assert!(!home.exists(), "目录要跟着删掉");
+        assert!(accounts.find(&member.id).is_none());
+        // 管理员自己删不掉：一个账号都没有就没人能进管理服务了
+        assert!(accounts.remove(&admin.id).is_err());
+        // 重开管理服务：名单里也没有他了
+        let reloaded = Accounts::load(&root).expect("重读账号表");
+        assert!(reloaded.find(&member.id).is_none());
+        assert!(reloaded.find(&admin.id).is_some());
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -541,6 +541,25 @@ test('each account keeps its own model keys: the admin creates friends, a friend
       /密码不对/,
       '旧密码不能用了'
     )
+    // 忘了密码：管理员替他换一个，不要旧密码；普通账号不能替别人重置
+    await assert.rejects(
+      api('/users/reset', { id: made.data.user.id, pin: '9876' }, friend),
+      /只有管理员/,
+      '普通账号不能替别人重置密码'
+    )
+    const reset = await api('/users/reset', { id: made.data.user.id, pin: '9876' }, admin)
+    assert.equal(reset.data.user.name, '朋友')
+    await assert.rejects(api('/users/select', { id: made.data.user.id, pin: '4321' }), /密码不对/)
+    assert.equal(
+      (await api('/users/select', { id: made.data.user.id, pin: '9876' })).data.current.name,
+      '朋友'
+    )
+    await assert.rejects(
+      api('/users/reset', { id: made.data.user.id, pin: '1' }, admin),
+      /4–8 位数字/
+    )
+    // 管理员自己删不掉：一个账号都没有就没人能进管理服务了
+    await assert.rejects(api('/users/delete', { id: adminId }, admin), /删不掉/)
     // 一个账号一个固定化身：页面把认下的那个记回来，下次进镇还当同一个人；传 null 解开
     const bound = await api('/users/avatar', { id: 'player_avatar', name: '阿岚' }, friend)
     assert.equal(bound.data.current.avatar_id, 'player_avatar')
@@ -549,13 +568,35 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     await assert.rejects(api('/users/avatar', { id: '有 空格' }, friend), /化身编号不合法/)
     await assert.rejects(api('/users/avatar', { id: 'a'.repeat(65) }, friend), /化身编号不合法/)
     assert.equal((await api('/users/avatar', { id: null }, friend)).data.current.avatar_id, null)
+    // 还有 agent 在小镇里投放着：先撤回再删，不然小镇里会留下一个没有主的居民
+    const folder = path.join(root, 'users', made.data.user.id, 'agents')
+    await fs.mkdir(folder, { recursive: true })
+    await fs.writeFile(
+      path.join(folder, 'a1.json'),
+      JSON.stringify({
+        id: 'a1',
+        name: '阿岚的村民',
+        created_at: 1,
+        deployed: { 'town-one': { resident: 'r1', name: '阿岚', at: 1 } },
+      })
+    )
+    await assert.rejects(api('/users/delete', { id: made.data.user.id }, admin), /先在小镇里撤回/)
+    await fs.rm(folder, { recursive: true, force: true })
+    // 删账号：档案和他的目录一起没，删了就找不回来
+    const gone = await api('/users/delete', { id: made.data.user.id }, admin)
+    assert.equal(gone.data.removed.name, '朋友')
+    assert.equal(await fs.stat(path.join(root, 'users', made.data.user.id)).catch(() => null), null)
+    await assert.rejects(
+      api('/users/select', { id: made.data.user.id, pin: '9876' }),
+      /没有这个账号/
+    )
     // 账号表里只记身份和归属，不记密钥，也不记明文密码
     const saved = JSON.parse(await fs.readFile(path.join(root, 'accounts.json'), 'utf8'))
-    assert.equal(saved.users.length, 2)
+    assert.equal(saved.users.length, 1)
     assert.ok(!JSON.stringify(saved).includes(key))
     assert.ok(!JSON.stringify(saved).includes('2468'))
     assert.ok(!JSON.stringify(saved).includes('4321'))
-    assert.equal(saved.users.filter((u) => u.pin).length, 2, '两个账号都存了摘要')
+    assert.equal(saved.users.filter((u) => u.pin).length, 1, '剩下的管理员仍存着摘要')
   } finally {
     await m?.stop()
     await fs.rm(root, { recursive: true, force: true })
