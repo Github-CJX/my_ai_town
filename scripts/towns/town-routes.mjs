@@ -15,6 +15,7 @@ import {
   updateAgent,
 } from './agents.mjs'
 import { hasBudget, pushBudget, readBudget, saveBudget, townName, usageSummary } from './usage.mjs'
+import { withTicket } from './ticket.mjs'
 
 /** 天气可以选的那几种（与 protocol 的 WeatherKind 一致） */
 const WEATHER = ['clear', 'overcast', 'light_rain', 'rain', 'heavy_rain', 'thunderstorm', 'snow']
@@ -33,18 +34,23 @@ function hostName(host = '') {
 /**
  * 页面拿到的世界地址：主机换成本次请求用的那台（世界端口不变），套了 TLS 时给 wss。
  * 只在本机看时不改，世界进程本来就在 127.0.0.1 上。
+ * `ticket` 是这次登录账号的入场票：世界凭票认人，地址上挂上它。
  */
-export function publicEndpoint(headers, info) {
+export function publicEndpoint(headers, info, ticket) {
+  let page = info
   const name = hostName(headers?.host)
-  if (!info?.endpoint || !name || LOOPBACK.has(name)) return info
-  try {
-    const url = new URL(info.endpoint)
-    url.hostname = name
-    if (`${headers['x-forwarded-proto'] ?? ''}`.toLowerCase() === 'https') url.protocol = 'wss:'
-    return { ...info, endpoint: url.toString() }
-  } catch {
-    return info
+  if (info?.endpoint && name && !LOOPBACK.has(name)) {
+    try {
+      const url = new URL(info.endpoint)
+      url.hostname = name
+      if (`${headers['x-forwarded-proto'] ?? ''}`.toLowerCase() === 'https') url.protocol = 'wss:'
+      page = { ...info, endpoint: url.toString() }
+    } catch {
+      page = info
+    }
   }
+  if (!page?.endpoint || !ticket) return page
+  return { ...page, endpoint: withTicket(page.endpoint, ticket) }
 }
 
 /** 让正在运行的世界按这个速度走（0 是暂停）：刚拉起来、管理员在首页改过速度之后都走这一下 */
@@ -595,7 +601,8 @@ export function createTownRoutes({
         const info = await bringUp(id, headers)
         // 世界是新的，内存里没有密钥：把投在这个镇里的 agent 再送一遍
         if (hosts.isRunning(id)) await sendOwnerKeys({ root, hosts, accounts, accountConfig }, id)
-        return publicEndpoint(headers, info)
+        const me = current(headers)
+        return publicEndpoint(headers, info, hosts.ticket(id, me?.id, me?.role === 'admin'))
       },
     ],
     [
@@ -640,7 +647,11 @@ export function createTownRoutes({
             console.error('[town-manager] 常驻小镇的速度没设上：', e.message)
           }
         }
-        return publicEndpoint(headers, { ...info, resident: id, ready: Boolean(state?.ready) })
+        return publicEndpoint(
+          headers,
+          { ...info, resident: id, ready: Boolean(state?.ready) },
+          hosts.ticket(id, current(headers)?.id, current(headers)?.role === 'admin')
+        )
       },
     ],
     [

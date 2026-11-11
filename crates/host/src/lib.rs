@@ -15,6 +15,7 @@ pub mod persistence;
 pub mod population;
 pub mod process;
 pub mod tasks;
+pub mod ticket;
 
 pub mod agent_worker;
 

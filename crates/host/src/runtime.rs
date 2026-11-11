@@ -239,6 +239,12 @@ impl Runtime {
     /// 唯一的分派表：每种客户端消息一行，新增消息编译器会指出漏项。
     fn dispatch(&mut self, msg: ClientMsg, connection: u64, clients: &Clients) -> Outcome {
         use ClientMsg::*;
+        // 世界不认账号，只认管理服务签的票：改世界、请人入住这类事要管理员（或管理服务自己）。
+        if let Some(what) = admin_action(&msg) {
+            if !crate::network::allows_admin(clients, connection) {
+                return Outcome::reply(error_msg(format!("只有管理员可以{what}")));
+            }
+        }
         match msg {
             SetWeather {
                 request_id,
@@ -723,6 +729,59 @@ pub(crate) fn event(world: &World, text: &str) -> ServerMsg {
         clock: world.clock(),
         text: text.into(),
         info: EventInfo::default(),
+    }
+}
+
+/// 要管理员才能做的事（对应一句「只有管理员可以…」的说明）；其余命令普通账号也能发。
+/// 世界自己不知道谁是管理员：这里只看这条连接握手时验过的票（见 ticket.rs）。
+fn admin_action(msg: &ClientMsg) -> Option<&'static str> {
+    match msg {
+        ClientMsg::SetWeather { .. } => Some("改天气"),
+        ClientMsg::SetWorldview { .. } => Some("改世界观"),
+        ClientMsg::SetPhysiology { .. } => Some("改生理开关"),
+        ClientMsg::SetMiracles { .. } => Some("改神力"),
+        ClientMsg::SetStrangers { .. } => Some("改陌生人设置"),
+        ClientMsg::SetGameMode { .. } => Some("改玩法"),
+        ClientMsg::SetSpeed { .. } => Some("调速度"),
+        ClientMsg::ResetWorld { .. } => Some("重置世界"),
+        ClientMsg::Content { .. } => Some("改世界内容"),
+        ClientMsg::SaveProp { .. } => Some("存道具"),
+        ClientMsg::RemoveProp { .. } => Some("收道具"),
+        ClientMsg::PlaceProp { .. } => Some("摆道具"),
+        ClientMsg::SetModelConfig { .. } => Some("改模型设置"),
+        ClientMsg::SetResidentModel { .. } => Some("改村民用的模型"),
+        ClientMsg::SetResidentKey { .. } => Some("换村民的密钥"),
+        ClientMsg::RestartBuiltinModel { .. } => Some("重启内置模型"),
+        ClientMsg::TestModelConnection { .. } => Some("试模型连接"),
+        ClientMsg::SetPersona { .. } => Some("改人设"),
+        ClientMsg::SetResidentAppearance { .. } => Some("改村民的样子"),
+        ClientMsg::SetResidentBody { .. } => Some("改村民的身体"),
+        ClientMsg::SaveResidentTemplate { .. } => Some("存村民模板"),
+        ClientMsg::ArchiveResidentTemplate { .. } => Some("收起村民模板"),
+        ClientMsg::GenerateResidentTemplate { .. } => Some("生成村民"),
+        ClientMsg::JoinResident { .. } => Some("请村民入住"),
+        ClientMsg::RemoveResident { .. } => Some("请村民离开"),
+        ClientMsg::SetAgentLimits { .. } => Some("改 agent 限额"),
+        ClientMsg::SetResidentBudget { .. } => Some("改 agent 每日额度"),
+        ClientMsg::Avatar { .. }
+        | ClientMsg::AvatarInput { .. }
+        | ClientMsg::GetChatHistory { .. }
+        | ClientMsg::ValidateProp { .. }
+        | ClientMsg::GetAgentConfig { .. }
+        | ClientMsg::GetWorldSettings
+        | ClientMsg::GetPopulation
+        | ClientMsg::GetProps
+        | ClientMsg::GetModelConfig
+        | ClientMsg::GetAgentLimits
+        | ClientMsg::GetUsage
+        | ClientMsg::GetResidentLibrary { .. }
+        | ClientMsg::GetResidentTemplate { .. }
+        | ClientMsg::PreviewTemplatePersona { .. }
+        | ClientMsg::PreviewResidentJoin { .. }
+        | ClientMsg::GetResidentJoinResult { .. }
+        | ClientMsg::GetDiary { .. }
+        | ClientMsg::GetNotebook { .. }
+        | ClientMsg::GetNotebookDetail { .. } => None,
     }
 }
 

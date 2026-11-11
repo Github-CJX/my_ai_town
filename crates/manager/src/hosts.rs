@@ -19,6 +19,8 @@ struct Record {
     #[cfg_attr(unix, allow(dead_code))]
     stdin: Option<ChildStdin>,
     endpoint: String,
+    /// 世界口令：页面拿不到，只用来签票（见 host::ticket）
+    token: String,
     /// 最近一次有人进这个小镇的时间：跑满了先关最久没进过的
     used: Instant,
     /// 最近一次打开的凭证：每次打开都换一个，关闭时拿它核对，刷新后旧页面晚到的关闭就不算数
@@ -118,7 +120,10 @@ impl Hosts {
                 record.used = Instant::now();
                 record.lease = lease.clone();
             }
-            verify(&endpoint, id, &map.hash)?;
+            let signed = self
+                .signed_endpoint(id)
+                .ok_or_else(|| ApiError::bad("这个小镇没在运行"))?;
+            verify(&signed, id, &map.hash)?;
             return info(storage, id, &map.document, &map.hash, &endpoint, &lease);
         }
         if self.full() && !self.is_resident(id) {
@@ -191,11 +196,15 @@ impl Hosts {
                 child,
                 stdin,
                 endpoint: endpoint.clone(),
+                token,
                 used: Instant::now(),
                 lease: lease.clone(),
             },
         );
-        let opened = verify(&endpoint, id, &map.hash)
+        let signed = self
+            .signed_endpoint(id)
+            .ok_or_else(|| ApiError::bad("这个小镇没在运行"))?;
+        let opened = verify(&signed, id, &map.hash)
             .and_then(|_| info(storage, id, &map.document, &map.hash, &endpoint, &lease));
         if opened.is_err() {
             let _ = self.close(id);
@@ -231,7 +240,7 @@ impl Hosts {
         secs: u64,
     ) -> Result<Value, ApiError> {
         let endpoint = self
-            .endpoint(id)
+            .signed_endpoint(id)
             .ok_or_else(|| ApiError::bad("这个小镇没在运行"))?;
         if let Some(record) = self.running.lock().unwrap().get_mut(id) {
             record.used = Instant::now();
@@ -287,6 +296,37 @@ impl Hosts {
             .map(|r| r.endpoint.clone())
     }
 
+    /// 管理服务自己用的地址：在世界口令签的服务票上，找世界问事、请人入住都靠它。
+    fn signed_endpoint(&self, id: &str) -> Option<String> {
+        let ticket = self.ticket(id, None, true)?;
+        self.endpoint(id).map(|endpoint| with_ticket(&endpoint, &ticket))
+    }
+
+    /// 签一张票：`user` 是登录账号、`admin` 是它在小镇里的角色；服务票不带账号。
+    pub fn ticket(&self, id: &str, user: Option<&str>, admin: bool) -> Option<String> {
+        let token = self
+            .running
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|r| r.token.clone())?;
+        // 按整点给到期时刻：同一小时内反复进镇拿到的是同一张票（页面上不跳动，也好比对）
+        let expires = ((now_secs() / 3600) + 1) * 3600 + host::ticket::TTL;
+        let ticket = match user {
+            Some(user) => host::ticket::Ticket::user(user, admin, id, expires),
+            None => host::ticket::Ticket::service(id, expires),
+        };
+        Some(host::ticket::sign(&token, &ticket))
+    }
+
+    /// 页面连世界用的地址：换成这个账号自己的票（管理服务自己那部分不带账号）。
+    pub fn page_endpoint(&self, id: &str, user: Option<&str>, admin: bool, base: &str) -> String {
+        match self.ticket(id, user, admin) {
+            Some(ticket) => with_ticket(base, &ticket),
+            None => base.to_owned(),
+        }
+    }
+
     /// 先让 host 保存后退出（见 terminate）；超时则强制结束并报错，让调用方知道保存可能不完整。
     pub fn close(&self, id: &str) -> Result<(), ApiError> {
         let Some(mut record) = self.running.lock().unwrap().remove(id) else {
@@ -327,6 +367,26 @@ fn terminate(record: &mut Record) {
 #[cfg(not(unix))]
 fn terminate(record: &mut Record) {
     record.stdin.take();
+}
+
+/// 在端点 URL 上换一张票：旧票去掉，新票接上（同一个页面可能被重新发过地址）。
+fn with_ticket(endpoint: &str, ticket: &str) -> String {
+    let (head, query) = endpoint.split_once('?').unwrap_or((endpoint, ""));
+    let mut parts: Vec<String> = query
+        .split('&')
+        .filter(|part| !part.is_empty() && !part.starts_with("ticket="))
+        .map(str::to_owned)
+        .collect();
+    parts.push(format!("ticket={ticket}"));
+    format!("{head}?{}", parts.join("&"))
+}
+
+/// 现在（unix 秒）：签票时要写上到期时刻。
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn verify(endpoint: &str, id: &str, hash: &str) -> Result<(), ApiError> {

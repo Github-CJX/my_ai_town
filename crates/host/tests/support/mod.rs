@@ -36,6 +36,10 @@ pub struct Town {
     pub persistent: bool,
     /// 起进程的额外参数。
     pub args: Vec<String>,
+    /// 连上去时带的 query（如 `session=…&ticket=…`）：开了 `--connection-token` 的世界需要。
+    pub query: Option<String>,
+    /// 世界的端口：用例想再开一条连接时用。
+    pub port: Option<u16>,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
 }
@@ -120,6 +124,8 @@ impl Town {
             mock_delay: Some("0.01".into()),
             persistent: true,
             args: Vec::new(),
+            query: None,
+            port: None,
             child: None,
             stdin: None,
         }
@@ -192,8 +198,18 @@ impl Town {
         loop {
             if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)) {
                 stream.set_read_timeout(Some(WAIT)).unwrap();
-                let (mut ws, _) =
-                    tungstenite::client(format!("ws://127.0.0.1:{port}"), stream).unwrap();
+                let query = self
+                    .query
+                    .as_deref()
+                    .map(|query| format!("/?{query}"))
+                    .unwrap_or_default();
+                // 握手可能被拒（没带票、票过期、票对不上）：这本身就是用例要的结果，别 panic
+                let mut ws = match tungstenite::client(format!("ws://127.0.0.1:{port}{query}"), stream)
+                {
+                    Ok((ws, _)) => ws,
+                    Err(e) => return Err(format!("握手被拒：{e}")),
+                };
+                self.port = Some(port);
                 if self.setup {
                     configure_world(&mut ws);
                 }

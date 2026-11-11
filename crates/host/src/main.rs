@@ -305,6 +305,7 @@ fn serve(mut runtime: Runtime, args: &Args, map_hash: String) -> Result<(), Host
         args.port,
         greeting,
         args.connection_token.clone(),
+        args.town_id.clone(),
         args.bind.as_deref(),
     )?;
     if let Some(path) = &args.ready_file {

@@ -657,8 +657,14 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             let mut info = app.hosts.open(&app.storage, id, &user_config(app, &me)?)?;
             // 世界重启后密钥没了：把这个镇里已投放的 agent 再送一遍
             resend_keys(app, id);
-            // 页面在世界自己的端口上连；从别的机器访问时主机名要换成它们能连的那个
-            let endpoint = public_endpoint(req, info["endpoint"].as_str().unwrap_or_default());
+            // 页面在世界自己的端口上连；从别的机器访问时主机名要换成它们能连的那个。
+            // 地址上再挂一张这个账号的入场票：世界凭票认人，不再只认「连得上」。
+            let endpoint = app.hosts.page_endpoint(
+                id,
+                Some(&me.id),
+                me.role == Role::Admin,
+                &public_endpoint(req, info["endpoint"].as_str().unwrap_or_default()),
+            );
             info["endpoint"] = Value::from(endpoint);
             ok(info)
         }
@@ -711,7 +717,12 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             }
             info["resident"] = Value::from(id);
             info["ready"] = Value::from(ready);
-            let endpoint = public_endpoint(req, info["endpoint"].as_str().unwrap_or_default());
+            let endpoint = app.hosts.page_endpoint(
+                id,
+                Some(&me.id),
+                me.role == Role::Admin,
+                &public_endpoint(req, info["endpoint"].as_str().unwrap_or_default()),
+            );
             info["endpoint"] = Value::from(endpoint);
             ok(info)
         }

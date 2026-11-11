@@ -3,15 +3,20 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { readJson } from './storage.mjs'
+import { serviceTicket, userTicket, signTicket, withTicket, ticketExpiry } from './ticket.mjs'
 /** 同时只运行一个小镇：退出就保存关闭，进另一个小镇时先关掉还开着的那个 */
 const MAX_RUNNING = 1
 /** 只给本机的地址：不对外监听，页面与接口只认它们 */
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
 const START_TIMEOUT_MS = 20000
 const CLOSE_TIMEOUT_MS = 15000
+/** 世界地址 → 签票：同一个进程里拿到地址就能连（测试、内部查询），页面那边另有 account 票 */
+const signers = new Map()
 export function worldQuery(endpoint, command, predicate, timeout = 5000) {
+  const sign = signers.get(endpoint)
+  const target = sign ? withTicket(endpoint, sign()) : endpoint
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(endpoint)
+    const ws = new WebSocket(target)
     let done = false
     const finish = (error, value) => {
       if (done) return
@@ -170,7 +175,7 @@ export class Hosts {
     )
     child.stdin.on('error', () => {})
     await log.close()
-    record = { child, token, closing: false, used: Date.now(), lease: randomUUID() }
+    record = { child, token, town: id, closing: false, used: Date.now(), lease: randomUUID() }
     this.running.set(id, record)
     let spawnError
     child.once('error', (e) => {
@@ -179,6 +184,7 @@ export class Hosts {
     })
     child.once('exit', () => {
       if (this.running.get(id) === record) this.running.delete(id)
+      signers.delete(record.endpoint)
     })
     const deadline = Date.now() + START_TIMEOUT_MS
     try {
@@ -193,6 +199,9 @@ export class Hosts {
           ) {
             record.port = result.port
             record.endpoint = `ws://127.0.0.1:${record.port}/?session=${token}`
+            signers.set(record.endpoint, () =>
+              signTicket(record.token, serviceTicket(record.town, ticketExpiry()))
+            )
             await this.verify(record, id, doc)
             return await this.info(record, id, doc)
           }
@@ -207,14 +216,37 @@ export class Hosts {
       throw e
     }
   }
+  /** 管理服务自己用的地址：在世界口令签的服务票上，问状态、请人入住都靠它 */
+  signedEndpoint(record) {
+    if (!record?.endpoint || !record.token) return record?.endpoint
+    const ticket = signTicket(record.token, serviceTicket(record.town, ticketExpiry()))
+    return withTicket(record.endpoint, ticket)
+  }
+  /** 签一张票：没给账号就是服务票（管理服务自己用），给了就是那个账号的票 */
+  ticket(id, userId, admin) {
+    const record = this.running.get(id)
+    if (!record?.token) return null
+    const expires = ticketExpiry()
+    const body = userId ? userTicket(userId, admin, id, expires) : serviceTicket(id, expires)
+    return signTicket(record.token, body)
+  }
+  /** 页面连世界用的地址：换成这个账号自己的票（世界凭票认人，不再只认「连得上」） */
+  pageEndpoint(id, userId, admin, base) {
+    const ticket = this.ticket(id, userId, admin)
+    return ticket ? withTicket(base, ticket) : base
+  }
   async verify(r, id, doc) {
-    const identity = await worldQuery(r.endpoint, null, (m) => m.type === 'world_identity')
+    const identity = await worldQuery(
+      this.signedEndpoint(r),
+      null,
+      (m) => m.type === 'world_identity'
+    )
     if (identity.town_id !== id || identity.map_hash !== doc.content_hash)
       throw Error('世界与地图身份不一致')
   }
   async info(r, id, doc) {
     const msg = await worldQuery(
-      r.endpoint,
+      this.signedEndpoint(r),
       { type: 'get_world_settings' },
       (m) => m.type === 'world_settings'
     )
@@ -239,7 +271,7 @@ export class Hosts {
     const record = this.running.get(id)
     if (!record || !alive(record.child) || !record.endpoint) throw Error('这个小镇没在运行')
     record.used = Date.now()
-    return worldQuery(record.endpoint, command, predicate, timeout)
+    return worldQuery(this.signedEndpoint(record), command, predicate, timeout)
   }
   /** 这次打开的凭证还是不是最新的：每次打开都换一个，关闭时拿它核对 */
   holds(id, lease) {
@@ -258,6 +290,7 @@ export class Hosts {
     const r = this.running.get(id)
     if (!r) return
     r.closing = true
+    signers.delete(r.endpoint)
     const exited = new Promise((resolve) => {
       if (!alive(r.child)) resolve(true)
       else r.child.once('exit', () => resolve(true))

@@ -35,6 +35,8 @@ pub(crate) struct Peer {
     socket: TcpStream,
     /// 还没交给模拟循环的方向输入和到达的时刻，按先后排：化身按到达时刻换方向（见 avatar/tick.rs）。
     inputs: Vec<(Instant, ClientMsg)>,
+    /// 这条连接是不是管理员：握手时验票得出的，之后按连接查，不看消息里自称什么。
+    admin: bool,
 }
 
 impl Peer {
@@ -54,6 +56,16 @@ impl Peer {
 }
 
 pub(crate) type Clients = Arc<Mutex<BTreeMap<u64, Peer>>>;
+
+/// 这条连接是不是管理员（能改世界设置、请村民入住、附身）。
+/// 没有口令的世界（本机自己开的、测试夹具）不验票，所有连接都是管理员。
+pub(crate) fn allows_admin(clients: &Clients, connection: u64) -> bool {
+    clients
+        .lock()
+        .unwrap()
+        .get(&connection)
+        .is_some_and(|peer| peer.admin)
+}
 pub(crate) enum NetworkEvent {
     /// 客户端命令；消息体比断线事件大得多，装箱后队列里每项占用一样小。
     Command {
@@ -89,11 +101,14 @@ pub(crate) fn take_inputs(clients: &Clients) -> Vec<(u64, Instant, ClientMsg)> {
 const COMMAND_QUEUE: usize = 256;
 
 /// `greeting` 是握手成功后先发给每个连接的世界身份；没有时不发。
+/// `token` 是世界口令：给了就要求每张票都用它签过（见 ticket.rs），没给就是本机自己开的、不验票。
+/// `town` 是世界自己的镇号：票上写的镇对不上就不认。
 /// `bind` 是监听地址：缺省只给本机；放到服务器上时管理服务传 0.0.0.0。
 pub(crate) fn listen(
     port: u16,
     greeting: Option<String>,
     token: Option<String>,
+    town: Option<String>,
     bind: Option<&str>,
 ) -> Result<(Clients, Receiver<NetworkEvent>, u16), HostError> {
     let clients: Clients = Arc::new(Mutex::new(BTreeMap::new()));
@@ -113,7 +128,12 @@ pub(crate) fn listen(
             let Ok(socket) = stream.try_clone() else {
                 continue;
             };
-            let Some(ws) = handshake(stream, token.as_deref(), greeting.as_deref()) else {
+            let Some((ws, admin)) = handshake(
+                stream,
+                token.as_deref(),
+                town.as_deref(),
+                greeting.as_deref(),
+            ) else {
                 continue;
             };
             let (tx, rx) = sync_channel::<String>(OUTBOUND_QUEUE);
@@ -124,6 +144,7 @@ pub(crate) fn listen(
                     sender: tx,
                     socket,
                     inputs: Vec::new(),
+                    admin,
                 },
             );
             let to_sim = to_sim.clone();
@@ -138,40 +159,71 @@ pub(crate) fn listen(
     Ok((clients, from_net, actual_port))
 }
 
-/// 握手：校验会话标识，成功后先发世界身份。任何一步失败都丢弃这条连接。
+/// 握手：校验会话口令与入场票，成功后先发世界身份。任何一步失败都丢弃这条连接。
+/// 返回 ws 与「这条连接是不是管理员」。
 fn handshake(
     stream: TcpStream,
     token: Option<&str>,
+    town: Option<&str>,
     greeting: Option<&str>,
-) -> Option<WebSocket<TcpStream>> {
+) -> Option<(WebSocket<TcpStream>, bool)> {
     stream.set_nodelay(true).ok();
     stream.set_read_timeout(Some(READ_WAIT)).ok();
     stream.set_write_timeout(Some(WRITE_TIMEOUT)).ok();
     let expected = token.map(|t| format!("session={t}"));
-    let mut ws = tungstenite::accept_hdr(stream, |request: &Request, response: Response| {
-        let valid = match &expected {
-            None => true,
-            Some(expected) => request
-                .uri()
-                .query()
-                .is_some_and(|q| q.split('&').any(|part| part == expected)),
+    let mut admin = false;
+    let accepted = tungstenite::accept_hdr(stream, |request: &Request, response: Response| {
+        let Some(expected) = &expected else {
+            // 没有口令的世界不验票（本机自己开的小镇、测试夹具）：整条连接算管理员
+            admin = true;
+            return Ok(response);
         };
-        if valid {
-            Ok(response)
-        } else {
-            Err(tungstenite::http::Response::builder()
-                .status(403)
-                .body(Some("世界连接已失效，请从小镇列表重新进入".into()))
-                .unwrap())
-        }
-    })
-    .ok()?;
+        let query = request.uri().query().unwrap_or_default();
+        let session = query.split('&').any(|part| part == expected);
+        // 口令只证明「能连这个世界」，票才说明「你是谁」；两样都要。
+        let ticket = query
+            .split('&')
+            .find_map(|part| part.strip_prefix("ticket="))
+            .map(|raw| host::ticket::verify(expected_secret(expected), town, raw, now_secs()));
+        let refusal = match (session, ticket) {
+            (false, _) => "世界连接已失效，请从小镇列表重新进入",
+            (true, Some(Ok(ticket))) => {
+                admin = ticket.admin();
+                return Ok(response);
+            }
+            (true, Some(Err(problem))) => return Err(rejection(&problem)),
+            (true, None) => "这次连接没带入场票，请从小镇列表重新进入",
+        };
+        Err(rejection(refusal))
+    });
+    let mut ws = accepted.ok()?;
     if let Some(greeting) = greeting {
         if ws.send(Message::Text(greeting.into())).is_err() {
             return None;
         }
     }
-    Some(ws)
+    Some((ws, admin))
+}
+
+/// `session=<口令>` 里的口令就是签票用的密钥。
+fn expected_secret(expected: &str) -> &str {
+    expected.strip_prefix("session=").unwrap_or(expected)
+}
+
+/// 握手被拒时回给浏览器的那一句。
+fn rejection(message: &str) -> tungstenite::http::Response<Option<String>> {
+    tungstenite::http::Response::builder()
+        .status(403)
+        .body(Some(message.into()))
+        .unwrap()
+}
+
+/// 验票要拿现在比：票上有到期时刻。
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 一条连接：把广播队列全部发出，再读一条客户端命令（超时即过），直到任一方向断开。

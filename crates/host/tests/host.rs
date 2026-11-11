@@ -12,6 +12,7 @@ mod population;
 mod possession;
 mod resident_files;
 mod resident_host;
+mod tickets;
 mod world_settings;
 
 mod weather;
