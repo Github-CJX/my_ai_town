@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { readJson } from './storage.mjs'
 /** 同时只运行一个小镇：退出就保存关闭，进另一个小镇时先关掉还开着的那个 */
 const MAX_RUNNING = 1
+/** 只给本机的地址：不对外监听，页面与接口只认它们 */
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
 const START_TIMEOUT_MS = 20000
 const CLOSE_TIMEOUT_MS = 15000
 export function worldQuery(endpoint, command, predicate, timeout = 5000) {
@@ -43,13 +45,22 @@ function terminate(child) {
   else child.kill('SIGTERM')
 }
 export class Hosts {
-  // mockLlm：host 用固定回复模型启动，供测试使用；maxRunning：同时运行的小镇上限。
-  constructor(source, storage, config, { mockLlm = false, maxRunning = MAX_RUNNING } = {}) {
+  // mockLlm：host 用固定回复模型启动，供测试使用；maxRunning：同时运行的小镇上限；
+  // bind：管理服务的监听地址——只在本机用时世界听 127.0.0.1，放到服务器上时听 0.0.0.0；
+  // hostPort：世界自己的端口，0 是每次随机（放到服务器上时固定一个，防火墙只开这一个）。
+  constructor(
+    source,
+    storage,
+    config,
+    { mockLlm = false, maxRunning = MAX_RUNNING, bind = '127.0.0.1', hostPort = 0 } = {}
+  ) {
     this.source = source
     this.storage = storage
     this.config = config
     this.mockLlm = mockLlm
     this.maxRunning = maxRunning
+    this.hostBind = LOOPBACK.has(bind) ? '127.0.0.1' : '0.0.0.0'
+    this.hostPort = hostPort
     this.running = new Map()
     this.opening = new Map()
     this.closing = new Map()
@@ -130,7 +141,7 @@ export class Hosts {
         '--town-id',
         id,
         '--port',
-        '0',
+        String(this.hostPort),
         '--speed',
         '0',
         '--save-file',
@@ -140,6 +151,9 @@ export class Hosts {
         '--connection-token',
         token,
         '--stop-on-stdin-close',
+        // 只有本机用时世界听 127.0.0.1；放到服务器上要跟着听 0.0.0.0，别的机器才连得上
+        '--bind',
+        this.hostBind,
         ...(this.mockLlm ? ['--mock-llm', '--mock-delay', '0.01'] : []),
       ],
       {

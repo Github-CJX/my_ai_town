@@ -5,6 +5,34 @@ import { positions } from './positions.mjs'
 
 /** 天气可以选的那几种（与 protocol 的 WeatherKind 一致） */
 const WEATHER = ['clear', 'overcast', 'light_rain', 'rain', 'heavy_rain', 'thunderstorm', 'snow']
+/** 只给本机的地址 */
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
+
+/** 请求的 Host 里那台主机：去掉端口，IPv6 去掉方括号 */
+function hostName(host = '') {
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']')
+    return end > 0 ? host.slice(1, end) : host
+  }
+  return host.split(':')[0]
+}
+
+/**
+ * 页面拿到的世界地址：主机换成本次请求用的那台（世界端口不变），套了 TLS 时给 wss。
+ * 只在本机看时不改，世界进程本来就在 127.0.0.1 上。
+ */
+export function publicEndpoint(headers, info) {
+  const name = hostName(headers?.host)
+  if (!info?.endpoint || !name || LOOPBACK.has(name)) return info
+  try {
+    const url = new URL(info.endpoint)
+    url.hostname = name
+    if (`${headers['x-forwarded-proto'] ?? ''}`.toLowerCase() === 'https') url.protocol = 'wss:'
+    return { ...info, endpoint: url.toString() }
+  } catch {
+    return info
+  }
+}
 
 /** 让正在运行的世界按这个速度走（0 是暂停）：刚拉起来、管理员在首页改过速度之后都走这一下 */
 export async function applySpeed(hosts, id, speed) {
@@ -130,7 +158,7 @@ export function createTownRoutes({ source, storage, hosts, serial, configOf, cur
             'resident'
           )
         }
-        return bringUp(id, headers)
+        return publicEndpoint(headers, await bringUp(id, headers))
       },
     ],
     [
@@ -174,7 +202,7 @@ export function createTownRoutes({ source, storage, hosts, serial, configOf, cur
             console.error('[town-manager] 常驻小镇的速度没设上：', e.message)
           }
         }
-        return { ...info, resident: id, ready: Boolean(state?.ready) }
+        return publicEndpoint(headers, { ...info, resident: id, ready: Boolean(state?.ready) })
       },
     ],
     [

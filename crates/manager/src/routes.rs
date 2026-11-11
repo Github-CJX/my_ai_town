@@ -36,11 +36,7 @@ pub fn handle(app: &App, req: &Request) -> Response {
 }
 
 fn dispatch(app: &App, req: &Request) -> Result<Response, ApiError> {
-    let host = req.header("host").unwrap_or_default();
-    let local = ["127.0.0.1", "localhost"]
-        .iter()
-        .any(|h| host == *h || host.strip_prefix(h).is_some_and(|p| p.starts_with(':')));
-    if !local {
+    if !host_allowed(app, req.header("host").unwrap_or_default()) {
         return Err(ApiError::new(403, "仅提供本机服务"));
     }
     if app.stopping() {
@@ -67,6 +63,64 @@ fn dispatch(app: &App, req: &Request) -> Result<Response, ApiError> {
         return Ok(file_response(bytes, "application/json", "no-cache"));
     }
     static_file(app, req, path)
+}
+
+/// 请求的 Host 里那台主机：去掉端口，IPv6 去掉方括号。
+fn host_name(host: &str) -> &str {
+    match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(rest),
+        None => host.split(':').next().unwrap_or(host),
+    }
+}
+
+/// 这个请求的 Host 能不能用：缺省只认本机；管理服务对外监听时再认 IP、监听地址和允许的域名。
+/// 只认 IP 与显式允许的名字，是为了不让别人的域名解析到这台机器上就能用接口（DNS 重绑定）。
+fn host_allowed(app: &App, host: &str) -> bool {
+    allowed_host(&app.options.bind, app.options.allow_host.as_deref(), host)
+}
+
+fn allowed_host(bind: &str, allow_host: Option<&str>, host: &str) -> bool {
+    let name = host_name(host);
+    if crate::is_loopback(name) {
+        return true;
+    }
+    if crate::is_loopback(bind) {
+        return false;
+    }
+    name.parse::<std::net::IpAddr>().is_ok() || name == bind || allow_host == Some(name)
+}
+
+/// 页面拿到的世界地址：主机换成本次请求用的那台（世界端口不变），套了 TLS 时给 wss。
+fn public_endpoint(req: &Request, endpoint: &str) -> String {
+    let secure = req
+        .header("x-forwarded-proto")
+        .is_some_and(|value| value.eq_ignore_ascii_case("https"));
+    published_endpoint(req.header("host").unwrap_or_default(), secure, endpoint)
+}
+
+fn published_endpoint(host: &str, secure: bool, endpoint: &str) -> String {
+    let name = host_name(host);
+    if name.is_empty() || crate::is_loopback(name) {
+        return endpoint.to_owned();
+    }
+    let Some((scheme, rest)) = endpoint.split_once("://") else {
+        return endpoint.to_owned();
+    };
+    let Some((authority, tail)) = rest.split_once('/') else {
+        return endpoint.to_owned();
+    };
+    // authority 是 127.0.0.1:端口：端口留着，主机换成页面访问用的那个
+    let port = authority
+        .rsplit_once(':')
+        .map(|(_, port)| port)
+        .unwrap_or("");
+    let scheme = if secure { "wss" } else { scheme };
+    let authority = if port.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name}:{port}")
+    };
+    format!("{scheme}://{authority}/{tail}")
 }
 
 /// 应用壳带着口令打开这里，换到会话 Cookie 后回到首页；口令不再出现在页面地址里。
@@ -335,7 +389,11 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             let _claim = app.claim(id);
             app.make_room(id)?;
             let _serial = app.town_lock(id);
-            ok(app.hosts.open(&app.storage, id, &user_config(app, &me)?)?)
+            let mut info = app.hosts.open(&app.storage, id, &user_config(app, &me)?)?;
+            // 页面在世界自己的端口上连；从别的机器访问时主机名要换成它们能连的那个
+            let endpoint = public_endpoint(req, info["endpoint"].as_str().unwrap_or_default());
+            info["endpoint"] = Value::from(endpoint);
+            ok(info)
         }
         (false, "close") => {
             // 常驻小镇不因为有人离开就停：它在后台跑，要它停得管理员先在首页取消常驻
@@ -385,6 +443,8 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
             }
             info["resident"] = Value::from(id);
             info["ready"] = Value::from(ready);
+            let endpoint = public_endpoint(req, info["endpoint"].as_str().unwrap_or_default());
+            info["endpoint"] = Value::from(endpoint);
             ok(info)
         }
         (false, "control") => {
@@ -593,4 +653,38 @@ fn partial(bytes: Vec<u8>, kind: &str, cache: &str, range: &str) -> Response {
         .headers
         .push(("Content-Range".into(), format!("bytes {start}-{end}/{len}")));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_configured_addresses_are_accepted() {
+        // 只在本机用时，别的 Host 一律不认
+        assert!(allowed_host("127.0.0.1", None, "localhost:8788"));
+        assert!(!allowed_host("127.0.0.1", None, "192.0.2.10:8788"));
+        // 对外监听之后：IP 可以，别人的域名仍然不行
+        assert!(allowed_host("0.0.0.0", None, "192.0.2.10:8788"));
+        assert!(!allowed_host("0.0.0.0", None, "town.example.com"));
+        assert!(allowed_host(
+            "0.0.0.0",
+            Some("town.example.com"),
+            "town.example.com"
+        ));
+    }
+
+    #[test]
+    fn the_page_gets_an_endpoint_it_can_reach() {
+        let local = "ws://127.0.0.1:9123/?session=abc";
+        assert_eq!(published_endpoint("127.0.0.1:8788", false, local), local);
+        assert_eq!(
+            published_endpoint("192.0.2.10:8788", false, local),
+            "ws://192.0.2.10:9123/?session=abc"
+        );
+        assert_eq!(
+            published_endpoint("town.example.com", true, local),
+            "wss://town.example.com:9123/?session=abc"
+        );
+    }
 }

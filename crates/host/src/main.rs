@@ -298,8 +298,12 @@ fn serve(mut runtime: Runtime, args: &Args, map_hash: String) -> Result<(), Host
         serde_json::to_value(&identity).map_err(|e| HostError::Runtime(e.to_string()))?;
     // 只有管理进程启动的小镇（带 town_id）在握手后先发世界身份。
     let greeting = args.town_id.is_some().then(|| identity.to_string());
-    let (clients, commands, port) =
-        network::listen(args.port, greeting, args.connection_token.clone())?;
+    let (clients, commands, port) = network::listen(
+        args.port,
+        greeting,
+        args.connection_token.clone(),
+        args.bind.as_deref(),
+    )?;
     if let Some(path) = &args.ready_file {
         let ready = serde_json::json!({"pid":std::process::id(),"port":port,"identity":identity});
         host::persistence::atomic_write(path, ready.to_string().as_bytes())?;

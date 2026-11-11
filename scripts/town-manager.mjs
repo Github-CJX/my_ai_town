@@ -19,6 +19,33 @@ import { fileURLToPath } from 'node:url'
 import { Storage, readJson, atomicJson, dataRoot, setupConfig } from './towns/storage.mjs'
 import { Hosts } from './towns/hosts.mjs'
 const source = fileURLToPath(new URL('../', import.meta.url))
+/** 只给本机的地址：不对外监听，页面与接口只认它们 */
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
+
+/** 请求的 Host 里那台主机：去掉端口，IPv6 去掉方括号 */
+function hostName(host = '') {
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']')
+    return end > 0 ? host.slice(1, end) : host
+  }
+  return host.split(':')[0]
+}
+
+/**
+ * 这个请求的 Host 能不能用：缺省只认本机；对外监听时再认 IP、监听地址和允许的域名。
+ * 只认 IP 与显式允许的名字，是为了不让别人的域名解析到这台机器上就能用接口（DNS 重绑定）。
+ */
+function hostAllowed(host, bind, allowHost) {
+  const name = hostName(host)
+  if (LOOPBACK.has(name)) return true
+  if (LOOPBACK.has(bind)) return false
+  return (
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(name) ||
+    name.includes(':') ||
+    name === bind ||
+    name === allowHost
+  )
+}
 
 // 一个数据目录只允许一个管理服务；上一个进程已退出时接管它留下的锁。
 async function acquireLock(root) {
@@ -53,12 +80,17 @@ export async function createManager({
   maxRunning,
   // 管理服务启动后自己拉起上次在玩的小镇；页面关掉、重启管理服务都不等于停世界。
   alwaysOn = false,
+  // 监听地址：缺省只听本机；放到服务器上时传 0.0.0.0（或 TOWN_BIND）；域名访问再加 allowHost。
+  bind = process.env.TOWN_BIND?.trim() || '127.0.0.1',
+  allowHost = process.env.TOWN_ALLOW_HOST?.trim() || null,
+  // 世界自己的端口：0 是每次随机；放到服务器上时固定一个，防火墙只开这一个。
+  hostPort = Number(process.env.TOWN_HOST_PORT ?? 0) || 0,
 } = {}) {
   const storage = new Storage(root, source)
   await storage.init()
   const releaseLock = await acquireLock(root)
   const config = configPath ?? (await setupConfig(root, source)),
-    hosts = new Hosts(source, storage, config, { mockLlm, maxRunning })
+    hosts = new Hosts(source, storage, config, { mockLlm, maxRunning, bind, hostPort })
   // 这台电脑上的账号：第一次打开由玩家自己建的管理员 + 管理员给朋友建的普通账号，各自一份密钥
   const accounts = await new Accounts(root).load()
   // 常驻小镇：管理员在首页挑一个一直跑，别人只能进它；页面关掉、重启管理服务都不等于停世界
@@ -116,7 +148,7 @@ export async function createManager({
   ]
   async function dispatch(req, signal) {
     if (stopping) throw new HttpError(503, '应用正在退出')
-    if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? ''))
+    if (!hostAllowed(req.headers.host ?? '', bind, allowHost))
       throw new HttpError(403, '仅提供本机服务')
     const url = new URL(req.url, 'http://127.0.0.1'),
       route = url.pathname.replace(/\/$/, '')
@@ -159,13 +191,17 @@ export async function createManager({
   try {
     await new Promise((resolve, reject) => {
       server.once('error', reject)
-      server.listen(port, '127.0.0.1', resolve)
+      server.listen(port, bind, resolve)
     })
   } catch (e) {
     await releaseLock()
     throw e
   }
-  console.log(`[town-manager] http://127.0.0.1:${server.address().port} · ${root}`)
+  console.log(`[town-manager] http://${bind}:${server.address().port} · ${root}`)
+  if (!LOOPBACK.has(bind))
+    console.log(
+      `[town-manager] 已对外开放：别的机器用这台机器的 IP:${server.address().port} 访问（HTTP 明文，公网请套 TLS 反向代理）`
+    )
   /** 常驻小镇用管理员那份密钥跑；别人进镇时用自己那份，世界一旦跑起来沿用先打开的那份 */
   const residentConfig = async () => {
     const admin = accounts.admin()

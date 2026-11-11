@@ -34,6 +34,12 @@ pub struct Options {
     pub host_bin: PathBuf,
     /// 0 表示随机端口；非 0 时被占用就往后找 10 个。
     pub port: u16,
+    /// 监听地址：缺省只给本机；放到服务器上时传 0.0.0.0（或那台机器的内网地址）。
+    pub bind: String,
+    /// 允许从别的名字访问（域名）：用 IP 访问不用设，页面与接口的地址按请求自己的 Host 拼。
+    pub allow_host: Option<String>,
+    /// 世界自己的端口：0 表示每次随机；放到服务器上时固定一个，防火墙只开这一个。
+    pub host_port: u16,
     pub ready_file: Option<PathBuf>,
     /// 设了口令时，接口只认带会话 Cookie 的请求（同机其他应用也能连 127.0.0.1）。
     pub session_secret: Option<String>,
@@ -43,8 +49,8 @@ pub struct Options {
 }
 
 const USAGE: &str = "town-manager --root <数据目录> --app <应用数据目录> --web <前端构建目录> \
---host-bin <host> [--port 0] [--ready-file 路径] [--session-secret 口令] [--max-running 1] \
-[--mock-llm] [--stop-on-stdin-close]";
+--host-bin <host> [--port 0] [--bind 127.0.0.1] [--allow-host 域名] [--host-port 0] \
+[--ready-file 路径] [--session-secret 口令] [--max-running 1] [--mock-llm] [--stop-on-stdin-close]";
 
 impl Options {
     pub fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
@@ -55,7 +61,8 @@ impl Options {
             match arg.as_str() {
                 "--mock-llm" | "--stop-on-stdin-close" => flags.push(arg),
                 "--root" | "--app" | "--web" | "--host-bin" | "--port" | "--ready-file"
-                | "--session-secret" | "--max-running" => {
+                | "--session-secret" | "--max-running" | "--bind" | "--allow-host"
+                | "--host-port" => {
                     let value = it.next().ok_or_else(|| format!("{arg} 缺少参数值"))?;
                     values.insert(arg, value);
                 }
@@ -81,6 +88,18 @@ impl Options {
             web: path("--web")?,
             host_bin: path("--host-bin")?,
             port: number("--port", 0)? as u16,
+            // 缺省只听本机：放到服务器上时用 --bind 0.0.0.0（世界进程会跟着听 0.0.0.0）
+            bind: values
+                .get("--bind")
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "127.0.0.1".into()),
+            allow_host: values
+                .get("--allow-host")
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            // 世界自己的端口：0 是每次随机；服务器上固定一个，防火墙只开这一个
+            host_port: number("--host-port", 0)? as u16,
             ready_file: values
                 .get("--ready-file")
                 .map(|p| std::path::absolute(p).unwrap_or_else(|_| PathBuf::from(p))),
@@ -278,16 +297,21 @@ fn acquire_lock(root: &std::path::Path) -> Result<PathBuf, ApiError> {
     Ok(lock)
 }
 
-fn bind(port: u16) -> Result<TcpListener, String> {
+/// 只给本机：不对外监听，页面与接口只认回环地址
+pub(crate) fn is_loopback(addr: &str) -> bool {
+    matches!(addr, "127.0.0.1" | "localhost" | "::1")
+}
+
+fn bind(port: u16, addr: &str) -> Result<TcpListener, String> {
     let tries = if port == 0 { 1 } else { 10 };
     let mut last = String::new();
     for offset in 0..tries {
-        match TcpListener::bind(("127.0.0.1", port.saturating_add(offset))) {
+        match TcpListener::bind((addr, port.saturating_add(offset))) {
             Ok(listener) => return Ok(listener),
             Err(e) => last = e.to_string(),
         }
     }
-    Err(format!("无法监听本机端口 {port}：{last}"))
+    Err(format!("无法监听 {addr}:{port}：{last}"))
 }
 
 pub fn run(options: Options) -> Result<(), String> {
@@ -302,13 +326,21 @@ pub fn run(options: Options) -> Result<(), String> {
 fn serve(options: Options, storage: Storage) -> Result<(), String> {
     let config = storage::setup_config(&options.root, &options.app).map_err(|e| e.message)?;
     let accounts = accounts::Accounts::load(&options.root).map_err(|e| e.message)?;
+    // 世界进程跟着管理服务一起对外：本机用时只听回环，放到服务器上时听所有网卡
+    let host_bind = if is_loopback(&options.bind) {
+        "127.0.0.1".to_string()
+    } else {
+        "0.0.0.0".to_string()
+    };
     let hosts = Hosts::new(
         options.host_bin.clone(),
         options.app.clone(),
         options.max_running,
         options.mock_llm,
+        host_bind,
+        options.host_port,
     );
-    let listener = bind(options.port)?;
+    let listener = bind(options.port, &options.bind)?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     if let Some(ready) = &options.ready_file {
@@ -317,9 +349,13 @@ fn serve(options: Options, storage: Storage) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     println!(
-        "[town-manager] http://127.0.0.1:{port} · {}",
+        "[town-manager] http://{}:{port} · {}",
+        options.bind,
         options.root.display()
     );
+    if !is_loopback(&options.bind) {
+        println!("[town-manager] 已对外开放：别的机器用这台机器的 IP:{port} 访问（HTTP 明文，公网请套 TLS 反向代理）");
+    }
     let root = options.root.clone();
     let app = Arc::new(App {
         options,

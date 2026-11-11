@@ -89,20 +89,23 @@ pub(crate) fn take_inputs(clients: &Clients) -> Vec<(u64, Instant, ClientMsg)> {
 const COMMAND_QUEUE: usize = 256;
 
 /// `greeting` 是握手成功后先发给每个连接的世界身份；没有时不发。
+/// `bind` 是监听地址：缺省只给本机；放到服务器上时管理服务传 0.0.0.0。
 pub(crate) fn listen(
     port: u16,
     greeting: Option<String>,
     token: Option<String>,
+    bind: Option<&str>,
 ) -> Result<(Clients, Receiver<NetworkEvent>, u16), HostError> {
     let clients: Clients = Arc::new(Mutex::new(BTreeMap::new()));
     let (to_sim, from_net) = sync_channel(COMMAND_QUEUE);
-    let listener = TcpListener::bind(("127.0.0.1", port))
-        .map_err(|e| HostError::Runtime(format!("端口 {port} 被占用：{e}")))?;
+    let bind = bind.unwrap_or("127.0.0.1");
+    let listener = TcpListener::bind((bind, port))
+        .map_err(|e| HostError::Runtime(format!("{bind}:{port} 被占用：{e}")))?;
     let actual_port = listener
         .local_addr()
         .map_err(|e| HostError::Runtime(format!("读取监听端口失败：{e}")))?
         .port();
-    println!("[host] ws://127.0.0.1:{actual_port}/");
+    println!("[host] ws://{bind}:{actual_port}/");
     let accepted = clients.clone();
     let ids = AtomicU64::new(1);
     thread::spawn(move || {

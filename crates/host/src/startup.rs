@@ -18,6 +18,8 @@ pub(crate) enum Mode {
 
 pub(crate) struct Args {
     pub port: u16,
+    /// 监听的地址：缺省只给本机；放到服务器上时由管理服务传 0.0.0.0。
+    pub bind: Option<String>,
     pub speed: Option<f64>,
     pub mode: Mode,
     pub save_file: Option<PathBuf>,
@@ -40,6 +42,7 @@ impl Args {
     fn from_iter(app: &Application, args: impl Iterator<Item = String>) -> Result<Self, HostError> {
         let mut a = Args {
             port: app.port,
+            bind: std::env::var("TOWN_BIND").ok(),
             speed: None,
             mode: Mode::Llm,
             save_file: None,
@@ -65,6 +68,7 @@ impl Args {
                 "--ready-file" => a.ready_file = Some(PathBuf::from(value()?)),
                 "--connection-token" => a.connection_token = Some(value()?),
                 "--timezone" => a.timezone = Some(value()?),
+                "--bind" => a.bind = Some(value()?),
                 "--port" => a.port = parse_number(&arg, &value()?)?,
                 "--speed" => {
                     let speed: f64 = parse_number(&arg, &value()?)?;

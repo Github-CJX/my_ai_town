@@ -31,6 +31,10 @@ pub struct Hosts {
     pub app: PathBuf,
     pub max_running: usize,
     pub mock_llm: bool,
+    /// 传给世界进程的监听地址：只在本机用时是 127.0.0.1，放到服务器上时是 0.0.0.0
+    host_bind: String,
+    /// 世界的端口：0 是每次随机；放到服务器上时固定一个，防火墙只开这一个
+    host_port: u16,
     running: Mutex<HashMap<String, Record>>,
     /// 后台常驻的小镇：不算进「同时运行几个」的名额，也不会被挤掉
     resident: Mutex<Option<String>>,
@@ -41,12 +45,21 @@ fn alive(child: &mut Child) -> bool {
 }
 
 impl Hosts {
-    pub fn new(host_bin: PathBuf, app: PathBuf, max_running: usize, mock_llm: bool) -> Self {
+    pub fn new(
+        host_bin: PathBuf,
+        app: PathBuf,
+        max_running: usize,
+        mock_llm: bool,
+        host_bind: String,
+        host_port: u16,
+    ) -> Self {
         Self {
             host_bin,
             app,
             max_running,
             mock_llm,
+            host_bind,
+            host_port,
             running: Mutex::new(HashMap::new()),
             resident: Mutex::new(None),
         }
@@ -127,12 +140,15 @@ impl Hosts {
         command
             .arg("--map-document")
             .arg(dir.join("map.json"))
-            .args(["--town-id", id, "--port", "0", "--speed", "0"])
+            .args(["--town-id", id, "--speed", "0"])
+            .args(["--port", &self.host_port.to_string()])
             .arg("--save-file")
             .arg(dir.join("world.json"))
             .arg("--ready-file")
             .arg(&ready)
-            .args(["--connection-token", &token, "--stop-on-stdin-close"]);
+            .args(["--connection-token", &token, "--stop-on-stdin-close"])
+            // 只有本机用时世界听 127.0.0.1；放到服务器上要跟着听 0.0.0.0，别的机器才连得上
+            .args(["--bind", &self.host_bind]);
         if self.mock_llm {
             command.args(["--mock-llm", "--mock-delay", "0.01"]);
         }
