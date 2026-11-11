@@ -11,7 +11,19 @@ import { initCreator } from './creator'
 import { PREFABS, type Prefab } from 'town-shared/prefabs/index'
 import { generatePrefab, isBuiltinTown, missingPrefabs, prefabTownId } from './prefabEntry'
 import { api, TownApiError } from './api'
-import { ACCOUNT_NEEDED, controlTown, keepRunning, type ResidentStatus } from 'town-shared/townApi'
+import {
+  ACCOUNT_NEEDED,
+  controlTown,
+  deleteAgent,
+  deployAgent,
+  keepRunning,
+  makeAgent,
+  readAgents,
+  readTemplates,
+  type AgentTemplate,
+  type HomeAgent,
+  type ResidentStatus,
+} from 'town-shared/townApi'
 import { warmSelectedGame } from '../startupWarmup'
 import { createMusicController } from 'town-shared/audio/music'
 import { installPlatform, isCompact, isTouch, onBack, systemBars } from 'town-shared/platform'
@@ -305,6 +317,7 @@ async function refresh(id?: string) {
     residentId = list.resident ?? null
     residentStatus = list.status ?? null
     amAdmin = list.admin === true
+    void loadAgents()
     // 还没生成的预制小镇也排在内置小镇里，选中时才生成
     const options = maps.map(mapOption)
     const after = maps.filter(isBuiltinTown).length
@@ -402,6 +415,188 @@ function renderControls() {
   weatherSelect.title = weather ? '' : '这个小镇没开天气：进镇里的设定打开'
 }
 
+// 账号自己养的村民：定义跟着账号走，投进哪个小镇由人点一下（不自动跟着人进镇）
+const agentBox = $('agent-box')
+const agentNote = $('agent-note')
+const agentList = $('agent-list')
+const agentName = query<HTMLInputElement>(document, '#agent-name')
+const agentTemplate = query<HTMLSelectElement>(document, '#agent-template')
+const agentAdd = query<HTMLButtonElement>(document, '#agent-add')
+const agentTip = $('agent-tip')
+let myAgents: HomeAgent[] = []
+/** 这个账号最多能建几个：null 是不限（管理员） */
+let agentLimit: number | null = null
+/** 建 agent 用的模板：只从一个正在运行的小镇拿得到 */
+let templates: AgentTemplate[] = []
+let templatesFor = ''
+let agentBusy = false
+
+const townName = (id: string) => maps.find((map) => map.id === id)?.name ?? id
+function agentSay(text: string) {
+  agentTip.textContent = text
+  agentTip.hidden = false
+}
+
+/** 这个账号的 agent 们；老版本管理服务没有这一块，首页就不摆 */
+async function loadAgents() {
+  const data = await readAgents()
+  if (!data) {
+    agentBox.hidden = true
+    return
+  }
+  myAgents = data.agents
+  agentLimit = data.limit
+  agentBox.hidden = false
+  renderAgents()
+  void loadTemplates()
+}
+
+/** 建 agent 要挑镇上现成的模板：只在小镇跑着的时候才问得到 */
+async function loadTemplates() {
+  const key = selected?.running ? selected.id : ''
+  if (key === templatesFor) return
+  templatesFor = key
+  templates = []
+  if (key) {
+    try {
+      templates = await readTemplates(key)
+    } catch {
+      templates = []
+    }
+    if (templatesFor !== key) return
+  }
+  renderAgents()
+}
+
+function renderAgents() {
+  const map = selected
+  const here = map?.running ? map : undefined
+  const room = agentLimit === null || myAgents.length < agentLimit
+  const canCreate = !!here && templates.length > 0 && room && !agentBusy
+  const count =
+    agentLimit === null ? '不限个数' : `还能建 ${Math.max(agentLimit - myAgents.length, 0)} 个`
+  agentNote.textContent = here
+    ? `我的 agent · ${count}`
+    : `我的 agent · ${count} · 建的时候要用正在运行的小镇的模板`
+  const rows = myAgents.map((agent) => {
+    const row = document.createElement('div')
+    row.className = 'agent-row'
+    const name = document.createElement('strong')
+    name.textContent = agent.name
+    const where = document.createElement('span')
+    where.className = 'agent-where'
+    const at = map ? agent.deployed.find((place) => place.town === map.id) : undefined
+    const others = agent.deployed
+      .filter((place) => place.town !== map?.id)
+      .map((place) => `「${townName(place.town)}」`)
+    where.textContent = at
+      ? `就在「${townName(at.town)}」里`
+      : others.length
+        ? `住在${others.join('、')}`
+        : '还没投出去'
+    row.append(name, where)
+    if (!at) {
+      const deploy = document.createElement('button')
+      deploy.type = 'button'
+      deploy.className = 'agent-deploy'
+      deploy.textContent = here ? '投到这里' : '先让小镇运行'
+      deploy.disabled = !here || agentBusy
+      deploy.onclick = () => {
+        if (here) void deployTo(agent, here)
+      }
+      row.append(deploy)
+    }
+    // 已经住进某个镇的定义删不掉（记录和镇上的人得对得上）
+    if (!agent.deployed.length) {
+      const drop = document.createElement('button')
+      drop.type = 'button'
+      drop.className = 'agent-drop'
+      drop.textContent = '删'
+      drop.title = `删掉 agent「${agent.name}」`
+      drop.disabled = agentBusy
+      drop.onclick = () => void dropAgent(agent)
+      row.append(drop)
+    }
+    return row
+  })
+  agentList.replaceChildren(...rows)
+  // 模板下拉：值是下标，选的时候按 templates[下标] 取（同名模板不会混淆）
+  const picked = agentTemplate.value
+  agentTemplate.replaceChildren(
+    ...templates.map((template, index) => new Option(template.name, String(index)))
+  )
+  if (picked && templates[Number(picked)]) agentTemplate.value = picked
+  agentTemplate.disabled = !canCreate
+  agentName.disabled = !canCreate
+  agentAdd.disabled = !canCreate
+  agentTemplate.title = templates.length ? '' : '先把一个小镇跑起来（进一次，或让它在后台运行）'
+}
+
+async function deployTo(agent: HomeAgent, map: MapEntry) {
+  if (agentBusy) return
+  agentBusy = true
+  agentTip.hidden = true
+  renderAgents()
+  try {
+    await deployAgent(map.id, agent.id)
+    agentSay(`「${agent.name}」住进「${map.name}」了。`)
+  } catch (error) {
+    agentSay(errorText(error))
+  } finally {
+    agentBusy = false
+    void loadAgents()
+  }
+}
+
+async function dropAgent(agent: HomeAgent) {
+  if (agentBusy) return
+  if (!window.confirm(`删掉 agent「${agent.name}」？`)) return
+  agentBusy = true
+  agentTip.hidden = true
+  renderAgents()
+  try {
+    await deleteAgent(agent.id)
+    agentSay(`「${agent.name}」已经删掉了。`)
+  } catch (error) {
+    agentSay(errorText(error))
+  } finally {
+    agentBusy = false
+    void loadAgents()
+  }
+}
+
+agentAdd.onclick = async () => {
+  if (agentBusy || agentAdd.disabled) return
+  const name = agentName.value.trim()
+  if (!name) {
+    agentSay('先给它起个名字。')
+    agentName.focus()
+    return
+  }
+  const template = templates[Number(agentTemplate.value)]
+  if (!template) {
+    agentSay('先选一个模板：要把一个小镇跑起来才拿得到模板。')
+    return
+  }
+  agentBusy = true
+  agentTip.hidden = true
+  renderAgents()
+  try {
+    await makeAgent({
+      name,
+      template_id: template.template_id,
+      template_version: template.version,
+    })
+    agentName.value = ''
+    agentSay(`已经建好「${name}」了。挑一个小镇，点「投到这里」让它住进去。`)
+  } catch (error) {
+    agentSay(errorText(error))
+  } finally {
+    agentBusy = false
+    void loadAgents()
+  }
+}
+
 function updateActions() {
   close.hidden = !selected?.running || !!selected?.resident
   remove.hidden = !selected?.deletable
@@ -412,6 +607,9 @@ function updateActions() {
   actions.hidden = close.hidden && remove.hidden && reset.hidden && keep.hidden && unkeep.hidden
   if (actions.hidden) actions.open = false
   renderControls()
+  // 换了个小镇：模板要重问（agent 那一块只在真正跑着的镇上才建得了）
+  void loadTemplates()
+  renderAgents()
 }
 document.addEventListener('click', (event) => {
   if (event.target instanceof Node && !actions.contains(event.target)) actions.open = false

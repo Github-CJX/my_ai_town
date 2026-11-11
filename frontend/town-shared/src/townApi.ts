@@ -127,6 +127,89 @@ export function controlTown(
   return post(id, 'control', body)
 }
 
+/**
+ * 账号自己养的村民（agent）：定义跟着账号走，换小镇还能用；投进哪个小镇是一次手动动作，
+ * 投进去之后那一段记忆只留在那个小镇的存档里（不跟着账号跑）。
+ */
+export type HomeAgent = {
+  id: string
+  name: string
+  template_id: string
+  template_version: number
+  home?: string
+  created_at: string
+  /** 已经住进哪些小镇：换镇不搬人，是在另一个镇再住一份 */
+  deployed: { town: string; resident: string; name: string; at: string }[]
+}
+
+export type HomeAgents = {
+  agents: HomeAgent[]
+  /** 这个账号最多能建几个：null 是不限（管理员） */
+  limit: number | null
+}
+
+/** 建 agent 时选一个镇上可用的村民模板 */
+export type AgentTemplate = {
+  template_id: string
+  version: number
+  name: string
+  intro: string
+  tags: string[]
+}
+
+/** 账号接口在 /api/towns 下（不是 /api/towns/<镇>/…），单独一个助手 */
+async function home<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`/api/towns${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Town-Client': '1' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const data = await response.json().catch(() => null)
+  if (response.ok) return data as T
+  const error = Error(data?.error ?? `小镇服务返回 ${response.status}`)
+  if (data?.code) Object.assign(error, { code: data.code })
+  throw error
+}
+
+/** 这个账号的 agent 们；管理服务没有这个接口（老版本）时返回 null，首页就不摆这一块 */
+export async function readAgents(): Promise<HomeAgents | null> {
+  try {
+    return await home<HomeAgents>('/agents')
+  } catch {
+    return null
+  }
+}
+
+/** 建一个 agent：起名字、选一个模板（模板来自某个正在运行的小镇） */
+export function makeAgent(body: {
+  name: string
+  template_id: string
+  template_version: number
+  home?: string
+}): Promise<{ ok: true; agent: HomeAgent }> {
+  return home('/agents', body)
+}
+
+/** 删掉一个还没投出去的 agent（还在镇里的删不掉） */
+export function deleteAgent(id: string): Promise<{ ok: true }> {
+  return home('/agents/delete', { id })
+}
+
+/** 某个小镇现在能用的村民模板：小镇没在运行时拿不到 */
+export async function readTemplates(id: string): Promise<AgentTemplate[]> {
+  const response = await fetch(`/api/towns/${encodeURIComponent(id)}/templates`, {
+    headers: { 'X-Town-Client': '1' },
+  })
+  const data = await response.json().catch(() => null)
+  if (!response.ok) throw Error(data?.error ?? `小镇服务返回 ${response.status}`)
+  return (data as { templates: AgentTemplate[] }).templates
+}
+
+/** 把 agent 投进某个小镇：镇上多一个居民，这段记忆留在这个镇的存档里 */
+export function deployAgent(id: string, agentId: string): Promise<{ ok: true; agent: HomeAgent }> {
+  return post(id, 'deploy', { agent_id: agentId })
+}
+
 /** 重新打开小镇：世界进程不在了，管理服务就从存档把它拉起来。返回新的连接地址和打开凭证。
  *  automatic 是断线后自动重开：被另一个页面进的小镇挤掉时不抢回来，抛 TownDisplaced */
 export function reopenTown(id: string, automatic = true) {

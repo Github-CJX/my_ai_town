@@ -352,6 +352,85 @@ body:has(.map-launcher) {
   color: var(--ui-ink-soft);
   font-size: 13px;
 }
+/* 账号自己养的村民：列表 + 起名选模板，投进哪个小镇由人点一下 */
+.agent-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius);
+  background: var(--ui-fill);
+}
+.agent-note {
+  margin: 0;
+  color: var(--ui-ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.agent-row strong {
+  font-weight: 600;
+}
+.agent-where {
+  color: var(--ui-ink-soft);
+  font-size: 13px;
+}
+.agent-row button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: var(--ui-fill-strong);
+  font-size: 13px;
+}
+.agent-row .agent-deploy {
+  margin-left: auto;
+}
+.agent-row .agent-drop {
+  color: var(--ui-danger);
+  border-color: var(--ui-danger);
+  background: none;
+}
+.agent-create {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.agent-create input,
+.agent-create select {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: var(--ui-panel-solid);
+}
+.agent-create .agent-add {
+  align-self: flex-start;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: var(--ui-fill-strong);
+}
+.agent-tip {
+  margin: 0;
+  color: var(--ui-ink-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .enter-game {
   display: flex;
   min-height: 52px;

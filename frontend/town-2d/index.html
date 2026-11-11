@@ -83,6 +83,22 @@
               </label>
             </div>
           </div>
+          <!-- 账号自己养的村民：定义跟着账号走，投进哪个小镇要人点一下 -->
+          <div id="agent-box" class="agent-box" hidden>
+            <p class="agent-note" id="agent-note">我的 agent</p>
+            <div id="agent-list" class="agent-list"></div>
+            <div class="agent-create">
+              <input
+                id="agent-name"
+                maxlength="16"
+                placeholder="给它起个名字"
+                aria-label="agent 的名字"
+              />
+              <select id="agent-template" aria-label="用哪个模板"></select>
+              <button id="agent-add" type="button" class="agent-add">建一个</button>
+            </div>
+            <p id="agent-tip" class="agent-tip" role="status" hidden></p>
+          </div>
         </div>
         <button id="enter-game" class="enter-game" disabled>
           进入游戏 <span aria-hidden="true">→</span>

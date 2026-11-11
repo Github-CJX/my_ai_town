@@ -2,6 +2,14 @@
 import { HttpError } from './http.mjs'
 import { safeId } from './storage.mjs'
 import { positions } from './positions.mjs'
+import {
+  createAgent,
+  listAgents,
+  publicAgent,
+  readAgent,
+  recordDeploy,
+  removeAgent,
+} from './agents.mjs'
 
 /** 天气可以选的那几种（与 protocol 的 WeatherKind 一致） */
 const WEATHER = ['clear', 'overcast', 'light_rain', 'rain', 'heavy_rain', 'thunderstorm', 'snow']
@@ -65,8 +73,37 @@ export async function observe(hosts, id) {
   }
 }
 
-export function createTownRoutes({ source, storage, hosts, serial, configOf, current, resident }) {
+export function createTownRoutes({
+  source,
+  root,
+  storage,
+  hosts,
+  serial,
+  configOf,
+  current,
+  resident,
+}) {
   const inTown = (id, fn) => serial('town-' + safeId(id), fn)
+  /** 这次请求是谁：agent 是账号自己的东西，没账号就没得谈 */
+  const mine = (headers) => {
+    const me = current(headers)
+    if (!me) throw new HttpError(401, '先在首页「设定」里创建或选择一个账号', 'account')
+    return me
+  }
+  /** 村民模板可以选的那几个（世界里说「可加入」的） */
+  const library = async (id) => {
+    const reply = await hosts.query(
+      id,
+      { type: 'get_resident_library' },
+      (m) => m.type === 'resident_library'
+    )
+    return reply.templates ?? []
+  }
+  /** 镇上的居民与这个世界的编号：投人之前先看清重名没有 */
+  const population = (id) =>
+    hosts
+      .query(id, { type: 'get_population' }, (m) => m.type === 'population')
+      .then((m) => m.population)
   /** 只有管理员能决定哪个小镇在后台运行、能改它的速度与天气 */
   const admin = (headers) => {
     const me = current(headers)
@@ -125,6 +162,119 @@ export function createTownRoutes({ source, storage, hosts, serial, configOf, cur
           // 常驻小镇此刻的速度与天气：首页的控制按钮要显示当前值
           status: residentId ? await look(residentId) : null,
         }
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/towns\/agents$/,
+      async ({ headers }) => {
+        const me = mine(headers)
+        return {
+          agents: (await listAgents(root, me.id)).map(publicAgent),
+          limit: me.agent_limit ?? null,
+        }
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/agents$/,
+      async ({ body, headers }) => {
+        const me = mine(headers)
+        const agent = await serial('agents-' + me.id, () =>
+          createAgent(root, me.id, body, me.agent_limit ?? null)
+        )
+        return { ok: true, agent: publicAgent(agent) }
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/agents\/delete$/,
+      async ({ body, headers }) => {
+        const me = mine(headers)
+        await serial('agents-' + me.id, () => removeAgent(root, me.id, body?.id))
+        return { ok: true }
+      },
+    ],
+    [
+      'GET',
+      /^\/api\/towns\/([a-z0-9-]+)\/templates$/,
+      async ({ params: [id] }) => {
+        id = safeId(id)
+        if (!hosts.isRunning(id))
+          throw new HttpError(409, '这个小镇没在运行：先进一次，或让它在后台运行')
+        const cards = await library(id)
+        return {
+          templates: cards
+            .filter((card) => card.status === 'available')
+            .map((card) => ({
+              template_id: card.template_id,
+              version: card.version,
+              name: card.name,
+              intro: card.intro,
+              tags: card.tags ?? [],
+            })),
+        }
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/([a-z0-9-]+)\/deploy$/,
+      async ({ params: [id], body, headers }) => {
+        const me = mine(headers)
+        id = safeId(id)
+        const agent = await readAgent(root, me.id, body?.agent_id)
+        if (agent.deployed?.[id]) throw new HttpError(409, '这个 agent 已经在这个镇里了')
+        if (!hosts.isRunning(id))
+          throw new HttpError(409, '这个小镇没在运行：先进一次，或让它在后台运行，再投放')
+        return inTown(id, async () => {
+          // 世界观没设好的世界还不收人：先说清楚缺哪一步，别让世界回一句「请先设置世界观」
+          const state = await observe(hosts, id)
+          if (!state?.ready)
+            throw new HttpError(409, '这个小镇还没设定世界观：先进镇里设定一次，再投放')
+          const view = await population(id)
+          if (view.residents.some((person) => person.name === agent.name))
+            throw new HttpError(409, `镇上已经有叫「${agent.name}」的居民了，换一个名字再投`)
+          const template = (await library(id)).find(
+            (card) =>
+              card.template_id === agent.template_id &&
+              card.version === agent.template_version &&
+              card.status === 'available'
+          )
+          if (!template)
+            throw new HttpError(
+              409,
+              '这个镇没有这个模板（或者它已经在用了）：换个模板，或在这个镇重新建一个 agent'
+            )
+          const opId = `agent-${agent.id}-${Date.now()}`
+          const command = {
+            type: 'join_resident',
+            op_id: opId,
+            world_id: view.world_id,
+            template_id: agent.template_id,
+            template_version: agent.template_version,
+            name: agent.name,
+            ...(agent.home && view.homes.some((home) => home.locale === agent.home)
+              ? { home: agent.home }
+              : {}),
+          }
+          const reply = await hosts.query(
+            id,
+            command,
+            (m) =>
+              (m.type === 'resident_joined' && m.outcome?.op_id === opId) ||
+              (m.type === 'join_result' && m.op_id === opId),
+            20_000
+          )
+          const outcome = reply.outcome
+          if (!outcome?.ok) throw new HttpError(409, outcome?.message || '没能投进这个小镇')
+          const saved = await serial('agents-' + me.id, () =>
+            recordDeploy(root, me.id, agent, id, {
+              resident: outcome.resident_id,
+              name: outcome.name ?? agent.name,
+            })
+          )
+          return { ok: true, agent: publicAgent(saved) }
+        })
       },
     ],
     [

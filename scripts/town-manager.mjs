@@ -144,7 +144,7 @@ export async function createManager({
     ...builtinModel.routes,
     ...creation.routes,
     ...assets.routes,
-    ...createTownRoutes({ source, storage, hosts, serial, configOf, current, resident }),
+    ...createTownRoutes({ source, root, storage, hosts, serial, configOf, current, resident }),
   ]
   async function dispatch(req, signal) {
     if (stopping) throw new HttpError(503, '应用正在退出')
