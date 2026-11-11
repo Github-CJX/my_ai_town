@@ -316,6 +316,9 @@ pub struct RequestView {
     pub estimated_tokens: u64,
     pub status: RequestStatus,
     pub detail: String,
+    /// 这次用的是哪个模型（`服务商/模型`）：管理服务按它查价目表算钱。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

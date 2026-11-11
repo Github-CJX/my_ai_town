@@ -563,6 +563,8 @@ export interface RequestView {
   estimated_tokens: number
   status: RequestStatus
   detail: string
+  /** 这次用的模型（服务商/模型）：管理服务按它算钱，这里只是照抄 */
+  model?: string
   latency_ms?: number
   input_tokens?: number
   output_tokens?: number

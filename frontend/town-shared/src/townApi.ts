@@ -252,6 +252,8 @@ export type AccountUsageRow = {
   paused: unknown
   /** 服务商没回计量的次数：花费不明 */
   unmetered: number
+  /** 今天这位花掉的钱（微元 = 元 × 1 000 000）：只算价目表里有的模型 */
+  cost_micros: number
 }
 
 /** 账本里某一天的用量：`tokens` 只算服务商报回来的，没报的几次在 `unmetered`（估算值在 `estimated`） */
@@ -263,18 +265,32 @@ export type AccountUsageDay = {
   cache_hit_tokens: number
   unmetered: number
   estimated: number
+  /** 花掉的钱（微元）；`priced` 是算进去了的请求数，`unpriced` 是有计量没价钱的 */
+  cost_micros: number
+  priced: number
+  unpriced: number
   agents: {
     agent_id: string
     name: string
     calls: number
     tokens: number
     unmetered: number
+    cost_micros: number
   }[]
 }
 
 export type AccountUsage = {
   budget: AccountBudget
-  totals: { calls: number; tokens: number; unmetered: number }
+  totals: {
+    calls: number
+    tokens: number
+    unmetered: number
+    /** 今天花掉的钱（微元 = 元 × 1 000 000） */
+    cost_micros: number
+    /** 算进去了的请求数 / 有计量但价目表里没这个模型的请求数 */
+    priced: number
+    unpriced: number
+  }
   agents: AccountUsageRow[]
   /** 最近几天（新的在前）：跨天留着，小镇换天归零也不会丢 */
   history: AccountUsageDay[]

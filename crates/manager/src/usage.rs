@@ -156,6 +156,15 @@ pub struct DayUsage {
     pub unmetered: u64,
     #[serde(default)]
     pub estimated: u64,
+    /// 花掉的钱（微元 = 元 × 1 000 000）：只算有价目表的模型。
+    #[serde(default)]
+    pub cost_micros: u64,
+    /// 有计量、也有价钱，算进去了的请求数。
+    #[serde(default)]
+    pub priced: u64,
+    /// 有计量但价目表里没有这个模型：钱不知道，不写成 0。
+    #[serde(default)]
+    pub unpriced: u64,
 }
 
 /// 逐日逐人的账本，外加已经折进去的请求号（折过就不再重复计）。
@@ -198,6 +207,7 @@ fn fold(
     town: &str,
     usage: &Value,
     owners: &BTreeMap<String, (String, String)>,
+    prices: &crate::prices::Table,
 ) {
     let now = unix_now();
     for request in usage["requests"].as_array().into_iter().flatten() {
@@ -229,9 +239,20 @@ fn fold(
         let input = request["input_tokens"].as_u64();
         let output = request["output_tokens"].as_u64();
         if input.is_some() || output.is_some() {
-            here.tokens += input.unwrap_or(0) + output.unwrap_or(0);
-            here.input_tokens += input.unwrap_or(0);
-            here.cache_hit_tokens += number_of(&request["cache_hit_tokens"]);
+            let input = input.unwrap_or(0);
+            let output = output.unwrap_or(0);
+            let cache = number_of(&request["cache_hit_tokens"]);
+            here.tokens += input + output;
+            here.input_tokens += input;
+            here.cache_hit_tokens += cache;
+            match prices.cost_micros(request["model"].as_str(), input, cache, output) {
+                Some(cost) => {
+                    here.cost_micros += cost;
+                    here.priced += 1;
+                }
+                // 有计量、没价钱：记下来，不折算成 0
+                None => here.unpriced += 1,
+            }
         } else {
             here.unmetered += 1;
             here.estimated += number_of(&request["reserved_tokens"]);
@@ -266,12 +287,16 @@ fn history(ledger: &Ledger, days: usize, names: &BTreeMap<String, String>) -> Va
                 sums.cache_hit_tokens += here.cache_hit_tokens;
                 sums.unmetered += here.unmetered;
                 sums.estimated += here.estimated;
+                sums.cost_micros += here.cost_micros;
+                sums.priced += here.priced;
+                sums.unpriced += here.unpriced;
                 agents.push(json!({
                     "agent_id": agent_id,
                     "name": names.get(agent_id).cloned().unwrap_or_else(|| agent_id.clone()),
                     "calls": here.calls,
                     "tokens": here.tokens,
                     "unmetered": here.unmetered,
+                    "cost_micros": here.cost_micros,
                 }));
             }
             json!({
@@ -282,6 +307,9 @@ fn history(ledger: &Ledger, days: usize, names: &BTreeMap<String, String>) -> Va
                 "cache_hit_tokens": sums.cache_hit_tokens,
                 "unmetered": sums.unmetered,
                 "estimated": sums.estimated,
+                "cost_micros": sums.cost_micros,
+                "priced": sums.priced,
+                "unpriced": sums.unpriced,
                 "agents": agents,
             })
         })
@@ -337,9 +365,10 @@ fn gather(hosts: &Hosts, agents: &[Agent]) -> (Towns, Owners) {
 fn fold_into(home: &Path, towns: &Towns, owners: &Owners) -> Result<Ledger, ApiError> {
     let mut ledger = read_ledger(home);
     let before = ledger.clone();
+    let prices = crate::prices::table(home);
     for (town, usage) in towns {
         if let (Some(usage), Some(by_resident)) = (usage, owners.get(town)) {
-            fold(&mut ledger, town, usage, by_resident);
+            fold(&mut ledger, town, usage, by_resident, &prices);
         }
     }
     prune(&mut ledger, unix_now());
@@ -374,7 +403,21 @@ pub fn summary(hosts: &Hosts, storage: &Storage, home: &Path) -> Result<Value, A
         .collect();
     let mut rows = Vec::new();
     let (mut calls, mut tokens, mut unmetered) = (0u64, 0u64, 0u64);
+    // 今天花掉的钱只存在账本里（世界的 resident 行只有 token），从今天那一行取
+    let today = utc_day(unix_now());
+    let today_rows = ledger.days.get(&today);
+    let mut cost_micros = 0u64;
+    let mut priced = 0u64;
+    let mut unpriced = 0u64;
+    if let Some(per_agent) = today_rows {
+        for here in per_agent.values() {
+            cost_micros += here.cost_micros;
+            priced += here.priced;
+            unpriced += here.unpriced;
+        }
+    }
     for agent in &agents {
+        let money = today_rows.and_then(|per_agent| per_agent.get(&agent.id));
         for (town, here) in &agent.deployed {
             let usage = towns.get(town).cloned().unwrap_or(None);
             let empty = Value::Null;
@@ -422,12 +465,20 @@ pub fn summary(hosts: &Hosts, storage: &Storage, home: &Path) -> Result<Value, A
                 "in_flight": number_of(&row["in_flight"]),
                 "paused": row["paused"].clone(),
                 "unmetered": unmetered_here,
+                "cost_micros": money.map_or(0, |day| day.cost_micros),
             }));
         }
     }
     Ok(json!({
         "budget": budget,
-        "totals": { "calls": calls, "tokens": tokens, "unmetered": unmetered },
+        "totals": {
+            "calls": calls,
+            "tokens": tokens,
+            "unmetered": unmetered,
+            "cost_micros": cost_micros,
+            "priced": priced,
+            "unpriced": unpriced,
+        },
         "agents": rows,
         "history": history(&ledger, 7, &names),
     }))
@@ -480,7 +531,7 @@ mod tests {
         // 0 等于「永远不许跑」，当错误收下，而不是悄悄当成不限
         let zero = save(&home, &json!({ "calls_per_day": 0 })).expect_err("0 不收");
         assert!(zero.message.contains("大于 0"));
-        assert_eq!(read(&home), saved);
+        assert_eq!(read(&home), shared, "被拒的也不改磁盘上的额度");
         // 不带就是回到全镇额度
         assert_eq!(
             save(&home, &json!({})).expect("清掉"),
@@ -520,9 +571,11 @@ mod tests {
         assert_eq!(summary["history"].as_array().map(Vec::len), Some(0));
     }
 
-    /// 同一条请求折两次只算一次；没报计量那次进 `unmetered`，不写成 0 token
+    /// 同一条请求折两次只算一次；没报计量那次进 `unmetered`，不写成 0 token；
+    /// 有计量没价钱的进 `unpriced`，钱不折算成 0
     #[test]
     fn a_request_is_folded_into_the_ledger_once_and_unmetered_keeps_its_own_column() {
+        let home = temp_home();
         let mut ledger = Ledger::default();
         let owners: BTreeMap<String, (String, String)> =
             [("r1".to_string(), ("a1".to_string(), "阿岚".to_string()))]
@@ -531,6 +584,7 @@ mod tests {
         let usage = json!({
             "requests": [
                 { "id": 7, "resident_id": "r1", "status": "adopted", "sent_at": 1_700_000_000u64,
+                  "model": "deepseek/deepseek-chat",
                   "input_tokens": 120, "output_tokens": 30, "cache_hit_tokens": 40,
                   "reserved_tokens": 200 },
                 { "id": 8, "resident_id": "r1", "status": "failed", "sent_at": 1_700_000_100u64,
@@ -540,19 +594,27 @@ mod tests {
                   "input_tokens": 999, "output_tokens": 0 },
                 // 还在路上：等落定再算
                 { "id": 10, "resident_id": "r1", "status": "in_flight", "sent_at": 1_700_000_200u64 },
+                // 有计量、价目表里没有这个模型
+                { "id": 11, "resident_id": "r1", "status": "adopted", "sent_at": 1_700_000_300u64,
+                  "model": "someone/unknown-model", "input_tokens": 10, "output_tokens": 0 },
             ]
         });
-        fold(&mut ledger, "town-1", &usage, &owners);
-        fold(&mut ledger, "town-1", &usage, &owners);
-        assert_eq!(ledger.seen.len(), 2, "两条落定的请求各记一次");
+        let prices = crate::prices::table(&home);
+        fold(&mut ledger, "town-1", &usage, &owners, &prices);
+        fold(&mut ledger, "town-1", &usage, &owners, &prices);
+        assert_eq!(ledger.seen.len(), 3, "三条落定的请求各记一次");
         let day = ledger.days.get("2023-11-14").expect("折进请求发出那天");
         let mine = day.get("a1").expect("阿岚那行");
-        assert_eq!(mine.calls, 2);
-        assert_eq!(mine.tokens, 150, "只算服务商报回来的");
-        assert_eq!(mine.input_tokens, 120);
+        assert_eq!(mine.calls, 3);
+        assert_eq!(mine.tokens, 160, "只算服务商报回来的");
+        assert_eq!(mine.input_tokens, 130);
         assert_eq!(mine.cache_hit_tokens, 40);
         assert_eq!(mine.unmetered, 1);
         assert_eq!(mine.estimated, 150, "估算值另放一栏");
+        // 120 输入里 40 命中：80 × 2 + 40 × 0.5 + 30 × 8 = 420 微元
+        assert_eq!(mine.cost_micros, 420);
+        assert_eq!(mine.priced, 1);
+        assert_eq!(mine.unpriced, 1);
         assert_eq!(day.len(), 1, "别的居民不进这个账号的账本");
 
         // 最近几天的视图：新的在前，名字补上
@@ -561,7 +623,9 @@ mod tests {
             .collect();
         let view = history(&ledger, 7, &names);
         assert_eq!(view[0]["day"], "2023-11-14");
-        assert_eq!(view[0]["calls"], 2);
+        assert_eq!(view[0]["calls"], 3);
+        assert_eq!(view[0]["cost_micros"], 420);
+        assert_eq!(view[0]["unpriced"], 1);
         assert_eq!(view[0]["agents"][0]["name"], "阿岚");
     }
 

@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { HttpError } from './http.mjs'
 import { listAgents } from './agents.mjs'
+import { costMicros, priceTable } from './prices.mjs'
 import { atomicJson, readJson, safeId } from './storage.mjs'
 
 const hex = (bytes) => randomBytes(bytes).toString('hex')
@@ -131,6 +132,11 @@ const blankDay = () => ({
   cache_hit_tokens: 0,
   unmetered: 0,
   estimated: 0,
+  // 花掉的钱（微元 = 元 × 1 000 000）：只算价目表里有的模型
+  cost_micros: 0,
+  priced: 0,
+  // 有计量、没价钱：钱不知道，不写成 0
+  unpriced: 0,
 })
 
 export async function readLedger(root, userId) {
@@ -164,7 +170,7 @@ export async function saveLedger(root, userId, ledger) {
  * 把世界这次的请求台账折进跨天账本：按请求号去重，还在路上的等它落定。
  * `owners` 是 居民 → agent 编号，不是自己投的那几位不记。
  */
-export function foldLedger(ledger, town, usage, owners) {
+export function foldLedger(ledger, town, usage, owners, prices = new Map()) {
   const now = nowSecs()
   for (const request of usage?.requests ?? []) {
     const resident = request?.resident_id
@@ -185,9 +191,17 @@ export function foldLedger(ledger, town, usage, owners) {
     const input = Number.isInteger(request.input_tokens) ? request.input_tokens : null
     const output = Number.isInteger(request.output_tokens) ? request.output_tokens : null
     if (input !== null || output !== null) {
+      const cache = number_of(request.cache_hit_tokens)
       here.tokens += (input ?? 0) + (output ?? 0)
       here.input_tokens += input ?? 0
-      here.cache_hit_tokens += number_of(request.cache_hit_tokens)
+      here.cache_hit_tokens += cache
+      const cost = costMicros(prices, request.model, input ?? 0, cache, output ?? 0)
+      if (cost === null) {
+        here.unpriced += 1
+      } else {
+        here.cost_micros += cost
+        here.priced += 1
+      }
     } else {
       // 没报计量的那次：真花掉的钱是「不知道」，估算值另放一栏，不写成 0 token
       here.unmetered += 1
@@ -220,12 +234,16 @@ export function historyOf(ledger, days, names = new Map()) {
         sums.cache_hit_tokens += here.cache_hit_tokens
         sums.unmetered += here.unmetered
         sums.estimated += here.estimated
+        sums.cost_micros += here.cost_micros
+        sums.priced += here.priced
+        sums.unpriced += here.unpriced
         agents.push({
           agent_id: agent,
           name: names.get(agent) ?? agent,
           calls: here.calls,
           tokens: here.tokens,
           unmetered: here.unmetered,
+          cost_micros: here.cost_micros,
         })
       }
       return { day, ...sums, agents }
@@ -257,9 +275,10 @@ export async function foldTowns({ root, userId, hosts }) {
   }
   const ledger = await readLedger(root, userId)
   const before = JSON.stringify(ledger)
+  const prices = await priceTable(root, userId)
   for (const [town, usage] of towns) {
     const mine = owners.get(town)
-    if (usage && mine) foldLedger(ledger, town, usage, mine)
+    if (usage && mine) foldLedger(ledger, town, usage, mine, prices)
   }
   pruneLedger(ledger)
   if (JSON.stringify(ledger) !== before) await saveLedger(root, userId, ledger)
@@ -316,11 +335,26 @@ export async function usageSummary({ root, userId, hosts, storage }) {
   // 账本是给「过了今天」看的：世界的日计数会在换天时归零，这里留一份不会丢的
   const ledger = await readLedger(root, userId)
   const before = JSON.stringify(ledger)
+  const prices = await priceTable(root, userId)
   for (const [town, usage] of towns) {
     const mine = owners.get(town)
-    if (usage && mine) foldLedger(ledger, town, usage, mine)
+    if (usage && mine) foldLedger(ledger, town, usage, mine, prices)
   }
   pruneLedger(ledger)
   if (JSON.stringify(ledger) !== before) await saveLedger(root, userId, ledger)
+  // 今天花掉的钱只存在账本里（世界的 resident 行只有 token）
+  const today = ledger.days[dayOf(nowSecs())] ?? {}
+  let costMicrosToday = 0
+  let pricedToday = 0
+  let unpricedToday = 0
+  for (const here of Object.values(today)) {
+    costMicrosToday += here.cost_micros
+    pricedToday += here.priced
+    unpricedToday += here.unpriced
+  }
+  for (const row of rows) row.cost_micros = today[row.agent_id]?.cost_micros ?? 0
+  totals.cost_micros = costMicrosToday
+  totals.priced = pricedToday
+  totals.unpriced = unpricedToday
   return { ok: true, budget, totals, agents: rows, history: historyOf(ledger, 7, names) }
 }

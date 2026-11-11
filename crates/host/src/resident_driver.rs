@@ -34,6 +34,8 @@ pub(crate) struct ResidentDriver {
     /// 固定回复池：不要求配置模型服务
     pub mock: bool,
     pool: WorkerPool,
+    /// 每条在途请求用的模型（`服务商/模型`），回来时写进台账——管理服务靠它算钱。
+    models: BTreeMap<u64, String>,
     log: BufWriter<File>,
 }
 impl ResidentDriver {
@@ -105,6 +107,7 @@ impl ResidentDriver {
             target,
             mock: is_mock,
             pool,
+            models: BTreeMap::new(),
             log,
         })
     }
@@ -117,6 +120,8 @@ impl ResidentDriver {
                 result.id,
                 result.latency_ms as f64 / 1000.0
             );
+            let model = self.models.remove(&result.id);
+            self.runtime.record_model(result.id, model.as_deref());
             self.runtime.on_reply(
                 world,
                 &result.actor,
@@ -164,6 +169,9 @@ impl ResidentDriver {
                 }
             };
             request_targets.insert(id, target.clone());
+            // 台账里记下这次用的模型：管理服务按「服务商/模型」查价目表
+            self.models
+                .insert(id, format!("{}/{}", target.provider, target.model));
             let work = Work { request, target };
             if let Err(error) = self.pool.submit(work) {
                 self.runtime

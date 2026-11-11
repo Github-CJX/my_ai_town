@@ -28,6 +28,9 @@ pub struct RequestRecord {
     pub status: RequestStatus,
     /// 工具名、错误或退回原因
     pub detail: String,
+    /// 这次用的是哪个模型（`服务商/模型`）：由 host 在发出请求时记下，管理服务按它算钱。
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<u64>,
     #[serde(default)]
@@ -56,6 +59,7 @@ impl RequestRecord {
             estimated_tokens: self.estimated_tokens,
             status: self.status,
             detail: self.detail.clone(),
+            model: self.model.clone(),
             latency_ms: self.latency_ms,
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
@@ -97,6 +101,7 @@ impl ResidentRuntime {
             estimated_tokens: estimated,
             status: RequestStatus::InFlight,
             detail: String::new(),
+            model: None,
             latency_ms: None,
             input_tokens: None,
             output_tokens: None,
@@ -105,6 +110,14 @@ impl ResidentRuntime {
         });
         while self.state.requests.len() > LEDGER_LIMIT {
             self.state.requests.pop_front();
+        }
+    }
+
+    /// 发出请求的 host 记下这次用的模型（`服务商/模型`），价目表要靠它算钱。
+    /// 世界自己不认识服务商，所以这是可选信息：不知道就空着，页面显示「还没记账」。
+    pub fn record_model(&mut self, id: u64, model: Option<&str>) {
+        if let Some(r) = self.ledger_entry(id) {
+            r.model = model.map(str::to_string);
         }
     }
 

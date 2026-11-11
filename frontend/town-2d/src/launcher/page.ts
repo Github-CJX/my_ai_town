@@ -445,6 +445,13 @@ function tokens(count: number) {
   return `${(count / 1000).toFixed(scale)}k token`
 }
 
+/** 微元（元 × 1 000 000）→ 钱。少到一分以下就说「不到 ¥0.01」，不写成 ¥0 */
+function money(micros: number) {
+  if (!micros) return '¥0'
+  const yuan = micros / 1_000_000
+  return yuan < 0.01 ? '不到 ¥0.01' : `¥${yuan.toFixed(2)}`
+}
+
 // 额度弹层：账号自己的每日上限，存下来顺手发给正在跑的小镇
 const budgetDialog = $('budget-dialog') as HTMLDialogElement
 const budgetCalls = $('budget-calls') as HTMLInputElement
@@ -640,9 +647,14 @@ function renderAgents() {
     agentLimit === null ? '不限个数' : `还能建 ${Math.max(agentLimit - myAgents.length, 0)} 个`
   // 投出去的村民跑起来用的是你自己账号的模型与密钥（管理员那份就是小镇的）
   const billing = amAdmin ? '用的是小镇的模型与密钥' : '用的是你自己的模型与密钥'
+  // 今天花了多少钱：逐请求记了模型再按价目表折算；没价的那几次照实说，不写成 0
+  const priced = accountUsage?.totals.priced ?? 0
+  const unpriced = accountUsage?.totals.unpriced ?? 0
+  const spent = priced > 0 ? ` · 约 ${money(accountUsage!.totals.cost_micros)}` : ''
+  const noPrice = unpriced > 0 ? `（其中 ${unpriced} 次价目表里没有，钱没算）` : ''
   // 今天花了多少：世界按居民记，管理服务换回这个账号的 agent
   const used = accountUsage
-    ? ` · 今天 ${accountUsage.totals.calls} 次 / ${tokens(accountUsage.totals.tokens)}`
+    ? ` · 今天 ${accountUsage.totals.calls} 次 / ${tokens(accountUsage.totals.tokens)}${spent}${noPrice}`
     : ''
   const unknown =
     accountUsage && accountUsage.totals.unmetered > 0
@@ -661,13 +673,19 @@ function renderAgents() {
   // 跨天账本：今天之外的也算上，换天归零不会把这些丢了
   const week = accountUsage
     ? accountUsage.history.reduce(
-        (sum, day) => ({ calls: sum.calls + day.calls, tokens: sum.tokens + day.tokens }),
-        { calls: 0, tokens: 0 }
+        (sum, day) => ({
+          calls: sum.calls + day.calls,
+          tokens: sum.tokens + day.tokens,
+          cost_micros: sum.cost_micros + day.cost_micros,
+        }),
+        { calls: 0, tokens: 0, cost_micros: 0 }
       )
     : null
   const longer =
     week && week.calls > accountUsage!.totals.calls
-      ? ` · 近 7 天 ${week.calls} 次 / ${tokens(week.tokens)}`
+      ? ` · 近 7 天 ${week.calls} 次 / ${tokens(week.tokens)}${
+          week.cost_micros > 0 ? ` / 约 ${money(week.cost_micros)}` : ''
+        }`
       : ''
   agentNote.textContent = `我的 agent · ${count} · ${billing}${used}${unknown}${quota}${shared}${longer}`
 

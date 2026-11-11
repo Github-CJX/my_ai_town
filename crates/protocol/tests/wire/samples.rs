@@ -804,6 +804,7 @@ pub fn server_samples() -> Vec<ServerMsg> {
                 estimated_tokens: 3_500,
                 status: RequestStatus::Adopted,
                 detail: "run_actions".into(),
+                model: Some("deepseek/deepseek-chat".into()),
                 latency_ms: Some(1_200),
                 input_tokens: Some(3_400),
                 output_tokens: Some(200),
