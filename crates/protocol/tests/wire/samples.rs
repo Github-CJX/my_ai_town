@@ -530,6 +530,25 @@ pub fn server_samples() -> Vec<ServerMsg> {
                 world_id: "w1".into(),
             },
         },
+        ServerMsg::PlaceGrid {
+            request_id: "grid-1".into(),
+            locale: "indoor_cafe".into(),
+            grid: Some(PlaceGrid {
+                by: "-p".into(),
+                cells: ".p".into(),
+                columns: 2,
+                entrance: [0.0, 1.5],
+                entrance_clearance: 0.6,
+                locale: "indoor_cafe".into(),
+                origin: [1.0, 2.0],
+                props: vec!["core:chair@1".into()],
+                room: 1,
+                room_capped: false,
+                rows: 1,
+                size: [0.8, 0.8],
+                step: 0.5,
+            }),
+        },
         ServerMsg::PropResult {
             request_id: "r3".into(),
             ok: false,
@@ -1428,6 +1447,10 @@ pub fn client_samples() -> Vec<ClientMsg> {
             },
         },
         ClientMsg::GetProps,
+        ClientMsg::GetPlaceGrid {
+            request_id: "grid-1".into(),
+            locale: "indoor_cafe".into(),
+        },
         ClientMsg::Content {
             request_id: "r3".into(),
             world_id: "w1".into(),

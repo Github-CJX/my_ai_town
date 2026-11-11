@@ -82,6 +82,12 @@ pub enum ServerMsg {
         #[serde(serialize_with = "crate::sorted")]
         preview: Option<crate::PropPreview>,
     },
+    /// 摆道具界面画格子用：地点没有可放置的范围（或没有这个地点）时为 null。
+    PlaceGrid {
+        request_id: String,
+        locale: String,
+        grid: Option<crate::PlaceGrid>,
+    },
     WeatherSaved {
         request_id: String,
         world_id: String,

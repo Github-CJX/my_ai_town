@@ -208,6 +208,7 @@ impl Runtime {
             | ClientMsg::GetChatHistory { .. }
             | ClientMsg::GetWorldSettings
             | ClientMsg::GetProps
+            | ClientMsg::GetPlaceGrid { .. }
             | ClientMsg::ValidateProp { .. }
             | ClientMsg::SaveProp { .. }
             | ClientMsg::SetSpeed { .. }
@@ -294,6 +295,11 @@ impl Runtime {
             SetSpeed { speed, .. } => self.set_speed(speed, clients),
             ResetWorld { .. } => self.reset(),
             GetProps => Outcome::reply(self.props_message()),
+            GetPlaceGrid { request_id, locale } => Outcome::reply(ServerMsg::PlaceGrid {
+                request_id,
+                locale: locale.clone(),
+                grid: self.world.placement_grid(&locale),
+            }),
             Content {
                 request_id,
                 command,
@@ -775,6 +781,7 @@ fn admin_action(msg: &ClientMsg) -> Option<&'static str> {
         | ClientMsg::GetWorldSettings
         | ClientMsg::GetPopulation
         | ClientMsg::GetProps
+        | ClientMsg::GetPlaceGrid { .. }
         | ClientMsg::GetModelConfig
         | ClientMsg::GetAgentLimits
         | ClientMsg::GetUsage
@@ -811,6 +818,7 @@ fn world_id_of(msg: &ClientMsg) -> Option<&str> {
         ClientMsg::GetChatHistory { .. }
         | ClientMsg::GetWorldSettings
         | ClientMsg::GetProps
+        | ClientMsg::GetPlaceGrid { .. }
         | ClientMsg::ValidateProp { .. }
         | ClientMsg::SaveProp { .. }
         | ClientMsg::SetSpeed { .. }
@@ -863,6 +871,7 @@ fn requires_ready(msg: &ClientMsg) -> bool {
         | ClientMsg::SetStrangers { .. }
         | ClientMsg::SetGameMode { .. }
         | ClientMsg::GetProps
+        | ClientMsg::GetPlaceGrid { .. }
         | ClientMsg::ValidateProp { .. }
         | ClientMsg::SaveProp { .. }
         | ClientMsg::GetModelConfig

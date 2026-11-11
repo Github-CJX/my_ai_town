@@ -113,15 +113,21 @@ fn obstacles<'a>(w: &World, s: &'a space::Space, locale: &str) -> Vec<&'a protoc
         .collect()
 }
 
-/// 各个能放东西的地点的格子，给摆道具界面画「哪里能放」；规则和真放时找空位是同一套。
-/// 没有空间地图或放置器时为空。
-pub(crate) fn placement_grids(w: &World) -> Vec<protocol::PlaceGrid> {
+/// 一个地点的格子，给摆道具界面画「哪里能放」；规则和真放时找空位是同一套。
+/// 不是能放东西的地点、没有空间地图或放置器时为空。
+pub(crate) fn grid_of(w: &World, locale: &str) -> Option<protocol::PlaceGrid> {
     let (Some(s), Some(placer)) = (&w.topo.navigation, &w.placer) else {
-        return Vec::new();
+        return None;
     };
-    s.floors
-        .iter()
-        .filter(|f| w.topo.is_dwell(&f.id))
-        .filter_map(|f| placer.grid(s, &f.id, &obstacles(w, s, &f.id), &stand_check(w, &f.id)))
-        .collect()
+    if !w.topo.is_dwell(locale) {
+        return None;
+    }
+    placer.grid(s, locale, &obstacles(w, s, locale), &stand_check(w, locale))
+}
+
+impl World {
+    /// 摆道具界面问一个地点里哪里能放。只回给问的页面，不进存档，也不改世界。
+    pub fn placement_grid(&self, locale: &str) -> Option<protocol::PlaceGrid> {
+        grid_of(self, locale)
+    }
 }

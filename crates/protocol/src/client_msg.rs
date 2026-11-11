@@ -116,6 +116,12 @@ pub enum ClientMsg {
         game_mode: Option<crate::GameModeChoice>,
     },
     GetProps,
+    /// 问一个能放东西的地点里哪里能放：回 `PlaceGrid`，只回给发问的页面。
+    /// 格子是玩家界面用来画「哪里能放」的，和真摆时的找空位是同一套算法。
+    GetPlaceGrid {
+        request_id: String,
+        locale: String,
+    },
     Content {
         request_id: String,
         world_id: String,
@@ -368,6 +374,7 @@ impl ClientMsg {
             | ArchiveResidentTemplate { request_id, .. }
             | GetNotebook { request_id, .. }
             | GetNotebookDetail { request_id, .. }
+            | GetPlaceGrid { request_id, .. }
             | SetAgentLimits { request_id, .. }
             | SetResidentBudget { request_id, .. }
             | RemoveResident { request_id, .. } => Some(request_id),

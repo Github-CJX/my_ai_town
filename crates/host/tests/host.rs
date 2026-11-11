@@ -8,6 +8,7 @@ mod commands;
 mod content;
 mod departure;
 mod persistence;
+mod placement;
 mod population;
 mod possession;
 mod resident_files;
