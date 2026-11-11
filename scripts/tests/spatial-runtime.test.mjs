@@ -7,6 +7,7 @@ import { createManager } from '../town-manager.mjs'
 import { worldQuery } from '../towns/hosts.mjs'
 import { APPEARANCE_SET } from '../mapgen/budget.mjs'
 import { position } from '../../frontend/town-shared/src/spatial.ts'
+import { client, signIn } from './support.mjs'
 
 test('residents at runtime prop stations remain visible and possessable after removal and reload', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'town-runtime-station-'))
@@ -201,16 +202,8 @@ test('one world commits dynamic book geometry and removals together across resta
 /** 起管理服务，用生成器建一座海边小镇并打开，设好世界观 */
 async function startTown(root, places, extra = {}) {
   const m = await createManager({ root, port: 0, mockLlm: true })
-  const api = async (route, body) => {
-    const r = await fetch(`http://127.0.0.1:${m.server.address().port}/api/towns${route}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: { 'content-type': 'application/json', 'x-town-client': '1' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const v = await r.json()
-    assert.ok(r.ok, JSON.stringify(v))
-    return v
-  }
+  const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+  const api = client(base, await signIn(base))
   const spec = {
     schema_version: 2,
     name: '空间持久化',

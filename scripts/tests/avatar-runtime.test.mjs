@@ -6,6 +6,7 @@ import path from 'node:path'
 import { createManager } from '../town-manager.mjs'
 import { APPEARANCE_SET } from '../mapgen/budget.mjs'
 import { walkingHarness } from './avatar-input-support.mjs'
+import { client, signIn } from './support.mjs'
 
 test('rotated view maps WASD and stick input to world directions while click routes stay in world space', () => {
   const sent = []
@@ -65,16 +66,8 @@ test('actual WASD input adapter drives a generated world and saves its stopped p
   const m = await createManager({ root, port: 0, mockLlm: true })
   let ws, input
   try {
-    const api = async (p, body) => {
-      const r = await fetch(`http://127.0.0.1:${m.server.address().port}/api/towns${p}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-town-client': '1' },
-        body: JSON.stringify(body),
-      })
-      const v = await r.json()
-      assert.ok(r.ok, JSON.stringify(v))
-      return v
-    }
+    const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+    const api = client(base, await signIn(base))
     const d = await api('/preview', {
       spec: {
         schema_version: 2,

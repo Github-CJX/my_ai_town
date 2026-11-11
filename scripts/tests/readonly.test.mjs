@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { root } from './support.mjs'
+import { root, client, signIn } from './support.mjs'
 test('built app creates and runs a map with a read-only resource tree and no preconfigured map files', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'town-readonly-')),
     bundle = path.join(temp, 'application'),
@@ -89,16 +89,8 @@ test('built app creates and runs a map with a read-only resource tree and no pre
     const base = 'http://127.0.0.1:' + match[1]
     assert.match(await (await fetch(base + '/')).text(), /AI小镇/)
     assert.equal((await fetch(base + '/game.html')).status, 200)
-    const api = async (route, body) => {
-      const r = await fetch(base + '/api/towns' + route, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-town-client': '1' },
-        body: JSON.stringify(body),
-      })
-      const value = await r.json()
-      assert.equal(r.status, 200, JSON.stringify(value))
-      return value
-    }
+    const towns = base + '/api/towns'
+    const api = client(towns, await signIn(towns))
     const draft = await api('/preview', {
       spec: {
         name: '只读发布包验证',

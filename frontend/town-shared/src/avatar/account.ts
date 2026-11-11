@@ -1,25 +1,28 @@
 // 这台电脑上的账号（管理服务的 /api/towns/users）：当前是谁、是不是管理员、
-// 这个账号在小镇里固定的那个化身。管理服务没有账号接口（老版本）、或者取不到时，
-// 一律按「本机单人」处理：管理员、不绑定，和以前的单人玩法一样。
-import { bindAvatar, readAccount, type HomeAccount } from '../townApi'
+// 这个账号在小镇里固定的那个化身。管理服务没有账号接口（老版本）时一律按「本机单人」
+// 处理：管理员、不绑定，和以前的单人玩法一样；有账号接口但还没选号时，谁也不是管理员。
+import { bindAvatar, readAccounts, type HomeAccount } from '../townApi'
 import type { RememberedAvatar } from './identity'
 
 export function createAvatarAccount() {
   let who: HomeAccount | null = null
+  /** 老版本管理服务没有账号接口：按本机单人玩 */
+  let legacy = false
   let asked = false
 
   return {
-    /** 问一次管理服务：这个页面用哪个档案。慢一点也没关系，问回来之前按单人处理 */
+    /** 问一次管理服务：这个页面用哪个档案。慢一点也没关系，问回来之前当「还没有账号」 */
     load() {
       if (asked) return
       asked = true
-      void readAccount().then((account) => {
-        who = account
+      void readAccounts().then((list) => {
+        legacy = list === null
+        who = list?.current ?? null
       })
     },
 
     /** 能不能附身村民：管理员可以（开镇、调世界用），普通账号只能玩自己的化身 */
-    admin: () => !who || who.role === 'admin',
+    admin: () => legacy || who?.role === 'admin',
 
     /** 这个账号认下的化身：进镇、回到上次的位置都用它。颜色不知道时沿用本页记着的 */
     self(color?: string): RememberedAvatar | null {

@@ -10,7 +10,8 @@ import { gameUrl, listMaps, openMap } from './catalog'
 import { initCreator } from './creator'
 import { PREFABS, type Prefab } from 'town-shared/prefabs/index'
 import { generatePrefab, isBuiltinTown, missingPrefabs, prefabTownId } from './prefabEntry'
-import { api } from './api'
+import { api, TownApiError } from './api'
+import { ACCOUNT_NEEDED } from 'town-shared/townApi'
 import { warmSelectedGame } from '../startupWarmup'
 import { createMusicController } from 'town-shared/audio/music'
 import { installPlatform, isCompact, isTouch, onBack, systemBars } from 'town-shared/platform'
@@ -62,7 +63,7 @@ const launcherMusic = createMusicController(
   { fixedTrackId: 'daylife-gathering' }
 )
 window.addEventListener('pagehide', () => launcherMusic.dispose(), { once: true })
-const homeSettings = installHomeSettings({ music: launcherMusic })
+const homeSettings = installHomeSettings({ music: launcherMusic, onAccount: () => void refresh() })
 /** 刚建好的小镇：预览出来后先看整张图 */
 let fitNext = ''
 let selected: MapEntry | undefined,
@@ -303,6 +304,14 @@ async function refresh(id?: string) {
     else if (initial ?? maps[0]) await select(initial ?? maps[0]!)
     return true
   } catch (error) {
+    // 这台电脑上还没有账号（第一次打开、或者档案被删了）：先让人在设定里建一个
+    if (error instanceof TownApiError && error.code === ACCOUNT_NEEDED) {
+      $('selection-status').textContent = '还没有账号'
+      $('pause-status').textContent =
+        '这台电脑上还没有账号：在「设定 · 账号」里给自己起个名字、设一个密码。'
+      homeSettings.openAccounts()
+      return false
+    }
     $('selection-status').textContent = '小镇列表加载失败'
     $('pause-status').textContent = errorText(error)
     $('pause-retry').hidden = false

@@ -1,11 +1,14 @@
 //! 这台电脑上的账号：默认管理员、管理员给朋友建号、每个账号一份自己的模型密钥。
 //!
-//! 账号就是本机的一份档案（Cookie `town_user=<id>`），没有口令：能在这台电脑上开页面的人，
-//! 本来就能读到同一个数据目录里的密钥文件，再加一道口令只是假门。远程/邀请形态另开一刀（手册 WP-03）。
+//! 账号就是本机的一份档案（Cookie `town_user=<id>`）。每个档案有一个 4–8 位数字密码，
+//! 第一次打开时由用户自己建管理员账号（名字 + 密码），管理员再给朋友建号。
+//! 密码挡住的是「同一个屏幕上顺手切过去」；它挡不住能读到数据目录的人——本机形态里
+//! 密钥文件本来就在那儿。真正的身份凭据留给远程/邀请形态（手册 WP-03）。
 use crate::error::ApiError;
 use crate::storage::{read_json, write_json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +18,9 @@ pub const USER_COOKIE: &str = "town_user";
 pub const MAX_USERS: usize = 8;
 /// 名字最多几个字
 pub const MAX_NAME: usize = 16;
+/// 密码存成「盐 + 迭代摘要」时迭代多少轮。与 scripts/towns/accounts.mjs 必须一致：
+/// 同一个 accounts.json 两边都要能读出对方的账号。
+const PIN_ROUNDS: u32 = 20_000;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -41,10 +47,13 @@ pub struct User {
     pub agent_limit: Option<u32>,
     /// 建号时间（毫秒）
     pub created_at: u64,
+    /// 密码的「盐:摘要」（见 seal_pin）：有这个字段才叫「锁着」，切换时要输密码
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<String>,
 }
 
 impl User {
-    /// 发给页面看的字段：不包含任何密钥
+    /// 发给页面看的字段：不包含任何密钥，也不包含密码摘要
     pub fn public(&self) -> Value {
         json!({
             "id": self.id,
@@ -53,6 +62,7 @@ impl User {
             "avatar_id": self.avatar_id,
             "avatar_name": self.avatar_name,
             "agent_limit": self.agent_limit,
+            "locked": self.pin.is_some(),
         })
     }
 }
@@ -74,6 +84,55 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn sha_hex(text: &str) -> String {
+    hex(&Sha256::digest(text.as_bytes()))
+}
+
+/// 盐 + 两万轮摘要。算法必须与 scripts/towns/accounts.mjs 的 digest 一字不差，
+/// 否则同一个 accounts.json 两边读出来的密码对不上。
+fn pin_digest(salt: &str, pin: &str) -> String {
+    let mut hash = sha_hex(&format!("{salt}:{pin}"));
+    for _ in 0..PIN_ROUNDS {
+        hash = sha_hex(&format!("{hash}{salt}"));
+    }
+    hash
+}
+
+fn seal_pin(pin: &str) -> String {
+    let salt = crate::token()[..16].to_owned();
+    format!("{salt}:{}", pin_digest(&salt, pin))
+}
+
+fn pin_matches(sealed: &str, pin: &str) -> bool {
+    match sealed.split_once(':') {
+        Some((salt, hash)) => pin_digest(salt, pin) == hash,
+        None => false,
+    }
+}
+
+fn check_name(name: &str) -> Result<String, ApiError> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_NAME {
+        return Err(ApiError::bad(format!("名字须为 1–{MAX_NAME} 个字")));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(ApiError::bad("名字里有不能用的字符"));
+    }
+    Ok(name.to_owned())
+}
+
+fn check_pin(pin: &str) -> Result<(), ApiError> {
+    let digits = pin.chars().count();
+    if !(4..=8).contains(&digits) || !pin.chars().all(|c| c.is_ascii_digit()) {
+        return Err(ApiError::bad("密码是 4–8 位数字"));
+    }
+    Ok(())
 }
 
 /// `accounts.json` 读进内存；第一次启动时建好默认管理员。
@@ -118,17 +177,20 @@ impl Accounts {
         self.users.iter().find(|u| u.id == id)
     }
 
-    /// 默认管理员：没带 Cookie（或 Cookie 里的账号已经没了）时的身份，本机第一次打开就是它。
+    /// 默认管理员：账号表里那个管理员账号（永远是第一个）。
     pub fn admin(&self) -> Option<User> {
         self.users.iter().find(|u| u.role == Role::Admin).cloned()
     }
 
-    pub fn current(&self, cookie: Option<&str>) -> User {
-        cookie
-            .and_then(|id| self.find(id))
-            .cloned()
-            .or_else(|| self.admin())
-            .expect("账号表里总有管理员")
+    /// 还没建管理员（第一次启动）：页面要先把「创建你的账号」摆出来。
+    pub fn needs_setup(&self) -> bool {
+        self.admin().is_some_and(|u| u.pin.is_none())
+    }
+
+    /// 这次请求是谁：只认带过来的 Cookie。还没建号、还没选号时谁也不算——
+    /// 页面得先建一个账号，别的接口也要等那一步。
+    pub fn current(&self, cookie: Option<&str>) -> Option<User> {
+        cookie.and_then(|id| self.find(id)).cloned()
     }
 
     fn make(&self, name: &str, role: Role, agent_limit: Option<u32>) -> User {
@@ -140,28 +202,89 @@ impl Accounts {
             avatar_name: None,
             agent_limit,
             created_at: now(),
+            pin: None,
         }
     }
 
-    /// 管理员给朋友建号。名字是进镇后看到的名字，重名会分不清，所以不许重名。
-    pub fn create(&mut self, name: &str) -> Result<User, ApiError> {
-        let name = name.trim();
-        if name.is_empty() || name.chars().count() > MAX_NAME {
-            return Err(ApiError::bad(format!("名字须为 1–{MAX_NAME} 个字")));
+    /// 第一次打开时由用户自己建管理员账号：名字 + 密码。已经建过就拒绝。
+    pub fn setup(&mut self, name: &str, pin: &str) -> Result<User, ApiError> {
+        if !self.needs_setup() {
+            return Err(ApiError::bad("管理员账号已经建好了"));
         }
-        if name.chars().any(char::is_control) {
-            return Err(ApiError::bad("名字里有不能用的字符"));
-        }
+        let name = check_name(name)?;
+        check_pin(pin)?;
+        let admin = self
+            .users
+            .iter_mut()
+            .find(|u| u.role == Role::Admin)
+            .expect("账号表里总有管理员");
+        admin.name = name;
+        admin.pin = Some(seal_pin(pin));
+        let admin = admin.clone();
+        self.save()?;
+        Ok(admin)
+    }
+
+    /// 管理员给朋友建号：名字 + 一个初始密码（朋友以后可以自己换）。
+    /// 名字是进镇后看到的名字，重名会分不清，所以不许重名。
+    pub fn create(&mut self, name: &str, pin: &str) -> Result<User, ApiError> {
+        let name = check_name(name)?;
+        check_pin(pin)?;
         if self.users.iter().any(|u| u.name == name) {
             return Err(ApiError::bad("已经有同名的账号"));
         }
         if self.users.len() >= MAX_USERS {
             return Err(ApiError::bad(format!("这台电脑最多 {MAX_USERS} 个账号")));
         }
-        let user = self.make(name, Role::Member, Some(1));
+        let mut user = self.make(&name, Role::Member, Some(1));
+        user.pin = Some(seal_pin(pin));
         self.users.push(user.clone());
         self.save()?;
         Ok(user)
+    }
+
+    /// 换密码：原来的密码对得上才换；既有的密码不能靠「不知道旧密码」改掉。
+    pub fn set_pin(
+        &mut self,
+        id: &str,
+        current: Option<&str>,
+        pin: Option<&str>,
+    ) -> Result<User, ApiError> {
+        let index = self
+            .users
+            .iter()
+            .position(|u| u.id == id)
+            .ok_or_else(|| ApiError::bad("没有这个账号"))?;
+        if let Some(sealed) = self.users[index].pin.clone() {
+            match current {
+                Some(current) if pin_matches(&sealed, current) => {}
+                _ => return Err(ApiError::new(403, "原来的密码不对")),
+            }
+        }
+        let sealed = match pin {
+            Some(pin) => {
+                check_pin(pin)?;
+                Some(seal_pin(pin))
+            }
+            None => return Err(ApiError::bad("新密码是 4–8 位数字")),
+        };
+        self.users[index].pin = sealed;
+        let user = self.users[index].clone();
+        self.save()?;
+        Ok(user)
+    }
+
+    /// 切到某个账号：锁着的账号要密码。
+    pub fn select(&self, id: &str, pin: Option<&str>) -> Result<User, ApiError> {
+        let user = self.find(id).ok_or_else(|| ApiError::bad("没有这个账号"))?;
+        if let Some(sealed) = &user.pin {
+            match pin {
+                Some(pin) if pin_matches(sealed, pin) => {}
+                Some(_) => return Err(ApiError::new(403, "密码不对")),
+                None => return Err(ApiError::new(403, "这个账号要密码")),
+            }
+        }
+        Ok(user.clone())
     }
 
     /// 记下这个账号在小镇里的固定化身（页面上第一次进化身、改名之后各记一次）。
@@ -282,6 +405,44 @@ mod tests {
                 .avatar_id,
             None
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 第一次打开自己建管理员：建完要密码，密码不对切不过去，档案里也不存明文
+    #[test]
+    fn the_first_run_creates_the_admin_with_a_pin() {
+        let root = temp_root();
+        let mut accounts = Accounts::load(&root).expect("建账号表");
+        assert!(accounts.needs_setup());
+        for pin in ["123", "123456789", "abcd", "12 34"] {
+            assert!(accounts.setup("阿岚", pin).is_err(), "{pin:?} 不该收");
+        }
+        let admin = accounts.setup("阿岚", "2468").expect("建管理员");
+        assert_eq!(admin.name, "阿岚");
+        assert!(admin.public()["locked"].as_bool().unwrap());
+        assert!(!accounts.needs_setup());
+        assert!(accounts.setup("别人", "1357").is_err(), "建过就不许再建");
+        // 建完之后不带 Cookie 就不算任何人：页面得先选账号
+        assert!(accounts.current(None).is_none());
+        assert!(accounts.select(&admin.id, None).is_err());
+        assert!(accounts.select(&admin.id, Some("0000")).is_err());
+        assert!(accounts.select(&admin.id, Some("2468")).is_ok());
+        // 朋友的号也要密码，改名换密码要验旧密码
+        assert!(accounts.create("阿树", "12").is_err());
+        let friend = accounts.create("阿树", "1357").expect("建号");
+        assert!(accounts.select(&friend.id, Some("2468")).is_err());
+        assert!(accounts
+            .set_pin(&friend.id, Some("2468"), Some("9876"))
+            .is_err());
+        assert!(accounts
+            .set_pin(&friend.id, Some("1357"), Some("9876"))
+            .is_ok());
+        assert!(accounts.select(&friend.id, Some("9876")).is_ok());
+        // 重开管理服务：密码还在，而且存的不是明文
+        let reloaded = Accounts::load(&root).expect("重读账号表");
+        assert!(reloaded.select(&admin.id, Some("2468")).is_ok());
+        let saved = std::fs::read_to_string(root.join("accounts.json")).expect("读档案");
+        assert!(!saved.contains("2468"), "档案里不该有明文密码");
         std::fs::remove_dir_all(&root).ok();
     }
 }

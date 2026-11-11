@@ -30,3 +30,29 @@ export function rejected(document) {
   assert.notEqual(r.status, 0, r.stdout)
   return r.stdout
 }
+/** 第一次打开要先自己建管理员：测试里统一建一个，返回账号 Cookie 段 */
+export async function signIn(base) {
+  const r = await fetch(`${base}/users/setup`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-town-client': '1' },
+    body: JSON.stringify({ name: '测试管理员', pin: '1234' }),
+  })
+  if (!r.ok) throw Error((await r.json()).error)
+  return r.headers.get('set-cookie').split(';')[0]
+}
+/** 以某个账号的身份请求管理服务：base 形如 http://127.0.0.1:PORT/api/towns */
+export function client(base, cookie) {
+  return async (route, body) => {
+    const r = await fetch(base + route, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: {
+        cookie,
+        ...(body === undefined ? {} : { 'content-type': 'application/json', 'x-town-client': '1' }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    const data = await r.json()
+    if (!r.ok) throw Error(data.error)
+    return data
+  }
+}

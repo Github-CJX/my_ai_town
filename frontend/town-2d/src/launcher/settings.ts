@@ -37,21 +37,23 @@ import { BUILTIN, PRESETS } from 'town-shared/providers'
 import { settingRow } from 'town-shared/settings/controls'
 import { createDisplayPage } from 'town-shared/settings/display'
 import { createSoundPage } from 'town-shared/settings/sound'
+import { type HomeAccount, type HomeAccounts } from 'town-shared/townApi'
 import { api } from './api'
 import './settings.css'
 
 const LATER_KEY = 'town:model-prompt-later'
 
-/** 这台电脑上的账号（管理服务的 /api/towns/users，见 scripts/towns/accounts.mjs） */
-type HomeAccount = {
-  id: string
-  name: string
-  role: 'admin' | 'member'
-  /** 这个账号在小镇里固定的那个化身：进化身后由页面记回来 */
-  avatar_name: string | null
-  agent_limit: number | null
+/** 密码输入框：4–8 位数字，屏幕键盘直接出数字 */
+function pinInput(label: string): HTMLInputElement {
+  const input = el('input')
+  input.type = 'password'
+  input.inputMode = 'numeric'
+  input.autocomplete = 'off'
+  input.maxLength = 8
+  input.placeholder = label
+  input.setAttribute('aria-label', label)
+  return input
 }
-type HomeAccounts = { current: HomeAccount; users: HomeAccount[]; max: number; admin: boolean }
 
 function later() {
   try {
@@ -86,7 +88,11 @@ function homeTransport(): ModelTransport & { load(): Promise<ModelConfig> } {
   }
 }
 
-export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(): void } }) {
+export function installHomeSettings(deps: {
+  music: { enabled(): boolean; toggle(): void }
+  /** 进了某个账号之后：首页那个还没账号的提示要收起来，小镇列表也要重新拉 */
+  onAccount?: () => void
+}) {
   const transport = homeTransport()
   const entry = button('', () => open(), 'launcher-settings')
   entry.append(gameIcon('settings', true), el('span', '设定'))
@@ -184,20 +190,50 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
   const toolRows = el('div', '', 'set-rows')
   const tool = el('section', '', 'spage')
   tool.append(el('h2', '建镇用的模型'), toolRows)
-  // 账号：这台电脑上的档案。每个账号一份自己的模型密钥，朋友在这台电脑上切过去填自己的
+  // 账号：这台电脑上的档案。每个账号一份自己的模型密钥、一个固定化身，各带一个数字密码
   const accounts = el('section', '', 'spage')
   accounts.hidden = true
   const accountRows = el('div', '', 'set-rows')
+  // 第一次打开：先给自己建管理员账号（名字 + 密码）
+  const setupName = el('input')
+  setupName.type = 'text'
+  setupName.placeholder = '你的名字'
+  setupName.maxLength = 16
+  setupName.setAttribute('aria-label', '你的名字')
+  const setupPin = pinInput('设一个 4–8 位数字密码')
+  const setupAgain = pinInput('再输一遍')
+  const setupRow = el('div', '', 'account-create')
+  setupRow.hidden = true
+  setupRow.append(
+    setupName,
+    setupPin,
+    setupAgain,
+    button('创建', () => void createAdmin(), 'account-add')
+  )
+  // 管理员给朋友建号：名字 + 一个初始密码
   const accountName = el('input')
   accountName.type = 'text'
   accountName.placeholder = '朋友的名字'
   accountName.maxLength = 16
   accountName.setAttribute('aria-label', '新账号的名字')
+  const accountPin = pinInput('给朋友的初始密码')
   const accountCreate = el('div', '', 'account-create')
   accountCreate.hidden = true
   accountCreate.append(
     accountName,
+    accountPin,
     button('建账号', () => void createAccount(), 'account-add')
+  )
+  // 切到锁着的账号：输一次密码
+  const switchWho = el('span', '', 'account-switch-name')
+  const switchPin = pinInput('这个账号的密码')
+  const switchRow = el('div', '', 'account-create')
+  switchRow.hidden = true
+  switchRow.append(
+    switchWho,
+    switchPin,
+    button('进入', () => void enterPending(), 'account-add'),
+    button('取消', () => hidePending(), 'account-cancel')
   )
   const accountNote = el('p', '', 'page-status')
   accountNote.setAttribute('role', 'status')
@@ -208,8 +244,10 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
       '这台电脑上的档案：每个账号有自己的化身、自己创建的一位公共村民，模型密钥也各存各的。',
       'hint'
     ),
+    setupRow,
     accountRows,
     accountCreate,
+    switchRow,
     accountNote
   )
   const sound = createSoundPage(false, { music: deps.music, effects: effectsPreference })
@@ -245,6 +283,10 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
 
   // ---------- 账号 ----------
   let who: HomeAccounts | null = null
+  /** 已经进了某个账号：没有账号时先别催模型，那一步排在后面 */
+  let accountReady = true
+  /** 正在等密码的那个账号：点「切换」时他锁着 */
+  let pending: HomeAccount | null = null
 
   async function renderAccounts() {
     try {
@@ -255,39 +297,104 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
       return
     }
     accounts.hidden = false
+    const setup = who.needs_setup
+    accountReady = !setup && !!who.current
+    setupRow.hidden = !setup
+    accountRows.hidden = setup
+    // 第一次打开还没有管理员：模型、密钥都没有落脚处，先只让人建号
+    for (const page of [models, tool]) page.hidden = setup || !who.current
     accountRows.replaceChildren(
       ...who.users.map((user) => {
-        const current = user.id === who!.current.id
+        const current = user.id === who!.current?.id
         const label = user.role === 'admin' ? `${user.name} · 管理员` : user.name
         // 一个账号一个固定化身：页面记回来之后这里就写着他进镇用的那个名字
         const avatar = user.avatar_name ? `化身：${user.avatar_name}` : ''
+        const locked = user.locked ? '要密码' : ''
         const sub = current
           ? avatar
             ? `正在用这个档案 · ${avatar}`
             : '正在用这个档案 · 还没进化身'
-          : avatar || (user.role === 'admin' ? '可以给这台电脑加账号' : '还没进化身')
+          : [avatar, locked].filter(Boolean).join(' · ') ||
+            (user.role === 'admin' ? '可以给这台电脑加账号' : '还没进化身')
         return settingRow(
           label,
           sub,
-          current ? chip('当前') : button('切换', () => void switchAccount(user.id))
+          current ? chip('当前') : button('切换', () => askSwitch(user))
         )
       })
     )
-    accountCreate.hidden = !who.admin || who.users.length >= who.max
-    accountNote.textContent = who.admin
-      ? `最多 ${who.max} 个账号。朋友切到自己的档案后，进镇第一次给自己起个名字，之后就一直是他；模型密钥也各存各的。`
-      : '管理员可以给这台电脑加账号。'
+    accountCreate.hidden = setup || !who.admin || who.users.length >= who.max
+    if (setup) {
+      accountNote.textContent =
+        '第一次用这台电脑：给自己起个名字，并设一个密码。之后切到别的账号、朋友切到你这边，都要输一次。'
+    } else if (!who.current) {
+      accountNote.textContent = '还没进哪个档案：点一行的「切换」，进到你自己的档案。'
+    } else {
+      accountNote.textContent = who.admin
+        ? `最多 ${who.max} 个账号。朋友切到自己的档案后，进镇第一次给自己起个名字，之后就一直是他；模型密钥也各存各的。`
+        : '管理员可以给这台电脑加账号。'
+    }
+    // 有没有账号决定首页还催不催模型
+    render()
   }
 
-  async function switchAccount(id: string) {
+  /** 点「切换」：锁着的先要密码，没锁的直接进 */
+  function askSwitch(user: HomeAccount) {
+    if (!user.locked) {
+      void switchAccount(user.id)
+      return
+    }
+    pending = user
+    switchWho.textContent = `切到「${user.name}」`
+    switchPin.value = ''
+    switchRow.hidden = false
+    switchPin.focus()
+  }
+
+  function hidePending() {
+    pending = null
+    switchRow.hidden = true
+    switchPin.value = ''
+  }
+
+  function enterPending() {
+    if (!pending) return
+    void switchAccount(pending.id, switchPin.value)
+  }
+
+  async function switchAccount(id: string, pin?: string) {
     try {
-      await api('/users/select', { id })
+      await api('/users/select', { id, pin })
+      hidePending()
       await renderAccounts()
       // 换了档案，模型服务、密钥提示都跟着换
       await transport.load()
       renderSettings()
       render()
+      deps.onAccount?.()
       accountNote.textContent = '已切换，模型密钥也跟着换了档案。'
+    } catch (error) {
+      accountNote.textContent = errorText(error)
+    }
+  }
+
+  /** 第一次打开：给自己建管理员账号 */
+  async function createAdmin() {
+    if (setupPin.value !== setupAgain.value) {
+      accountNote.textContent = '两遍密码不一样'
+      return
+    }
+    try {
+      await api('/users/setup', { name: setupName.value.trim(), pin: setupPin.value })
+      setupName.value = ''
+      setupPin.value = ''
+      setupAgain.value = ''
+      await renderAccounts()
+      await transport.load()
+      renderSettings()
+      render()
+      deps.onAccount?.()
+      accountNote.textContent = '账号建好了。朋友要用这台电脑，在下面给他建一个。'
     } catch (error) {
       accountNote.textContent = errorText(error)
     }
@@ -296,10 +403,11 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
   async function createAccount() {
     const name = accountName.value.trim()
     try {
-      await api('/users', { name })
+      await api('/users', { name, pin: accountPin.value })
       accountName.value = ''
+      accountPin.value = ''
       await renderAccounts()
-      accountNote.textContent = `已建「${name}」。让朋友在这台电脑上切过去，填自己的模型密钥。`
+      accountNote.textContent = `已建「${name}」。让朋友在这台电脑上切过去，输一次密码，再填自己的模型密钥。`
     } catch (error) {
       accountNote.textContent = errorText(error)
     }
@@ -470,8 +578,9 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
     const copy = promptCopy()
     // 下载中、出错时不收起：那是正在发生的事
     const folded = copy.idle && later()
-    prompt.hidden = !missing || folded
-    line.hidden = !missing || !folded
+    // 还没有账号时先别催模型：账号那一步排在前面
+    prompt.hidden = !missing || folded || !accountReady
+    line.hidden = !missing || !folded || !accountReady
     if (!prompt.hidden) {
       promptTitle.textContent = copy.title
       promptText.textContent = copy.text
@@ -498,8 +607,13 @@ export function installHomeSettings(deps: { music: { enabled(): boolean; toggle(
   // 打开游戏时：接着下被打断的下载，开着自动更新就看有没有新版本
   void autoUpdateBuiltin()
 
-  /** 建镇页没连模型时直接弄这个连接弹层，连好后首页的提示也跟着收起 */
-  return { connect }
+  /** 还没有账号（第一次打开、或者别的接口说「先选一个账号」）：直接送到设定里的账号那一节 */
+  function openAccounts() {
+    open()
+    requestAnimationFrame(() => accounts.scrollIntoView({ block: 'start' }))
+  }
+
+  return { connect, openAccounts }
 }
 
 function chip(text: string) {

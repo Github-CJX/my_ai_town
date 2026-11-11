@@ -1,7 +1,8 @@
 export class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code = undefined) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 // 非 JSON 响应（页面、脚本、模型文件）。
@@ -15,7 +16,8 @@ export class Raw {
 // 错误到状态码：标注了状态的照用；文件不存在是 404；其他系统错误是 500，且不把路径发给客户端；
 // 剩下的都是输入或当前状态不允许，400，带上生成错误的 code 和 details。
 export function describe(e) {
-  if (e instanceof HttpError) return [e.status, { error: e.message }]
+  if (e instanceof HttpError)
+    return [e.status, { error: e.message, ...(e.code ? { code: e.code } : {}) }]
   if (e.code === 'ENOENT') return [404, { error: '请求的小镇或文件不存在' }]
   if (typeof e.errno === 'number' || e.syscall)
     return [500, { error: '服务内部错误', ...(e.code ? { code: e.code } : {}) }]

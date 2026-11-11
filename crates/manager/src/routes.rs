@@ -87,12 +87,20 @@ fn body(req: &Request) -> Result<Value, ApiError> {
     serde_json::from_slice(&req.body).map_err(|_| ApiError::bad("请求内容不是有效的 JSON"))
 }
 
-/// 这次请求是谁：带着 `town_user` Cookie 就是这个账号，没有（或账号已经没了）就是默认管理员。
-fn current(app: &App, req: &Request) -> User {
+/// 这次请求是谁：带着 `town_user` Cookie 就是这个账号；还没建管理员时算那个没设密码的管理员；
+/// 其余情况谁也不算（页面要先建号/选号）。
+fn current(app: &App, req: &Request) -> Option<User> {
     app.accounts
         .lock()
         .unwrap()
         .current(req.cookie(USER_COOKIE))
+}
+
+/// 要账号的接口：没建号/没选号时先让页面去设定里建一个。
+fn account_needed() -> ApiError {
+    let mut error = ApiError::new(401, "先在首页「设定」里创建或选择一个账号");
+    error.code = Some("account".into());
+    error
 }
 
 /// 这个账号的应用配置：管理员用小镇的公共配置，普通账号各用自己目录下那份（自己填的密钥）。
@@ -104,7 +112,7 @@ fn account_cookie(id: &str) -> String {
     format!("{USER_COOKIE}={id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000")
 }
 
-/// 账号接口：默认管理员、管理员给朋友建号、切换前端档案。
+/// 账号接口：第一次建管理员、管理员给朋友建号、切换档案、改密码。
 fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiError> {
     let me = current(app, req);
     match (get, rest) {
@@ -113,19 +121,37 @@ fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Respo
             Ok(Response::json(
                 200,
                 &json!({
-                    "current": me.public(),
+                    "current": me.as_ref().map(|user| user.public()),
                     "users": accounts.list().iter().map(User::public).collect::<Vec<_>>(),
                     "max": accounts::MAX_USERS,
-                    "admin": me.role == Role::Admin,
+                    "admin": me.as_ref().is_some_and(|user| user.role == Role::Admin),
+                    "needs_setup": accounts.needs_setup(),
                 }),
             ))
         }
+        (false, "/users/setup") => {
+            let request = body(req)?;
+            let user = app.accounts.lock().unwrap().setup(
+                request["name"].as_str().unwrap_or_default(),
+                request["pin"].as_str().unwrap_or_default(),
+            )?;
+            // 建完就是这个人：直接换到他的档案
+            Ok(Response::json_cookie(
+                200,
+                &json!({ "ok": true, "current": user.public() }),
+                account_cookie(&user.id),
+            ))
+        }
         (false, "/users") => {
+            let me = me.ok_or_else(account_needed)?;
             if me.role != Role::Admin {
                 return Err(ApiError::new(403, "只有管理员可以创建账号"));
             }
-            let name = body(req)?["name"].as_str().unwrap_or_default().to_owned();
-            let user = app.accounts.lock().unwrap().create(&name)?;
+            let request = body(req)?;
+            let user = app.accounts.lock().unwrap().create(
+                request["name"].as_str().unwrap_or_default(),
+                request["pin"].as_str().unwrap_or_default(),
+            )?;
             // 建完仍留在管理员这边：朋友在这台电脑上自己选进他的档案。
             Ok(Response::json(
                 200,
@@ -134,24 +160,30 @@ fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Respo
         }
         (false, "/users/select") => {
             let request = body(req)?;
-            let id = request["id"].as_str().map(str::to_owned);
-            let user = match id {
-                Some(id) => app
-                    .accounts
-                    .lock()
-                    .unwrap()
-                    .find(&id)
-                    .cloned()
-                    .ok_or_else(|| ApiError::bad("没有这个账号"))?,
-                None => current(app, req),
-            };
+            let id = request["id"].as_str().unwrap_or_default();
+            let pin = request["pin"].as_str();
+            let user = app.accounts.lock().unwrap().select(id, pin)?;
             Ok(Response::json_cookie(
                 200,
                 &json!({ "ok": true, "current": user.public() }),
                 account_cookie(&user.id),
             ))
         }
+        (false, "/users/pin") => {
+            let me = me.ok_or_else(account_needed)?;
+            let request = body(req)?;
+            let user = app.accounts.lock().unwrap().set_pin(
+                &me.id,
+                request["current"].as_str(),
+                request["pin"].as_str(),
+            )?;
+            Ok(Response::json(
+                200,
+                &json!({ "ok": true, "current": user.public() }),
+            ))
+        }
         (false, "/users/avatar") => {
+            let me = me.ok_or_else(account_needed)?;
             // 页面记下自己认下的那个化身（「一个账号一个固定化身」）：传 null 就解开
             let request = body(req)?;
             let avatar = match request["id"].as_str() {
@@ -177,16 +209,19 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
         return accounts_api(app, req, rest, get);
     }
     let me = current(app, req);
+    // 健康检查先答：第一次打开、还没建号时页面也靠它确认服务在
+    if get && rest == "/health" {
+        return ok(json!({
+            "kind": "town-manager",
+            "version": 1,
+            "pid": std::process::id(),
+            "source": app.storage.app.to_string_lossy(),
+            "user": me.map(|user| user.public()),
+        }));
+    }
+    // 别的接口都要按账号走（各自的密钥、各自的化身），没账号就问页面要
+    let me = me.ok_or_else(account_needed)?;
     match (get, rest) {
-        (true, "/health") => {
-            return ok(json!({
-                "kind": "town-manager",
-                "version": 1,
-                "pid": std::process::id(),
-                "source": app.storage.app.to_string_lossy(),
-                "user": me.public(),
-            }))
-        }
         (true, "") => {
             let towns: Vec<Value> = app
                 .storage

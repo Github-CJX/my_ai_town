@@ -6,7 +6,7 @@ import path from 'node:path'
 import { createManager } from '../town-manager.mjs'
 import { worldQuery } from '../towns/hosts.mjs'
 import { seal } from '../mapgen/document.mjs'
-import { root as source } from './support.mjs'
+import { client, root as source, signIn } from './support.mjs'
 const spec = {
   name: '隔离地图',
   seed: 51,
@@ -24,9 +24,9 @@ test('always-on manager opens a world without a browser page', async () => {
   let m
   try {
     m = await createManager({ root, port: 0, mockLlm: true, alwaysOn: true })
-    const { towns } = await (
-      await fetch(`http://127.0.0.1:${m.server.address().port}/api/towns`)
-    ).json()
+    const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+    const api = client(base, await signIn(base))
+    const { towns } = await api('')
     assert.equal(towns.filter((town) => town.running).length, 1)
   } finally {
     await m?.stop()
@@ -53,17 +53,9 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
     // 这一段同时开两个小镇，验证两个世界互相隔离；产品里同时只运行一个
     m = await createManager({ root, port: 0, mockLlm: true, maxRunning: 2 })
     let base = `http://127.0.0.1:${m.server.address().port}/api/towns`
-    const api = async (route, body) => {
-      const r = await fetch(base + route, {
-        method: body === undefined ? 'GET' : 'POST',
-        headers:
-          body === undefined ? {} : { 'content-type': 'application/json', 'x-town-client': '1' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      })
-      const data = await r.json()
-      if (!r.ok) throw Error(data.error)
-      return data
-    }
+    // 账号存在数据目录里：重启之后还是这个账号，换的只是端口
+    const cookie = await signIn(base)
+    let api = client(base, cookie)
     assert.equal((await api('')).towns.length, 1)
     assert.deepEqual((await api('')).towns[0].views, ['2d'])
     for (const [route, body] of [
@@ -227,6 +219,7 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
       assert.equal(child.exitCode, 0, '关闭小镇必须让 host 保存后正常退出')
     m = await createManager({ root, port: 0, mockLlm: true })
     base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+    api = client(base, cookie)
     assert.equal((await api('')).towns.length, 2)
     let restored = await api(`/${a.id}/open`, {})
     assert.equal(restored.worldId, a.worldId)
@@ -289,6 +282,7 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
     await m.stop()
     m = await createManager({ root, port: 0, mockLlm: true })
     base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+    api = client(base, cookie)
     assert.equal((await api('')).towns.length, 1)
     assert.equal(await fs.readFile(path.join(retired, 'map.json'), 'utf8'), oldMap)
     assert.equal(await fs.readFile(path.join(retired, 'world.json'), 'utf8'), oldSave)
@@ -308,8 +302,9 @@ test('the built-in town shows the shipped name while its stored map stays untouc
     await fs.writeFile(path.join(dir, 'map.json'), stored)
     await fs.writeFile(path.join(dir, 'receipt.json'), '{"origin":"builtin"}')
     m = await createManager({ root, port: 0, mockLlm: true })
-    const origin = `http://127.0.0.1:${m.server.address().port}`
-    const { towns } = await (await fetch(origin + '/api/towns')).json()
+    const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
+    const api = client(base, await signIn(base))
+    const { towns } = await api('')
     assert.deepEqual([towns[0].name, towns[0].description], [shipped.name, shipped.description])
     // 地图摘要是存档的身份，更新显示名不能改动已有的副本。
     assert.equal(await fs.readFile(path.join(dir, 'map.json'), 'utf8'), stored)
@@ -325,17 +320,7 @@ test('only one town runs at a time: entering another town closes the open one, t
   try {
     m = await createManager({ root, port: 0, mockLlm: true })
     const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
-    const api = async (route, body) => {
-      const r = await fetch(base + route, {
-        method: body === undefined ? 'GET' : 'POST',
-        headers:
-          body === undefined ? {} : { 'content-type': 'application/json', 'x-town-client': '1' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      })
-      const data = await r.json()
-      if (!r.ok) throw Error(data.error)
-      return data
-    }
+    const api = client(base, await signIn(base))
     const settings = async (town) =>
       (
         await worldQuery(
@@ -397,17 +382,7 @@ test('home settings save a key only into the data root config, read back only it
   try {
     m = await createManager({ root, port: 0, mockLlm: true })
     const base = `http://127.0.0.1:${m.server.address().port}/api/towns`
-    const api = async (route, body) => {
-      const r = await fetch(base + route, {
-        method: body === undefined ? 'GET' : 'POST',
-        headers:
-          body === undefined ? {} : { 'content-type': 'application/json', 'x-town-client': '1' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      })
-      const data = await r.json()
-      if (!r.ok) throw Error(data.error)
-      return data
-    }
+    const api = client(base, await signIn(base))
     const key = 'sk-home-settings-0123456789'
     const kept = (await api('/models')).providers.map(({ id, name, base_url }) => ({
       id,
@@ -459,13 +434,39 @@ test('each account keeps its own model keys: the admin creates friends, a friend
       if (!r.ok) throw Error(data.error)
       return { data, setCookie: r.headers.get('set-cookie') }
     }
-    const me = (await api('/users')).data
-    assert.equal(me.current.role, 'admin')
+    // 第一次打开：还没有账号，谁也不算；页面先让人自己建一个管理员
+    const empty = (await api('/users')).data
+    assert.equal(empty.needs_setup, true)
+    assert.equal(empty.current, null)
+    // 没账号时别的接口不让走（页面据此把「建账号」摆出来）
+    await assert.rejects(api('/models'), /创建或选择一个账号/)
+    // 密码是 4–8 位数字：太短、太长、带别的字符都不收
+    for (const pin of ['123', '123456789', 'abcd']) {
+      await assert.rejects(api('/users/setup', { name: '阿岚', pin }), /4–8 位数字/)
+    }
+    const created = await api('/users/setup', { name: '阿岚', pin: '2468' })
+    assert.equal(created.data.current.role, 'admin')
+    const admin = created.setCookie.split(';')[0]
+    const me = (await api('/users', undefined, admin)).data
+    assert.equal(me.current.name, '阿岚')
+    assert.equal(me.current.locked, true, '账号有密码')
     assert.equal(me.admin, true)
+    assert.equal(me.needs_setup, false)
     assert.equal(me.current.agent_limit, null, '管理员建 agent 的名额不设上限')
     assert.equal(me.users.length, 1)
-    // 管理员建一个朋友的账号：建完自己还留在管理员这边，不跟着换过去
-    const made = await api('/users', { name: '朋友' })
+    await assert.rejects(api('/users/setup', { name: '再来一个', pin: '1111' }), /已经建好/)
+    // 建完之后不带 Cookie 就不算任何人：要选账号，而且要密码
+    assert.equal((await api('/users')).data.current, null)
+    const adminId0 = me.current.id
+    await assert.rejects(api('/users/select', { id: adminId0 }), /要密码/)
+    await assert.rejects(api('/users/select', { id: adminId0, pin: '0000' }), /密码不对/)
+    assert.equal(
+      (await api('/users/select', { id: adminId0, pin: '2468' })).data.current.name,
+      '阿岚'
+    )
+    // 管理员建一个朋友的账号（朋友也有自己的密码）：建完自己还留在管理员这边，不跟着换过去
+    await assert.rejects(api('/users', { name: '朋友', pin: '12' }, admin), /4–8 位数字/)
+    const made = await api('/users', { name: '朋友', pin: '1357' }, admin)
     assert.equal(made.data.user.role, 'member')
     assert.equal(made.data.user.agent_limit, 1, '普通账号只建一个公共 agent')
     assert.equal(made.setCookie, null)
@@ -474,20 +475,26 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     assert.equal(seen.current.name, '朋友')
     assert.equal(seen.admin, false)
     assert.equal(seen.users.length, 2)
-    await assert.rejects(api('/users', { name: '第三个' }, friend), /只有管理员/)
+    await assert.rejects(api('/users', { name: '第三个', pin: '1111' }, friend), /只有管理员/)
     // 朋友用自己的密钥文件：一开始是空的，管理员存进去的密钥不会漏给他
     const key = 'sk-friend-private-0123456789'
-    const kept = (await api('/models')).data.providers.map(({ id, name, base_url }) => ({
-      id,
-      name,
-      base_url,
-    }))
+    const kept = (await api('/models', undefined, admin)).data.providers.map(
+      ({ id, name, base_url }) => ({
+        id,
+        name,
+        base_url,
+      })
+    )
     const added = { id: 'friend-test', name: '朋友测试', base_url: 'http://127.0.0.1:9/v1' }
-    await api('/models', {
-      active: { provider: added.id, model: 'm' },
-      providers: [...kept, added],
-      keys: [{ provider: added.id, api_key: key }],
-    })
+    await api(
+      '/models',
+      {
+        active: { provider: added.id, model: 'm' },
+        providers: [...kept, added],
+        keys: [{ provider: added.id, api_key: key }],
+      },
+      admin
+    )
     const friendKeys = path.join(root, 'users', made.data.user.id, 'config/credentials.json')
     const before = await fs.readFile(friendKeys, 'utf8').catch(() => null)
     assert.ok(!before || !before.includes(key))
@@ -508,15 +515,32 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     )
     assert.ok((await fs.readFile(friendKeys, 'utf8')).includes('sk-other-9876543210'))
     assert.ok((await fs.readFile(path.join(root, 'config/credentials.json'), 'utf8')).includes(key))
-    // 切换档案：拿不到就 404，拿到就把 Cookie 换过去
+    // 切换档案：拿不到就 404，锁着的要密码，对了才把 Cookie 换过去
     const adminId = me.current.id
-    const switched = await api('/users/select', { id: adminId }, friend)
+    await assert.rejects(api('/users/select', { id: adminId }, friend), /要密码/)
+    const switched = await api('/users/select', { id: adminId, pin: '2468' }, friend)
     assert.equal(switched.data.current.role, 'admin')
     assert.equal(
       switched.setCookie,
       `town_user=${adminId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
     )
     await assert.rejects(api('/users/select', { id: 'u-nobody' }), /没有这个账号/)
+    // 改密码要验原来的：不对就换不了
+    await assert.rejects(
+      api('/users/pin', { current: '0000', pin: '4321' }, friend),
+      /原来的密码不对/
+    )
+    const pinned = await api('/users/pin', { current: '1357', pin: '4321' }, friend)
+    assert.equal(pinned.data.current.locked, true)
+    assert.equal(
+      (await api('/users/select', { id: made.data.user.id, pin: '4321' })).data.current.role,
+      'member'
+    )
+    await assert.rejects(
+      api('/users/select', { id: made.data.user.id, pin: '1357' }),
+      /密码不对/,
+      '旧密码不能用了'
+    )
     // 一个账号一个固定化身：页面把认下的那个记回来，下次进镇还当同一个人；传 null 解开
     const bound = await api('/users/avatar', { id: 'player_avatar', name: '阿岚' }, friend)
     assert.equal(bound.data.current.avatar_id, 'player_avatar')
@@ -525,10 +549,13 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     await assert.rejects(api('/users/avatar', { id: '有 空格' }, friend), /化身编号不合法/)
     await assert.rejects(api('/users/avatar', { id: 'a'.repeat(65) }, friend), /化身编号不合法/)
     assert.equal((await api('/users/avatar', { id: null }, friend)).data.current.avatar_id, null)
-    // 账号表里只记身份和归属，不记密钥
+    // 账号表里只记身份和归属，不记密钥，也不记明文密码
     const saved = JSON.parse(await fs.readFile(path.join(root, 'accounts.json'), 'utf8'))
     assert.equal(saved.users.length, 2)
     assert.ok(!JSON.stringify(saved).includes(key))
+    assert.ok(!JSON.stringify(saved).includes('2468'))
+    assert.ok(!JSON.stringify(saved).includes('4321'))
+    assert.equal(saved.users.filter((u) => u.pin).length, 2, '两个账号都存了摘要')
   } finally {
     await m?.stop()
     await fs.rm(root, { recursive: true, force: true })

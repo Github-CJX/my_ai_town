@@ -18,6 +18,8 @@ struct Manager {
     child: Child,
     dir: PathBuf,
     port: u16,
+    /// 建过一次的管理员账号：同一个服务上再问就直接用
+    account: std::sync::OnceLock<String>,
 }
 
 impl Drop for Manager {
@@ -96,7 +98,12 @@ impl Manager {
             assert!(Instant::now() < deadline, "管理服务没有就绪");
             std::thread::sleep(Duration::from_millis(50));
         };
-        Manager { child, dir, port }
+        Manager {
+            child,
+            dir,
+            port,
+            account: std::sync::OnceLock::new(),
+        }
     }
 
     /// 发一个原始请求，返回状态码和整段响应（服务端每次都关连接）。
@@ -123,12 +130,34 @@ impl Manager {
             "",
         )
     }
+
+    /// 第一次打开要自己建管理员：这里建一个，之后每个请求都带着它的 Cookie
+    fn cookie(&self) -> String {
+        let user = self.account.get_or_init(|| {
+            let (status, response) = self.request(
+                &format!(
+                    "POST /api/towns/users/setup HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+                     Cookie: town_session={SECRET}\r\n\
+                     X-Town-Client: 1\r\nContent-Type: application/json\r\n"
+                ),
+                r#"{"name":"测试管理员","pin":"1234"}"#,
+            );
+            assert_eq!(status, 200, "{response}");
+            response
+                .lines()
+                .find_map(|line| line.strip_prefix("Set-Cookie: town_user="))
+                .and_then(|rest| rest.split(';').next())
+                .map(str::to_owned)
+                .unwrap_or_else(|| panic!("没有拿到账号 Cookie：{response}"))
+        });
+        format!("Cookie: town_session={SECRET}; town_user={user}\r\n")
+    }
 }
 
 #[test]
 fn town_api_needs_session_and_static_files_stay_in_web_dir() {
     let manager = Manager::start("http");
-    let cookie = format!("Cookie: town_session={SECRET}\r\n");
+    let session = format!("Cookie: town_session={SECRET}\r\n");
 
     // 没有会话、口令不对、冒充别的站点：都拿不到小镇列表
     assert_eq!(manager.get("/api/towns", "").0, 403);
@@ -143,6 +172,9 @@ fn town_api_needs_session_and_static_files_stay_in_web_dir() {
     let (status, response) = manager.get(&format!("/__session?k={SECRET}"), "");
     assert_eq!(status, 302);
     assert!(response.contains("HttpOnly; SameSite=Strict"), "{response}");
+    // 有了会话还得有账号：这台上还没建号时谁也不算，建过就能读列表
+    assert_eq!(manager.get("/api/towns", &session).0, 401);
+    let cookie = manager.cookie();
     let (status, response) = manager.get("/api/towns", &cookie);
     assert_eq!(status, 200);
     assert!(response.contains("default-town"), "{response}");
@@ -172,8 +204,9 @@ fn post(manager: &Manager, path: &str, body: &serde_json::Value) -> (u16, serde_
     let text = body.to_string();
     let (status, response) = manager.request(
         &format!(
-            "POST /api/towns{path} HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: town_session={SECRET}\r\n\
-             X-Town-Client: 1\r\nContent-Type: application/json\r\n"
+            "POST /api/towns{path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{}\
+             X-Town-Client: 1\r\nContent-Type: application/json\r\n",
+            manager.cookie()
         ),
         &text,
     );
@@ -232,7 +265,7 @@ fn created_maps_are_validated_before_they_become_towns() {
     // 重复提交同一次保存：还是同一个小镇
     assert_eq!(save(&draft["version"]).1["id"], town["id"]);
 
-    let (status, list) = manager.get("/api/towns", &format!("Cookie: town_session={SECRET}\r\n"));
+    let (status, list) = manager.get("/api/towns", &manager.cookie());
     assert_eq!(status, 200);
     let id = town["id"].as_str().unwrap();
     assert!(list.contains(id), "{list}");
@@ -360,7 +393,7 @@ fn builtin_until(
     manager: &Manager,
     done: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
-    let cookie = format!("Cookie: town_session={SECRET}\r\n");
+    let cookie = manager.cookie();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let (_, response) = manager.get("/api/towns/builtin-model", &cookie);

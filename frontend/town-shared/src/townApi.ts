@@ -25,7 +25,22 @@ export type HomeAccount = {
   avatar_id: string | null
   avatar_name: string | null
   agent_limit: number | null
+  /** 有密码：切换到这个账号要输一次 */
+  locked?: boolean
 }
+
+export type HomeAccounts = {
+  /** 还没建号、没选号时是 null：页面要先去建一个、或者选一个 */
+  current: HomeAccount | null
+  users: HomeAccount[]
+  max: number
+  admin: boolean
+  /** 第一次打开：还没有管理员，先让玩家自己建一个 */
+  needs_setup: boolean
+}
+
+/** 还没建号/没选号时接口回的错误码：页面要先把账号那一步摆出来 */
+export const ACCOUNT_NEEDED = 'account'
 
 /** 账号接口：读写都用同一套请求头（管理服务只认本机页面发的 JSON） */
 async function users<T>(path: string, body?: unknown): Promise<T> {
@@ -36,17 +51,43 @@ async function users<T>(path: string, body?: unknown): Promise<T> {
   })
   const data = await response.json().catch(() => null)
   if (response.ok) return data as T
-  throw Error(data?.error ?? `小镇服务返回 ${response.status}`)
+  const error = Error(data?.error ?? `小镇服务返回 ${response.status}`)
+  if (data?.code) Object.assign(error, { code: data.code })
+  throw error
 }
 
-/** 当前账号；管理服务没有账号接口（老版本）时返回 null，页面按本机单人处理 */
-export async function readAccount(): Promise<HomeAccount | null> {
+/** 账号表；管理服务没有账号接口（老版本）时返回 null，页面按本机单人处理 */
+export async function readAccounts(): Promise<HomeAccounts | null> {
   try {
-    const data = await users<{ current: HomeAccount }>('')
-    return data.current ?? null
+    return await users<HomeAccounts>('')
   } catch {
     return null
   }
+}
+
+/** 当前账号；老版本管理服务、或者还没建号/选号时都是 null */
+export async function readAccount(): Promise<HomeAccount | null> {
+  return (await readAccounts())?.current ?? null
+}
+
+/** 第一次打开：用这个名字和密码建管理员，建完就是它 */
+export function setupAccount(name: string, pin: string): Promise<unknown> {
+  return users('/setup', { name, pin })
+}
+
+/** 管理员给朋友建号：给一个初始密码，朋友切过去后可以自己改 */
+export function createAccount(name: string, pin: string): Promise<unknown> {
+  return users('', { name, pin })
+}
+
+/** 切到某个账号（锁着的要密码） */
+export function selectAccount(id: string, pin?: string): Promise<unknown> {
+  return users('/select', { id, pin })
+}
+
+/** 换自己的密码：要验原来的密码 */
+export function changePin(current: string, pin: string): Promise<unknown> {
+  return users('/pin', { current, pin })
 }
 
 /** 记下这个账号的固定化身（传 null 解开）：下次进镇还当同一个人 */

@@ -154,9 +154,10 @@ button.model-line {
   font-size: 12px;
   line-height: 1.6;
 }
-/* 账号：名字 + 建账号按钮，和列表同宽 */
+/* 账号：名字 + 密码 + 按钮，和列表同宽；窄屏自动折行 */
 .account-create {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 10px 0 2px;
 }
@@ -171,7 +172,15 @@ button.model-line {
   color: var(--text);
   font: inherit;
 }
-.account-create .account-add {
+.account-create input[type='password'] {
+  flex: 0 1 120px;
+}
+.account-create .account-switch-name {
+  align-self: center;
+  font-size: 13px;
+}
+.account-create .account-add,
+.account-create .account-cancel {
   flex: none;
 }
 @media (max-width: 719px) {
