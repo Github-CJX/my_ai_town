@@ -1,5 +1,5 @@
 import { WeatherLayer } from './weather'
-import type { ServerMsg } from 'town-shared/protocol'
+import type { PlaceGrid, ServerMsg } from 'town-shared/protocol'
 import { heightAt, position as spatialPosition, type Spatial } from 'town-shared/spatial'
 import { savedAppearance, defaultAppearance } from 'town-shared/props/appearances'
 import type { Appearance, PropCatalog, PropView } from 'town-shared/props/types'
@@ -69,6 +69,9 @@ export interface TownMapOptions {
   /** 调用方已经算好的地面（建镇预览先拿它画缩略图）；不给就在这里算 */
   ground?: Ground
 }
+
+/** 摆放格子一屏最多画多少格：再多就隔几格画一个 */
+const GRID_CELLS_DRAWN = 4000
 
 export class TownMap {
   readonly weatherSupported = true
@@ -151,6 +154,9 @@ export class TownMap {
   private placing = false
   private placeLocale: string | null = null
   private placeAt: WalkTarget | null = null
+  /** 眼下的摆放格子（地点、空间、哪儿能放）：画成一层半透明方格 */
+  private placeGrid: { grid: PlaceGrid; space: string } | null = null
+  private readonly gridOutline = el('path', { class: 'place-grid' })
   private readonly placeOutline = el('path', { class: 'place-outline' })
   private readonly placeMarker = el('g', { class: 'place-marker' })
   /** 平面图上各区域占的格子，第一次摆道具时才建 */
@@ -452,6 +458,7 @@ export class TownMap {
     )
     this.placeMarker.style.display = 'none'
     this.svg.append(
+      this.gridOutline,
       this.placeOutline,
       this.residents.layer,
       this.destination,
@@ -1031,6 +1038,7 @@ export class TownMap {
   private placeDestination() {
     this.pin(this.destination, this.destinationAt)
     this.pin(this.placeMarker, this.placeAt)
+    this.drawPlaceGrid()
     this.placeOutline.setAttribute(
       'd',
       (this.placeLocale ? this.outlineOf(this.placeLocale) : [])
@@ -1050,11 +1058,14 @@ export class TownMap {
     )
   }
 
-  /** 摆道具模式：开着时点空地交给 onPlaceClick，不让化身走过去；关掉时清掉描边和定位点 */
+  /** 摆道具模式：开着时点空地交给 onPlaceClick，不让化身走过去；关掉时清掉描边、格子与定位点 */
   setPlacing(placing: boolean) {
     this.placing = placing
     this.svg.classList.toggle('placing', placing)
-    if (!placing) this.placeLocale = this.placeAt = null
+    if (!placing) {
+      this.placeLocale = this.placeAt = null
+      this.placeGrid = null
+    }
     this.placeDestination()
   }
   setPlaceHighlight(locale: string | null) {
@@ -1064,6 +1075,41 @@ export class TownMap {
   setPlaceMarker(target: WalkTarget | null) {
     this.placeAt = target
     this.placeDestination()
+  }
+  /** 摆道具的格子：哪儿能放，画在地点描边下面一层。null 清掉 */
+  setPlaceGrid(grid: PlaceGrid | null, space: string | null) {
+    this.placeGrid = grid && space ? { grid, space } : null
+    this.drawPlaceGrid()
+  }
+  /** 一屏最多画多少格：室外大地点格子很密，隔几格画一个，不把几兆字符塞进一个属性 */
+  private drawPlaceGrid() {
+    const at = this.placeGrid
+    const { grid, space } = at ?? { grid: null, space: '' }
+    if (!at || !this.placing || !grid || !(grid.step > 0) || grid.columns < 1 || grid.rows < 1) {
+      this.gridOutline.setAttribute('d', '')
+      return
+    }
+    const step = grid.step
+    const stride = Math.max(1, Math.ceil(Math.sqrt((grid.columns * grid.rows) / GRID_CELLS_DRAWN)))
+    const half = (step * stride) / 2
+    const parts: string[] = []
+    for (let row = 0; row < grid.rows; row += stride)
+      for (let column = 0; column < grid.columns; column += stride) {
+        if (grid.cells[row * grid.columns + column] !== '.') continue
+        const x = grid.origin[0] + column * step
+        const y = grid.origin[1] + row * step
+        const corners: [number, number][] = [
+          [x - half, y - half],
+          [x + half, y - half],
+          [x + half, y + half],
+          [x - half, y + half],
+        ]
+        const points = corners.map(([px, py]) =>
+          this.camera.project(this.walkPoint({ space, position: [px, py] }))
+        )
+        parts.push(`M${points.map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join('L')}Z`)
+      }
+    this.gridOutline.setAttribute('d', parts.join(''))
   }
   placeSpotAt(client: [number, number]): PlaceSpot | undefined {
     const point = this.camera.groundAt(...client)

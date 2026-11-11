@@ -1,5 +1,5 @@
 import type { AvatarLook, AvatarState } from './avatar/types'
-import type { RosterMember, ServerMsg } from './protocol'
+import type { PlaceGrid, RosterMember, ServerMsg } from './protocol'
 import type { PropCatalog, PropView } from './props/types'
 import type { Insets } from './mapView'
 import type { DepthBlur, Quality } from './quality'
@@ -74,6 +74,8 @@ export interface GameMap {
   setPlaceHighlight?(locale: string | null): void
   /** 在点过的位置画定位点；null 清掉 */
   setPlaceMarker?(target: WalkTarget | null): void
+  /** 画出这个地点哪儿能放（摆道具的格子）；null 清掉。space 是格子所在空间的行走坐标空间 */
+  setPlaceGrid?(grid: PlaceGrid | null, space: string | null): void
   /** 地图俯角（度）；只有 2D 立体场景有，其他地图不实现或返回 undefined */
   mapPitch?(): number | undefined
   /** 设俯角，立即重画并记到本机 */

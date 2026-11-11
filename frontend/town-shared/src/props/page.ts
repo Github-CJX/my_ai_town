@@ -1,7 +1,7 @@
 // 道具页：整页覆盖地图页。当前地图实例、可复用定义库、创建/编辑、导入导出。
 // 书和公告的正文在「书与公告」页（books.ts），这里点「阅读全文」「看上面的公告」就转过去。
 // 状态在 pageState.ts，两个列表视图在 worldView.ts 与 libraryView.ts。
-import type { ClientMsg, ServerMsg } from '../protocol'
+import type { ClientMsg, PlaceGrid, ServerMsg } from '../protocol'
 import type { Appearance, BodyNeed, Definition, PropCatalog } from './types'
 import { createEditor } from './editor'
 import { savedAppearance, saveAppearance } from './appearances'
@@ -136,6 +136,8 @@ class PropsPage implements PropsView {
   readonly lifecycle: ReturnType<typeof observationPage>
   private readonly listeners = new AbortController()
   private readonly card = createPropCard(() => this.closeCard())
+  /** 正在等哪个地点格子的回执（按请求编号认领） */
+  private readonly gridWaiters = new Map<string, (grid: PlaceGrid | null) => void>()
   private cardId = ''
   private cardSignature = ''
   private cardPoll: number | null = null
@@ -174,6 +176,7 @@ class PropsPage implements PropsView {
           catalog: () => this.state.catalog,
           localeName: this.localeName,
           refresh: () => deps.send({ type: 'get_props' }),
+          grid: (locale, got) => this.askGrid(locale, got),
           command: (kind, build, done) => this.sendWorldCommand(kind, build, done),
         })
       : null
@@ -208,6 +211,7 @@ class PropsPage implements PropsView {
   }
 
   close() {
+    this.gridWaiters.clear()
     this.lifecycle.close()
   }
 
@@ -338,6 +342,16 @@ class PropsPage implements PropsView {
     this.announce(kind === 'save_prop' ? '正在保存固定版本…' : '正在校验效果…')
   }
 
+  /** 问一个地点的摆放格子（哪里能放）：回执按请求编号认领；没连上时返回 false，调用方自己提示 */
+  askGrid(locale: string, got: (grid: PlaceGrid | null) => void) {
+    const { catalog, connected } = this.state
+    if (!catalog || !connected) return false
+    const request_id = newId()
+    this.gridWaiters.set(request_id, got)
+    this.deps.send({ type: 'get_place_grid', request_id, locale })
+    return true
+  }
+
   sendWorldCommand(
     kind: string,
     command: (world_id: string, request_id: string) => ClientMsg,
@@ -379,6 +393,12 @@ class PropsPage implements PropsView {
   handleMsg(msg: ServerMsg) {
     if (msg.type === 'props') this.onCatalog(msg.catalog)
     else if (msg.type === 'prop_result') this.onResult(msg)
+    // 问格子的回执：交给等着它的那个摆道具界面
+    else if (msg.type === 'place_grid') {
+      const got = this.gridWaiters.get(msg.request_id)
+      this.gridWaiters.delete(msg.request_id)
+      got?.(msg.grid)
+    }
     // 命令没能执行（格式错误、命令过多）：按失败结束这次操作
     else if (
       msg.type === 'error' &&

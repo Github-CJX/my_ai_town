@@ -2,13 +2,14 @@
 // 点一行就放到点的位置附近；浮窗不关，可以接着放、撤销刚放的那件。浮窗顶上列出这个地点已有的东西，
 // 可以顺手移除。摆道具时点地图上已有的道具，弹出小菜单：在它旁边再放东西，或者移除它。
 // 道具目录和命令回执都经道具页（page.ts），这里只管界面。
-import type { ClientMsg } from '../protocol'
+import type { ClientMsg, PlaceGrid } from '../protocol'
 import type { GameMap, PlaceSpot } from '../gameMap'
 import { gameIcon } from '../game/icons'
 import { visibleMapRect } from '../mapView'
 import { slot } from '../design/ui'
 import { newId } from '../ids'
 import { button, el } from './dom'
+import { nearestFree, snapToCell } from './grid'
 import { propPicture } from './picture'
 import { PURPOSES, usesOf } from './worldView'
 import type { Definition, PropCatalog, PropView } from './types'
@@ -16,7 +17,12 @@ import './placing.css'
 
 export type PlacingMap = Pick<
   GameMap,
-  'setPlacing' | 'placeSpotAt' | 'setPlaceHighlight' | 'setPlaceMarker' | 'walkTargetOf'
+  | 'setPlacing'
+  | 'placeSpotAt'
+  | 'setPlaceHighlight'
+  | 'setPlaceMarker'
+  | 'setPlaceGrid'
+  | 'walkTargetOf'
 >
 
 export interface PlacingDeps {
@@ -25,6 +31,8 @@ export interface PlacingDeps {
   localeName(id: string): string
   /** 要一份最新的道具目录 */
   refresh(): void
+  /** 问这个地点哪里能放：回执到了调 got；没连上时返回 false */
+  grid(locale: string, got: (grid: PlaceGrid | null) => void): boolean
   /** 放置、移除：回执到了调 done；没连上时返回 false */
   command(
     kind: 'place_prop' | 'remove_prop',
@@ -79,13 +87,15 @@ export function createPlacing(deps: PlacingDeps) {
   let status: Status = { kind: 'idle' }
   /** 这次摆道具放过的道具（定义编号），最近的在前 */
   let recent: string[] = []
+  /** 眼下这个地点的格子：点格子吸附到格心，地图上画出哪儿能放 */
+  let grid: { cells: PlaceGrid; space: string } | null = null
   let lastPointer: [number, number] = [0, 0]
   const watchers: ((active: boolean) => void)[] = []
 
   const hint = el('div', '', 'place-hint')
   hint.setAttribute('role', 'status')
   hint.append(
-    el('span', '摆道具：点地图上的地点，选要放的东西'),
+    el('span', '摆道具：点地图上的地点，白格能放，点格子对准'),
     button('完成', () => setActive(false))
   )
   const follow = el('div', '', 'place-follow')
@@ -173,16 +183,46 @@ export function createPlacing(deps: PlacingDeps) {
     mapEl.classList.add('place-picking')
     render()
     deps.refresh()
+    askGrid(at)
     if (document.documentElement.dataset.layout !== 'compact') search.focus({ preventScroll: true })
+  }
+
+  /** 问这个地点的格子；回来时浮窗可能已经关了或者换到别处了，只认同一个地点 */
+  function askGrid(at: PlaceSpot) {
+    setGrid(null, '')
+    const asked = at.locale
+    const sent = deps.grid(asked, (next) => {
+      if (!next || !spot || spot.locale !== asked) return
+      setGrid(next, spot.near.space)
+    })
+    if (!sent && active) flash('没连上小镇，这一次不显示格子', lastPointer)
+  }
+
+  /** 换上格子：画到地图上，顺手把定位点吸到最近的空格心（原来是点的原位置） */
+  function setGrid(next: PlaceGrid | null, space: string) {
+    if (!next || !space) {
+      grid = null
+      deps.map.setPlaceGrid?.(null, null)
+      return
+    }
+    grid = { cells: next, space }
+    deps.map.setPlaceGrid?.(next, space)
+    if (!spot) return
+    const snapped = nearestFree(next, spot.near.position)
+    if (!snapped) return
+    spot = { ...spot, near: { ...spot.near, position: snapped } }
+    deps.map.setPlaceMarker?.(spot.near)
   }
 
   function closePicker() {
     if (!spot) return
     spot = null
+    grid = null
     picker.hidden = true
     mapEl.classList.remove('place-picking')
     deps.map.setPlaceHighlight?.(null)
     deps.map.setPlaceMarker?.(null)
+    deps.map.setPlaceGrid?.(null, null)
   }
 
   /** 宽屏贴着点的位置，放不下就翻到左边；不压右侧面板、缩放钮和左下角的按钮。手机上是底部抽屉，交给样式 */
@@ -336,6 +376,8 @@ export function createPlacing(deps: PlacingDeps) {
         recent = [d.id, ...recent.filter((r) => r !== d.id)].slice(0, 3)
         setStatus({ kind: 'placed', id, name: d.name, locale })
         renderList(true)
+        // 放下之后那附近站不下人了：重新问一次格子，定位点跟着吸到新的空位
+        if (spot) askGrid(spot)
       }
     )
     setStatus(
@@ -516,12 +558,24 @@ export function createPlacing(deps: PlacingDeps) {
     clickAt(client: [number, number]) {
       if (!active) return
       const at = deps.map.placeSpotAt?.(client)
-      if (at) openPicker(at, client)
-      else {
+      if (!at) {
         closePicker()
         closeMenu()
         flash('这里不在能放东西的地点里', client)
+        return
       }
+      // 浮窗已经开着、又点回同一个地点：把定位点吸到这格上，不重新开窗、列表也不重画
+      if (spot && grid && spot.locale === at.locale) {
+        const snapped = snapToCell(grid.cells, at.near.position)
+        if (!snapped) {
+          flash('这一格放不下，换一格', client)
+          return
+        }
+        spot = { ...spot, near: { ...spot.near, position: snapped } }
+        deps.map.setPlaceMarker?.(spot.near)
+        return
+      }
+      openPicker(at, client)
     },
     /** 摆道具时点了已有的道具：弹出菜单；不在摆道具时返回 false，照常打开卡片 */
     propClick(id: string) {

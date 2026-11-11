@@ -627,6 +627,30 @@ export interface TideView {
   rings: number
 }
 
+/** 摆道具界面画「哪里能放」用的一个地点格子：和真放时找空位是同一套算法。字段按字母序。 */
+export interface PlaceGrid {
+  /** 和 cells 逐格对应：碰到或挡了哪件道具（props 里的序号，`0-9a-zA-Z`），其余是 `-` */
+  by: string
+  /** 逐行、每格一个字符：`.` 能放；`p` 碰到东西；`w` 站不到跟前；`a`/`r`/`b`/`s` 见服务端注释 */
+  cells: string
+  columns: number
+  /** 地点入口（米：x 与地面上的 z） */
+  entrance: [number, number]
+  entrance_clearance: number
+  locale: string
+  /** 第一格（第一行第一个）的中心，米 */
+  origin: [number, number]
+  props: string[]
+  /** 照放置器一件件往里放还能放几件 */
+  room: number
+  room_capped: boolean
+  rows: number
+  /** 试格子用的占地（米） */
+  size: [number, number]
+  /** 相邻格点的间距（米） */
+  step: number
+}
+
 export type ServerMsg =
   | { type: 'avatar_state'; state: AvatarState }
   | {
@@ -661,6 +685,8 @@ export type ServerMsg =
   | { type: 'world_settings'; state: WorldSettingsState }
   | { type: 'world_settings_saved'; request_id: string; ok: boolean; message: string }
   | { type: 'props'; catalog: PropCatalog }
+  /** 摆道具界面问「这个地点哪里能放」的回执：只回给发问的页面，不进存档 */
+  | { type: 'place_grid'; request_id: string; locale: string; grid: PlaceGrid | null }
   | {
       type: 'prop_result'
       request_id: string
@@ -860,6 +886,8 @@ export type ClientMsg =
       game_mode?: GameModeChoice | null
     }
   | { type: 'get_props' }
+  /** 问一个能放东西的地点里哪里能放：回 place_grid，只回给发问的这个页面 */
+  | { type: 'get_place_grid'; request_id: string; locale: string }
   | {
       type: 'validate_prop' | 'save_prop'
       request_id: string

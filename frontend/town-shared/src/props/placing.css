@@ -50,6 +50,14 @@ svg.placing .pp.prop-art-ready > .prop-art-target {
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
+/* 摆道具的格子：能放进东西的位置铺一层浅色方格，压在描边下面 */
+.place-grid {
+  fill: rgb(255 255 255 / 0.18);
+  stroke: rgb(255 255 255 / 0.6);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
 .place-marker {
   pointer-events: none;
 }
