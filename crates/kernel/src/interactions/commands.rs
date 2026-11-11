@@ -461,7 +461,7 @@ impl World {
         }
         let locale = item.locale.clone();
         self.onlookers(&locale, &[a, b], &format!("看见{scene}"), false);
-        let info = self.actors[a].event_info();
+        let info = self.actors[a].event_info().in_place(&locale);
         self.log(info, scene);
     }
 
@@ -602,7 +602,10 @@ impl World {
             .interactions
             .interrupt(&mut self.actors, now, actor, reason)
         {
-            self.log(self.actors[actor].event_info(), log);
+            // 互动断了只关当事人的事：只有当时在那儿的人看得见
+            let locale = self.actors[actor].locus.locale.clone();
+            let info = self.actors[actor].event_info().in_place(&locale);
+            self.log(info, log);
         }
     }
 

@@ -192,7 +192,8 @@ impl World {
         {
             let a = &self.actors[leader];
             let line = format!("{} 没能出发带路：{error}", a.name);
-            self.log(a.event_info(), line);
+            let info = a.event_info().in_place(&a.locus.locale);
+            self.log(info, line);
         }
     }
 
@@ -490,10 +491,9 @@ impl World {
             super::LeaveKind::Forced,
             &reason,
         ) {
-            self.log(
-                protocol::EventInfo::default(),
-                format!("{actor} 退出同行 {id} 失败：{e}"),
-            );
+            let info =
+                protocol::EventInfo::default().in_place(&self.actors[actor].locus.locale.clone());
+            self.log(info, format!("{actor} 退出同行 {id} 失败：{e}"));
         }
         if let Some(state) = self.walk_trails.0.get_mut(id) {
             state.followers.remove(actor);
@@ -591,7 +591,9 @@ impl World {
         );
         if let Err(error) = self.join_walk(&item.partner, walk, "") {
             let line = format!("{} 没能跟上同行：{error}", self.actor_name(&item.partner));
-            self.log(protocol::EventInfo::default(), line);
+            let place = self.actors[&item.partner].locus.locale.clone();
+            let info = protocol::EventInfo::default().in_place(&place);
+            self.log(info, line);
         }
     }
 

@@ -264,3 +264,48 @@ fn touching_needs_consent_and_dodging_is_seen_by_both_and_onlookers() {
     );
     assert!(texts(&w, "zhou", FactKind::Notice).contains("牵手了一会儿"));
 }
+
+/// 世界日志里的本地场景带着发生地：页面拿着这条才能只发给此刻在那儿的人
+#[test]
+fn a_scene_in_the_world_log_carries_the_place_it_happened() {
+    let mut w = world();
+    let revision = w.actor("lin").unwrap().actions.revision;
+    let hands = w
+        .interact(
+            "lin",
+            "hands",
+            revision,
+            &Command::Offer {
+                partner_id: "zhou".into(),
+                interaction: Kind::Touch {
+                    gesture: Gesture::HoldHands,
+                },
+                message: "手给我".into(),
+            },
+        )
+        .unwrap();
+    let revision = w.actor("zhou").unwrap().actions.revision;
+    w.interact(
+        "zhou",
+        "yes",
+        revision,
+        &Command::Reply {
+            interaction_id: hands.id.clone(),
+            accept: true,
+            message: "嗯".into(),
+        },
+    )
+    .unwrap();
+    let here = w.actor("lin").unwrap().locus.locale.clone();
+    let logs: Vec<(String, Option<String>)> = w
+        .take_events()
+        .into_iter()
+        .map(|kernel::Event::Log { text, info, .. }| (text, info.place))
+        .collect();
+    assert!(logs.len() > 1, "世界里记了好几行：{logs:?}");
+    let (text, place) = logs
+        .iter()
+        .find(|(text, _)| text.contains("牵起了手"))
+        .expect("记下了这次牵手");
+    assert_eq!(place.as_deref(), Some(here.as_str()), "{text}");
+}

@@ -683,7 +683,7 @@ export type ServerMsg =
       holds?: WorldHold[]
       locales: { locale: string; members: RosterMember[] }[]
     }
-  /** 世界日志一行：text 给人读，kind、actor、alert 给前端判断 */
+  /** 世界日志一行：text 给人读，kind、actor、alert 给前端判断；place 是发生地（空 = 全镇都看得见） */
   | {
       type: 'event'
       sim_minutes: number
@@ -692,6 +692,7 @@ export type ServerMsg =
       kind: EventKind
       actor?: EventActor
       alert?: Alert
+      place?: string
     }
   | {
       type: 'model_config'

@@ -306,7 +306,7 @@ impl World {
     fn happened(&mut self, actor: &str, target: &str, text: String) {
         let locale = self.actors[actor].locus.locale.clone();
         self.onlookers(&locale, &[actor, target], &format!("看见{text}"), true);
-        let info = self.actors[actor].event_info();
+        let info = self.actors[actor].event_info().in_place(&locale);
         self.log(info, text);
     }
 

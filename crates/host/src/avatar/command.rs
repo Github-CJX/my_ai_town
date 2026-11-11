@@ -130,6 +130,13 @@ impl Runtime {
             Err(rejection) => (false, rejection.code, rejection.message),
         };
         let quiet = matches!(request.command, Command::View | Command::Heartbeat);
+        // 控制变了（加入、附身、退出）：世界日志按这条连接此刻操控的人在哪儿分发
+        let resident = self
+            .avatar_controls
+            .get(&connection)
+            .filter(|control| control.lease.is_some())
+            .map(|control| control.avatar.clone());
+        network::bind_resident(clients, connection, resident.as_deref());
         network::send_to(
             clients,
             connection,

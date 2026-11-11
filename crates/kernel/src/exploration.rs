@@ -328,7 +328,7 @@ impl World {
                     }
                 }
                 self.onlookers(&locale, &[id], &format!("看见{who}找到了{name}"), false);
-                let info = self.actors[id].event_info();
+                let info = self.actors[id].event_info().in_place(&locale);
                 self.log(info, format!("{who}在{place}找到了{name}"));
                 self.remember_place(id, &locale);
                 format!("在{place}找到了{name}（{prop}）")
@@ -390,7 +390,7 @@ impl World {
             }
         }
         self.onlookers(&locale, &[id], &format!("看见{who}把{name}藏了起来"), false);
-        let info = self.actors[id].event_info();
+        let info = self.actors[id].event_info().in_place(&locale);
         self.log(info, format!("{who}把{name}藏在了{place}"));
         let text = format!("把{name}藏在了{place}，别人要搜寻才找得到");
         let now = self.minutes;

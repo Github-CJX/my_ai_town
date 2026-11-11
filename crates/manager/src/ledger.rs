@@ -240,6 +240,7 @@ pub fn prune(connection: &Connection, before: &str) -> Result<(), ApiError> {
 }
 
 /// 顺手查一次请求行数：对账时看「世界说发了多少次」对不对得上。
+#[cfg(test)]
 pub fn requests(connection: &Connection) -> Result<u64, ApiError> {
     connection
         .query_row("SELECT COUNT(*) FROM request", [], |row| {

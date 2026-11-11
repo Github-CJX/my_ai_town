@@ -39,6 +39,9 @@ pub(crate) struct Peer {
     admin: bool,
     /// 票面里的账号编号（不透明）：世界只拿它认化身归属，不认账号本身。
     user: Option<String>,
+    /// 这条连接此刻操控的演员编号（自己的化身或附身的村民）：世界日志按它当时所在的处所分发。
+    /// 没在操控（只看名册的旁观连接）就是 None，什么都看得见。
+    resident: Option<String>,
 }
 
 impl Peer {
@@ -156,6 +159,7 @@ pub(crate) fn listen(
                     inputs: Vec::new(),
                     admin,
                     user,
+                    resident: None,
                 },
             );
             let to_sim = to_sim.clone();
@@ -346,17 +350,70 @@ fn malformed(text: &str, error: &serde_json::Error) -> ServerMsg {
     }
 }
 
-/// 世界日志一行：正文给人读，info 是种类、人物与提示卡细节。
+/// 这条连接现在操控谁：操控变了就跟着改（控制、附身、退出都走这里）。
+/// 只听名册、没操控任何人的旁观连接传 `None`，照样什么都看得见。
+pub(crate) fn bind_resident(clients: &Clients, connection: u64, resident: Option<&str>) {
+    if let Some(peer) = clients.lock().unwrap().get_mut(&connection) {
+        peer.resident = resident.map(str::to_owned);
+    }
+}
+
+/// 世界日志一行：正文给人读，info 是种类、人物、发生的处所与提示卡细节。
+///
+/// `info.place` 写了处所时只发给「此刻在那儿的人」：世界日志里有的是当事人自己的事
+/// （谁跟谁牵手、谁在哪找到了什么），隔着一整条街的人不该看见。旁观连接（没操控任何人）
+/// 是首页的观察仪，仍然收全部。
 pub(crate) fn broadcast_event(clients: &Clients, world: &World, text: String, info: EventInfo) {
-    broadcast(
-        clients,
-        &ServerMsg::Event {
-            sim_minutes: world.minutes(),
-            clock: world.clock(),
-            text,
-            info,
-        },
-    );
+    let place = info.place.clone();
+    let message = ServerMsg::Event {
+        sim_minutes: world.minutes(),
+        clock: world.clock(),
+        text,
+        info,
+    };
+    let json = encode(&message);
+    clients.lock().unwrap().retain(|id, peer| {
+        let here = peer
+            .resident
+            .as_deref()
+            .and_then(|resident| world.actor(resident))
+            .map(|actor| actor.locus.locale.as_str());
+        if !sees(place.as_deref(), peer.resident.as_deref(), here) {
+            return true;
+        }
+        peer.deliver(*id, json.clone())
+    });
+}
+
+/// 这条连接看不看得见一件「发生在 `place` 的事」。
+///
+/// 事情的 `place` 为空（全镇）就谁都看得见；旁观连接（没操控人）是首页的观察仪，也全给。
+/// 操控的人已经不在世界里（死了、被请走）时拿不到地点，同样照旧全给，免得页面一片空白。
+fn sees(place: Option<&str>, resident: Option<&str>, here: Option<&str>) -> bool {
+    let (Some(place), Some(_)) = (place, resident) else {
+        return true;
+    };
+    here.is_none_or(|here| here == place)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sees;
+
+    #[test]
+    fn an_event_without_a_place_reaches_everyone() {
+        assert!(sees(None, Some("r1"), Some("loc_a")));
+        assert!(sees(None, None, None));
+    }
+
+    #[test]
+    fn something_at_a_place_only_reaches_the_ones_there() {
+        assert!(sees(Some("loc_a"), Some("r1"), Some("loc_a")));
+        assert!(!sees(Some("loc_a"), Some("r1"), Some("loc_b")));
+        // 旁观连接与已经不在世界里的人照旧全给
+        assert!(sees(Some("loc_a"), None, None));
+        assert!(sees(Some("loc_a"), Some("r1"), None));
+    }
 }
 
 pub(crate) fn broadcast(clients: &Clients, msg: &ServerMsg) {

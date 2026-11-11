@@ -53,12 +53,16 @@ pub enum Alert {
     },
 }
 
-/// 世界日志一行的结构化部分：种类、说的是谁、需要提示卡时的细节。
+/// 世界日志一行的结构化部分：种类、说的是谁、发生在哪儿、需要提示卡时的细节。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventInfo {
     pub kind: EventKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<EventActor>,
+    /// 这件事发生在哪个处所。空 = 全镇都看得见（天气、节庆、有人加入小镇这类）；
+    /// 写了处所，就只发给「此刻在那儿的人」，别处的人不该看见这条日志。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alert: Option<Alert>,
 }
@@ -91,6 +95,11 @@ impl EventInfo {
     /// 带上提示卡的细节。
     pub fn with_alert(mut self, alert: Option<Alert>) -> Self {
         self.alert = alert;
+        self
+    }
+    /// 记下发生在哪儿：这条日志只发给当时在那个处所的人。
+    pub fn in_place(mut self, place: &str) -> Self {
+        self.place = Some(place.into());
         self
     }
 }
