@@ -73,32 +73,45 @@ fn the_placement_grid_answers_the_page_that_asked_and_nothing_for_unknown_places
         );
     }
 
-    // 正式地图带三维导航时，下面逐格核对形状；现在仓库发布的地图都没有 navigation 数据，
-    // 放置器无从算格子，回的都是 null（3D 地图上的格子形状由 crates/host/src/maps/placement.rs
-    // 的放置器用例覆盖）。这里不断言「一定有格子」，但只要有格子就一定是能用的形状。
-    let with_cells = grids
-        .iter()
-        .filter_map(|m| m["grid"].as_object())
-        .collect::<Vec<_>>();
-    for grid in &with_cells {
+    // 仓库发布的是二维地图：没有三维 navigation 数据，格子由 WalkMap 的房间矩形算出来。
+    // 每个能放道具的地点都必须给出格子，且形状自洽、至少有一个空位。
+    for (i, place) in places.iter().enumerate() {
+        let receipt = grids
+            .iter()
+            .find(|m| m["request_id"] == format!("grid-{i}"))
+            .unwrap_or_else(|| panic!("没有地点 {place} 的回执：{grids:?}"));
+        let grid = receipt["grid"]
+            .as_object()
+            .unwrap_or_else(|| panic!("地点 {place} 没有格子：{receipt}"));
         let cells = grid["cells"].as_str().expect("cells 是字符串");
         let rows = grid["rows"].as_u64().expect("rows") as usize;
         let columns = grid["columns"].as_u64().expect("columns") as usize;
-        assert_eq!(cells.len(), rows * columns, "{grid:?}");
+        assert_eq!(cells.len(), rows * columns, "{place}: {grid:?}");
         assert_eq!(
             grid["by"].as_str().expect("by 与 cells 逐格对应").len(),
-            cells.len()
+            cells.len(),
+            "{place}"
         );
         assert!(
             grid["props"].as_array().is_some(),
-            "by 里的序号要有对应的道具编：{grid:?}"
+            "by 里的序号要有对应的道具编号：{place}"
         );
-        assert!(cells.chars().any(|c| c == '.'), "一个空位都没有：{grid:?}");
+        assert!(
+            cells.chars().any(|c| c == '.'),
+            "{place} 一个空位都没有：{grid:?}"
+        );
         assert!(
             cells
                 .chars()
                 .all(|c| "._aprbs w".replace(' ', "").contains(c)),
-            "出现了没约定的格子字符：{cells}"
+            "{place} 出现了没约定的格子字符：{cells}"
+        );
+        assert_eq!(grid["locale"], place.as_str());
+        let step = grid["step"].as_f64().expect("step");
+        assert!(step >= 0.5, "{place} 的格距太小：{step}");
+        assert!(
+            rows > 0 && columns > 0 && rows <= 200 && columns <= 200,
+            "{place} 的格子太多：{rows}x{columns}"
         );
     }
 

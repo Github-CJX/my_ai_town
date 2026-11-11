@@ -15,7 +15,7 @@ fn published(relative: &str) -> String {
 }
 
 /// 按 host 启动时的做法：读道具库（含地图引用的旧道具）、校验地图、编译行走地图。
-fn walk_map(path: &str) -> (Value, WalkMap) {
+pub fn walk_map(path: &str) -> (Value, WalkMap) {
     let doc = read_json(&repo_root().join(path));
     let catalog = host::props::PropLibrary::load(
         &published(PROP_CATALOG_PATH),

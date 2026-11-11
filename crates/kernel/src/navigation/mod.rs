@@ -113,16 +113,109 @@ fn obstacles<'a>(w: &World, s: &'a space::Space, locale: &str) -> Vec<&'a protoc
         .collect()
 }
 
+/// 二维地图（只有 WalkMap、没有三维 navigation）的一个地点格子：房间矩形扣掉人身半径，
+/// 再逐格试「站得下一个人吗」，家具由 WalkMap 自带的障碍决定。墙就是矩形边界。
+fn walk_grid(w: &World, locale: &str) -> Option<protocol::PlaceGrid> {
+    use crate::avatar::Area;
+    let map = w.walk_map.as_ref()?;
+    let space = map.space_of(locale).to_string();
+    let surface = map
+        .surfaces
+        .iter()
+        .find(|s| s.locale == locale || s.space == space)?;
+    let (min, max) = match &surface.area {
+        Area::Rect { min, max } => (*min, *max),
+        Area::Cells { size, cells } => {
+            let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+            for &(x, y) in cells {
+                lo[0] = lo[0].min(x as f64 * size);
+                lo[1] = lo[1].min(y as f64 * size);
+                hi[0] = hi[0].max((x + 1) as f64 * size);
+                hi[1] = hi[1].max((y + 1) as f64 * size);
+            }
+            (lo, hi)
+        }
+        Area::Corridor { points, width } => {
+            let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+            for p in points {
+                lo[0] = lo[0].min(p[0] - width / 2.);
+                lo[1] = lo[1].min(p[1] - width / 2.);
+                hi[0] = hi[0].max(p[0] + width / 2.);
+                hi[1] = hi[1].max(p[1] + width / 2.);
+            }
+            (lo, hi)
+        }
+    };
+    // 0.5 米一格；房间大到上百米（室外地点）时按比例放粗，免得回一份几兆的格子。
+    let step = ((max[0] - min[0]).max(max[1] - min[1]) / 96.).max(0.5);
+    let reach = crate::avatar::RADIUS;
+    let columns = (((max[0] - min[0] - 2. * reach) / step).floor() as u32).max(1);
+    let rows = (((max[1] - min[1] - 2. * reach) / step).floor() as u32).max(1);
+    let origin = [min[0] + reach + step / 2., min[1] + reach + step / 2.];
+    let mut cells = String::new();
+    // 已经摆在这个地点里的道具：格子和真摆放一样要让开它们。
+    let taken: Vec<[f64; 2]> = w
+        .props
+        .walk_positions
+        .values()
+        .filter(|s| s.locale == locale)
+        .map(|s| s.position)
+        .collect();
+    for row in 0..rows {
+        for column in 0..columns {
+            let p = [
+                origin[0] + column as f64 * step,
+                origin[1] + row as f64 * step,
+            ];
+            let inside = p[0] <= max[0] - reach && p[1] <= max[1] - reach;
+            let crowded = taken
+                .iter()
+                .any(|q| (q[0] - p[0]).hypot(q[1] - p[1]) < reach + 0.3);
+            let mark = if !inside {
+                'w'
+            } else if crowded || !map.clear(&space, p, &map.obstacles, reach) {
+                'p'
+            } else {
+                '.'
+            };
+            cells.push(mark);
+        }
+    }
+    let by = "-".repeat(cells.len());
+    let entrance = map
+        .stations
+        .values()
+        .filter(|s| s.locale == locale)
+        .map(|s| s.position)
+        .next()
+        .unwrap_or([min[0], max[1]]);
+    Some(protocol::PlaceGrid {
+        by,
+        cells,
+        columns,
+        entrance,
+        entrance_clearance: reach,
+        locale: locale.to_string(),
+        origin,
+        props: Vec::new(),
+        room: 0,
+        room_capped: false,
+        rows,
+        size: [step, step],
+        step,
+    })
+}
+
 /// 一个地点的格子，给摆道具界面画「哪里能放」；规则和真放时找空位是同一套。
 /// 不是能放东西的地点、没有空间地图或放置器时为空。
 pub(crate) fn grid_of(w: &World, locale: &str) -> Option<protocol::PlaceGrid> {
-    let (Some(s), Some(placer)) = (&w.topo.navigation, &w.placer) else {
-        return None;
-    };
     if !w.topo.is_dwell(locale) {
         return None;
     }
-    placer.grid(s, locale, &obstacles(w, s, locale), &stand_check(w, locale))
+    if let (Some(s), Some(placer)) = (&w.topo.navigation, &w.placer) {
+        return placer.grid(s, locale, &obstacles(w, s, locale), &stand_check(w, locale));
+    }
+    walk_grid(w, locale)
 }
 
 impl World {
