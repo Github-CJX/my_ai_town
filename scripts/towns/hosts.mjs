@@ -4,6 +4,8 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { readJson } from './storage.mjs'
 import { serviceTicket, userTicket, signTicket, withTicket, ticketExpiry } from './ticket.mjs'
+// 世界连接用自带的小客户端：Node 内置 WebSocket 在部分 Linux 上与 Rust 世界的握手会随机失败
+import { WebSocket } from './socket.mjs'
 /** 同时只运行一个小镇：退出就保存关闭，进另一个小镇时先关掉还开着的那个 */
 const MAX_RUNNING = 1
 /** 只给本机的地址：不对外监听，页面与接口只认它们 */

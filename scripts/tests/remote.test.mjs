@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createManager } from '../town-manager.mjs'
 import { signIn } from './support.mjs'
+import { WebSocket } from '../towns/socket.mjs'
 
 /** 用指定的 Host 头发一次请求：远程访问时 Host 是页面与接口唯一的地址来源 */
 function ask(port, host, route, { method = 'GET', cookie, body, headers: extra } = {}) {

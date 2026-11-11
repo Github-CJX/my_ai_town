@@ -7,6 +7,7 @@ import { createManager } from '../town-manager.mjs'
 import { APPEARANCE_SET } from '../mapgen/budget.mjs'
 import { walkingHarness } from './avatar-input-support.mjs'
 import { client, signIn } from './support.mjs'
+import { WebSocket } from '../towns/socket.mjs'
 
 test('rotated view maps WASD and stick input to world directions while click routes stay in world space', () => {
   const sent = []
