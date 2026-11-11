@@ -23,7 +23,7 @@
   font-size: 11px;
   margin-bottom: 3px;
 }
-.chat-bubble span {
+.chat-bubble > span {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -32,6 +32,11 @@
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* 台词里括起来的动作与神情：是给人看的旁白，画淡一点、斜着，别和说出口的话混在一起 */
+.say-act {
+  color: var(--text-2);
+  font-style: italic;
 }
 .chat-bubble::after {
   content: '';

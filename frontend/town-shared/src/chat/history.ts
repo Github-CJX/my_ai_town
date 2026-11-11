@@ -6,6 +6,7 @@ import { interactionStatusLabels } from '../labels'
 import './style.css'
 import { iconLabel, gameIcon } from '../game/icons'
 import { residentPortrait } from '../portraits'
+import { fillSpeech } from './text'
 
 /** 聊天记录可放在对话框或右栏页面中 */
 interface Surface {
@@ -173,10 +174,9 @@ export function createChatHistory(
         `chat-entry ${entry.kind === 'speech' ? 'chat-spoken' : 'chat-event'}`
       )
       row.dataset.seq = String(entry.seq)
-      row.append(
-        node('small', `${entry.name} · ${clock(entry.at)}`),
-        node('p', playerText(entry.text))
-      )
+      const said = node('p', '')
+      fillSpeech(said, playerText(entry.text))
+      row.append(node('small', `${entry.name} · ${clock(entry.at)}`), said)
       content.append(row)
     }
     if (!total && game) {

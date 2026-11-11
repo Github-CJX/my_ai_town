@@ -117,3 +117,22 @@ pub fn summary_reading(event_id: &serde_json::Value) -> String {
 pub fn summary_tool(call_id: &str, name: &str, excerpt: &str) -> String {
     format!("工具 {call_id} 的结果摘录（{name}）：{excerpt}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 交谈规则里「动作与神情写成括起来的一句、只写看得见的东西」是模型演旁白的唯一依据：
+    /// 删了它，回复就退回纯台词，前端那套旁白样式也永远不会出现。
+    #[test]
+    fn the_chat_rules_allow_one_visible_action_in_parentheses() {
+        let rules = chat_system_prompt("阿岚，话少，爱看河");
+        assert!(rules.contains("括起来的一句"), "缺少动作描写的写法");
+        assert!(rules.contains("不写对方的反应"), "缺少「不代写别人」");
+        assert!(rules.contains("people_here"), "缺少「能写什么」的依据");
+        assert!(
+            rules.contains("世界不会因此改变什么"),
+            "缺少「描写不是事实」的说明"
+        );
+    }
+}

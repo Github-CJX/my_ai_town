@@ -2,6 +2,7 @@ import type { GameMap, ScreenBox } from '../gameMap'
 import { mapControlRects, visibleMapRect } from '../mapView'
 import type { RosterFrame } from '../shell/panel'
 import { personRect, placeBubble, type Rect } from './placement'
+import { fillSpeech } from './text'
 import type { Speech } from './types'
 import './style.css'
 type Line = { actor: string; name: string; speech: Speech }
@@ -122,7 +123,7 @@ export class ChatBubbles {
         const name = document.createElement('strong')
         name.textContent = line.name
         const text = document.createElement('span')
-        text.textContent = line.speech.text
+        fillSpeech(text, line.speech.text)
         button.append(name, text)
         button.title = '查看这场聊天记录'
         button.setAttribute('aria-label', `${line.name}说：${line.speech.text}。查看聊天记录`)
