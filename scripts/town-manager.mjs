@@ -14,6 +14,7 @@ import { createResident, readResident } from './towns/resident.mjs'
 import { foldTowns } from './towns/usage.mjs'
 import { Raw, HttpError, readBody, describe } from './towns/http.mjs'
 import http from 'node:http'
+import net from 'node:net'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,11 +35,14 @@ function hostName(host = '') {
 
 /**
  * 这个请求的 Host 能不能用：缺省只认本机；对外监听时再认 IP、监听地址和允许的域名。
- * 只认 IP 与显式允许的名字，是为了不让别人的域名解析到这台机器上就能用接口（DNS 重绑定）。
+ * 只认 IP 与显式允许的名字，是为了不让别人的域名解析到这台机器上就能用接口（DNS 重绑定）；
+ * 反向代理转进来的请求另外认：`x-forwarded-*` 这些头页面上的脚本改不了，所以凭它们认反代。
  */
-function hostAllowed(host, bind, allowHost) {
+function hostAllowed(host, bind, allowHost, headers = {}) {
   const name = hostName(host)
   if (LOOPBACK.has(name)) return true
+  if (headers['x-forwarded-proto'] || headers['x-forwarded-host'] || headers['x-forwarded-for'])
+    return true
   if (LOOPBACK.has(bind)) return false
   return (
     /^\d{1,3}(\.\d{1,3}){3}$/.test(name) ||
@@ -84,7 +88,8 @@ export async function createManager({
   // 监听地址：缺省只听本机；放到服务器上时传 0.0.0.0（或 TOWN_BIND）；域名访问再加 allowHost。
   bind = process.env.TOWN_BIND?.trim() || '127.0.0.1',
   allowHost = process.env.TOWN_ALLOW_HOST?.trim() || null,
-  // 世界自己的端口：0 是每次随机；放到服务器上时固定一个，防火墙只开这一个。
+  // 世界自己的端口：0 是每次随机。页面的世界连接现在统一从本服务这个端口转进去（`/ws/<镇>`），
+  // 对外只要开管理服务这一个端口；想直连世界进程（老办法）再固定它。
   hostPort = Number(process.env.TOWN_HOST_PORT ?? 0) || 0,
 } = {}) {
   const storage = new Storage(root, source)
@@ -160,7 +165,7 @@ export async function createManager({
   ]
   async function dispatch(req, signal) {
     if (stopping) throw new HttpError(503, '应用正在退出')
-    if (!hostAllowed(req.headers.host ?? '', bind, allowHost))
+    if (!hostAllowed(req.headers.host ?? '', bind, allowHost, req.headers))
       throw new HttpError(403, '仅提供本机服务')
     const url = new URL(req.url, 'http://127.0.0.1'),
       route = url.pathname.replace(/\/$/, '')
@@ -200,6 +205,39 @@ export async function createManager({
     }
   })
   server.requestTimeout = 120000
+  // 页面连世界也走这一个端口：`/ws/<镇>` 原样转给世界进程，反代只要转发本服务这一个端口。
+  // 端口只按「正在运行的镇」查，不让请求自己指定去哪。
+  server.on('upgrade', (req, socket) => {
+    const refuse = (code, phrase, message) => {
+      const body = Buffer.from(message, 'utf8')
+      socket.write(
+        `HTTP/1.1 ${code} ${phrase}\r\ncontent-type: text/plain; charset=utf-8\r\n` +
+          `content-length: ${body.length}\r\nconnection: close\r\n\r\n` +
+          body.toString('utf8')
+      )
+      socket.destroy()
+    }
+    if (!hostAllowed(req.headers.host ?? '', bind, allowHost, req.headers))
+      return refuse(403, 'Forbidden', '仅提供本机服务')
+    const url = req.url ?? '/'
+    const cut = url.indexOf('?')
+    const id = /^\/ws\/([a-z0-9-]+)\/?$/.exec(cut < 0 ? url : url.slice(0, cut))?.[1]
+    const port = id ? hosts.worldPort(id) : null
+    if (!port) return refuse(404, 'Not Found', '这个小镇没在运行')
+    const query = cut < 0 ? '' : url.slice(cut + 1)
+    const upstream = net.connect(port, '127.0.0.1', () => {
+      // 世界只认查询串里的 session/ticket，路径换回 `/`；其余头（含 Upgrade）照原样带过去
+      const lines = [`${req.method} /?${query} HTTP/1.1`]
+      for (const [key, value] of Object.entries(req.headers))
+        if (value !== undefined)
+          lines.push(`${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+      upstream.write(lines.join('\r\n') + '\r\n\r\n')
+      socket.pipe(upstream).pipe(socket)
+    })
+    upstream.on('error', () => socket.destroy())
+    socket.on('error', () => upstream.destroy())
+    socket.on('close', () => upstream.destroy())
+  })
   try {
     await new Promise((resolve, reject) => {
       server.once('error', reject)
@@ -212,7 +250,8 @@ export async function createManager({
   console.log(`[town-manager] http://${bind}:${server.address().port} · ${root}`)
   if (!LOOPBACK.has(bind))
     console.log(
-      `[town-manager] 已对外开放：别的机器用这台机器的 IP:${server.address().port} 访问（HTTP 明文，公网请套 TLS 反向代理）`
+      `[town-manager] 已对外开放：别的机器用这台机器的 IP:${server.address().port} 访问（HTTP 明文；` +
+        '公网建议套 TLS 反向代理，只转这一个端口就够，WebSocket 也走它）'
     )
   /** 常驻小镇用管理员那份密钥跑；别人进镇时用自己那份，世界一旦跑起来沿用先打开的那份 */
   const residentConfig = async () => {

@@ -32,18 +32,26 @@ function hostName(host = '') {
 }
 
 /**
- * 页面拿到的世界地址：主机换成本次请求用的那台（世界端口不变），套了 TLS 时给 wss。
- * 只在本机看时不改，世界进程本来就在 127.0.0.1 上。
+ * 页面拿到的世界地址：主机换成本次请求用的那台，路径换成本服务的 `/ws/<镇>`，
+ * 由管理服务把连接转给世界进程——放到服务器上只开一个端口就够，反代也只需要转这一个。
+ * 只在本机看时不改，世界进程本来就在 127.0.0.1 上，直连更省一层。
+ * 套了 TLS（反代给 `x-forwarded-proto: https`）时给 wss。
  * `ticket` 是这次登录账号的入场票：世界凭票认人，地址上挂上它。
  */
-export function publicEndpoint(headers, info, ticket) {
+export function publicEndpoint(headers, info, ticket, id) {
   let page = info
   const name = hostName(headers?.host)
   if (info?.endpoint && name && !LOOPBACK.has(name)) {
     try {
       const url = new URL(info.endpoint)
-      url.hostname = name
-      if (`${headers['x-forwarded-proto'] ?? ''}`.toLowerCase() === 'https') url.protocol = 'wss:'
+      const secure = `${headers['x-forwarded-proto'] ?? ''}`.toLowerCase() === 'https'
+      // 反代给的是公开域名（多半没端口）；直连 IP 时 Host 里带着页面所在的那个端口，得留着
+      const netloc = headers['x-forwarded-host'] || headers.host
+      const [, onlyPort] = /:(\d+)$/.exec(netloc) ?? []
+      url.protocol = secure ? 'wss:' : 'ws:'
+      url.hostname = hostName(netloc)
+      url.port = onlyPort ?? ''
+      if (id) url.pathname = `/ws/${id}`
       page = { ...info, endpoint: url.toString() }
     } catch {
       page = info
@@ -602,7 +610,7 @@ export function createTownRoutes({
         // 世界是新的，内存里没有密钥：把投在这个镇里的 agent 再送一遍
         if (hosts.isRunning(id)) await sendOwnerKeys({ root, hosts, accounts, accountConfig }, id)
         const me = current(headers)
-        return publicEndpoint(headers, info, hosts.ticket(id, me?.id, me?.role === 'admin'))
+        return publicEndpoint(headers, info, hosts.ticket(id, me?.id, me?.role === 'admin'), id)
       },
     ],
     [
@@ -650,7 +658,8 @@ export function createTownRoutes({
         return publicEndpoint(
           headers,
           { ...info, resident: id, ready: Boolean(state?.ready) },
-          hosts.ticket(id, current(headers)?.id, current(headers)?.role === 'admin')
+          hosts.ticket(id, current(headers)?.id, current(headers)?.role === 'admin'),
+          id
         )
       },
     ],

@@ -86,6 +86,12 @@ export class Hosts {
     const record = this.running.get(id)
     return Boolean(record && alive(record.child))
   }
+  /** 这个镇的世界上游端口：只开一个端口时，管理服务把页面的世界连接转到这里；没在跑就是 null */
+  worldPort(id) {
+    const record = this.running.get(id)
+    if (!record || !alive(record.child) || !record.port) return null
+    return record.port
+  }
   /** 同时运行的小镇已经跑满（正在启动的也算；常驻的那一个不算） */
   full() {
     const live = [...this.running]
