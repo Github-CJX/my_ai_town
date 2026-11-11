@@ -16,6 +16,8 @@ serde_json.workspace = true
 rand = "0.8"
 sha2 = "0.10"
 tungstenite = "0.21"
+# 账本落 SQLite：与 agent 的 rusqlite 共用同一个 libsqlite3-sys（同版本才不冲突）
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

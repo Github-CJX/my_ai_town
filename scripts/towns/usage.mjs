@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { HttpError } from './http.mjs'
 import { listAgents } from './agents.mjs'
+import { addRequest, dayRows, openLedgerWithOld, pruneLedger, recentDays } from './ledger.mjs'
 import { costMicros, priceTable } from './prices.mjs'
 import { atomicJson, readJson, safeId } from './storage.mjs'
 
@@ -117,60 +118,30 @@ export const townName = async (storage, id) => {
 
 const number_of = (value) => (Number.isInteger(value) ? value : 0)
 
-/** 账号的跨天账本存这里：逐日逐人，请求号去重（世界那边的台账只留最近若干条，日计数过一天就归零）。 */
-export const ledgerFile = (root, userId) => path.join(root, 'users', safeId(userId), 'usage.json')
-
 const nowSecs = () => Math.floor(Date.now() / 1000)
 
 /** Unix 秒 → UTC 日期 `YYYY-MM-DD`（和 Rust 那边同一套算法）。 */
 const dayOf = (secs) => new Date(secs * 1000).toISOString().slice(0, 10)
 
-const blankDay = () => ({
-  calls: 0,
-  tokens: 0,
-  input_tokens: 0,
-  cache_hit_tokens: 0,
-  unmetered: 0,
-  estimated: 0,
-  // 花掉的钱（微元 = 元 × 1 000 000）：只算价目表里有的模型
-  cost_micros: 0,
-  priced: 0,
-  // 有计量、没价钱：钱不知道，不写成 0
-  unpriced: 0,
-})
+const DAY_KEYS = [
+  'calls',
+  'tokens',
+  'input_tokens',
+  'cache_hit_tokens',
+  'unmetered',
+  'estimated',
+  'cost_micros',
+  'priced',
+  'unpriced',
+]
 
-export async function readLedger(root, userId) {
-  const ledger = { days: {}, seen: {} }
-  let doc = {}
-  try {
-    doc = await readJson(ledgerFile(root, userId))
-  } catch {
-    return ledger
-  }
-  for (const [day, per] of Object.entries(doc?.days ?? {})) {
-    const row = {}
-    for (const [agent, usage] of Object.entries(per ?? {})) {
-      const here = blankDay()
-      for (const key of Object.keys(here)) here[key] = number_of(usage?.[key])
-      row[agent] = here
-    }
-    ledger.days[day] = row
-  }
-  for (const [key, at] of Object.entries(doc?.seen ?? {})) {
-    if (Number.isInteger(at)) ledger.seen[key] = at
-  }
-  return ledger
-}
-
-export async function saveLedger(root, userId, ledger) {
-  await atomicJson(ledgerFile(root, userId), ledger)
-}
+const blankDay = () => Object.fromEntries(DAY_KEYS.map((key) => [key, 0]))
 
 /**
- * 把世界这次的请求台账折进跨天账本：按请求号去重，还在路上的等它落定。
+ * 把世界这次的请求台账折进库：`(镇, 请求号)` 唯一，折过就不再计；还在路上的等它落定。
  * `owners` 是 居民 → agent 编号，不是自己投的那几位不记。
  */
-export function foldLedger(ledger, town, usage, owners, prices = new Map()) {
+export function foldLedger(db, town, usage, owners, prices = new Map()) {
   const now = nowSecs()
   for (const request of usage?.requests ?? []) {
     const resident = request?.resident_id
@@ -180,74 +151,47 @@ export function foldLedger(ledger, town, usage, owners, prices = new Map()) {
     if (request.status === 'in_flight' || request.status === '进行中') continue
     const sentAt = number_of(request.sent_at)
     const at = sentAt === 0 ? now : sentAt
-    const key = `${town}/${resident}/${at}/${number_of(request.id)}`
-    if (ledger.seen[key] != null) continue
-    ledger.seen[key] = at
-    const day = dayOf(at)
-    if (!ledger.days[day]) ledger.days[day] = {}
-    if (!ledger.days[day][agent]) ledger.days[day][agent] = blankDay()
-    const here = ledger.days[day][agent]
-    here.calls += 1
     const input = Number.isInteger(request.input_tokens) ? request.input_tokens : null
     const output = Number.isInteger(request.output_tokens) ? request.output_tokens : null
-    if (input !== null || output !== null) {
-      const cache = number_of(request.cache_hit_tokens)
-      here.tokens += (input ?? 0) + (output ?? 0)
-      here.input_tokens += input ?? 0
-      here.cache_hit_tokens += cache
-      const cost = costMicros(prices, request.model, input ?? 0, cache, output ?? 0)
-      if (cost === null) {
-        here.unpriced += 1
-      } else {
-        here.cost_micros += cost
-        here.priced += 1
-      }
-    } else {
-      // 没报计量的那次：真花掉的钱是「不知道」，估算值另放一栏，不写成 0 token
-      here.unmetered += 1
-      here.estimated += number_of(request.reserved_tokens)
-    }
+    const metered = input !== null || output !== null
+    const cache = number_of(request.cache_hit_tokens)
+    addRequest(db, {
+      town,
+      request_id: `${at}/${number_of(request.id)}`,
+      resident,
+      agent,
+      day: dayOf(at),
+      sent_at: at,
+      model: request.model ?? null,
+      status: request.status ?? '',
+      input: input ?? 0,
+      cache,
+      output: output ?? 0,
+      reserved: number_of(request.reserved_tokens),
+      metered,
+      cost: metered ? costMicros(prices, request.model, input ?? 0, cache, output ?? 0) : null,
+    })
   }
 }
 
-/** 留 30 天的日账、8 天的请求号：再旧的世界那边也早看不到了。 */
-export function pruneLedger(ledger, now = nowSecs()) {
-  const keepDays = dayOf(now - 30 * 86400)
-  for (const day of Object.keys(ledger.days)) if (day < keepDays) delete ledger.days[day]
-  const keepAfter = now - 8 * 86400
-  for (const [key, at] of Object.entries(ledger.seen)) if (at < keepAfter) delete ledger.seen[key]
-}
-
-/** 最近几天的账，新的在前。 */
-export function historyOf(ledger, days, names = new Map()) {
-  return Object.keys(ledger.days)
-    .sort()
-    .reverse()
-    .slice(0, days)
-    .map((day) => {
-      const sums = blankDay()
-      const agents = []
-      for (const [agent, here] of Object.entries(ledger.days[day])) {
-        sums.calls += here.calls
-        sums.tokens += here.tokens
-        sums.input_tokens += here.input_tokens
-        sums.cache_hit_tokens += here.cache_hit_tokens
-        sums.unmetered += here.unmetered
-        sums.estimated += here.estimated
-        sums.cost_micros += here.cost_micros
-        sums.priced += here.priced
-        sums.unpriced += here.unpriced
-        agents.push({
-          agent_id: agent,
-          name: names.get(agent) ?? agent,
-          calls: here.calls,
-          tokens: here.tokens,
-          unmetered: here.unmetered,
-          cost_micros: here.cost_micros,
-        })
-      }
-      return { day, ...sums, agents }
-    })
+/** 最近几天的账，新的在前：`recent` 是 `recentDays()` 的结果。 */
+export function historyOf(recent, names = new Map()) {
+  return recent.map(([day, perAgent]) => {
+    const sums = blankDay()
+    const agents = []
+    for (const [agent, here] of perAgent) {
+      for (const key of DAY_KEYS) sums[key] += number_of(here?.[key])
+      agents.push({
+        agent_id: agent,
+        name: names.get(agent) ?? agent,
+        calls: here.calls,
+        tokens: here.tokens,
+        unmetered: here.unmetered,
+        cost_micros: here.cost_micros,
+      })
+    }
+    return { day, ...sums, agents }
+  })
 }
 
 /** 某个镇此刻的用量（没在跑就是 null）。 */
@@ -273,15 +217,18 @@ export async function foldTowns({ root, userId, hosts }) {
       owners.get(town).set(record.resident, agent.id)
     }
   }
-  const ledger = await readLedger(root, userId)
-  const before = JSON.stringify(ledger)
-  const prices = await priceTable(root, userId)
-  for (const [town, usage] of towns) {
-    const mine = owners.get(town)
-    if (usage && mine) foldLedger(ledger, town, usage, mine, prices)
+  const db = await openLedgerWithOld(root, userId)
+  try {
+    const prices = await priceTable(root, userId)
+    for (const [town, usage] of towns) {
+      const mine = owners.get(town)
+      if (usage && mine) foldLedger(db, town, usage, mine, prices)
+    }
+    // 留 30 天：再旧的世界那边也早看不到了
+    pruneLedger(db, dayOf(nowSecs() - 30 * 86400))
+  } finally {
+    db.close()
   }
-  pruneLedger(ledger)
-  if (JSON.stringify(ledger) !== before) await saveLedger(root, userId, ledger)
 }
 
 /**
@@ -333,28 +280,33 @@ export async function usageSummary({ root, userId, hosts, storage }) {
     }
   }
   // 账本是给「过了今天」看的：世界的日计数会在换天时归零，这里留一份不会丢的
-  const ledger = await readLedger(root, userId)
-  const before = JSON.stringify(ledger)
-  const prices = await priceTable(root, userId)
-  for (const [town, usage] of towns) {
-    const mine = owners.get(town)
-    if (usage && mine) foldLedger(ledger, town, usage, mine, prices)
+  const db = await openLedgerWithOld(root, userId)
+  let today
+  let history
+  try {
+    const prices = await priceTable(root, userId)
+    for (const [town, usage] of towns) {
+      const mine = owners.get(town)
+      if (usage && mine) foldLedger(db, town, usage, mine, prices)
+    }
+    pruneLedger(db, dayOf(nowSecs() - 30 * 86400))
+    // 今天花掉的钱只存在账本里（世界的 resident 行只有 token）
+    today = dayRows(db, dayOf(nowSecs()))
+    history = historyOf(recentDays(db, 7), names)
+  } finally {
+    db.close()
   }
-  pruneLedger(ledger)
-  if (JSON.stringify(ledger) !== before) await saveLedger(root, userId, ledger)
-  // 今天花掉的钱只存在账本里（世界的 resident 行只有 token）
-  const today = ledger.days[dayOf(nowSecs())] ?? {}
   let costMicrosToday = 0
   let pricedToday = 0
   let unpricedToday = 0
-  for (const here of Object.values(today)) {
+  for (const here of today.values()) {
     costMicrosToday += here.cost_micros
     pricedToday += here.priced
     unpricedToday += here.unpriced
   }
-  for (const row of rows) row.cost_micros = today[row.agent_id]?.cost_micros ?? 0
+  for (const row of rows) row.cost_micros = today.get(row.agent_id)?.cost_micros ?? 0
   totals.cost_micros = costMicrosToday
   totals.priced = pricedToday
   totals.unpriced = unpricedToday
-  return { ok: true, budget, totals, agents: rows, history: historyOf(ledger, 7, names) }
+  return { ok: true, budget, totals, agents: rows, history }
 }

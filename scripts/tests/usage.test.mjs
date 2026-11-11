@@ -1,12 +1,21 @@
 // 账号的跨天账本：世界的日计数换天就归零、请求台账只留最近若干条，
-// 所以管理服务按请求号去重地留一份，过了今天也查得到
-// （scripts/towns/usage.mjs / crates/manager/src/usage.rs 同一套规则）。
+// 所以管理服务把请求一行一行落进 SQLite（`usage.db`），过了今天也查得到、对得起来
+// （scripts/towns/ledger.mjs / crates/manager/src/ledger.rs 同一套表与规则）。
 import assert from 'node:assert/strict'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { foldLedger, historyOf, pruneLedger, readLedger, saveLedger } from '../towns/usage.mjs'
+import { foldLedger, historyOf } from '../towns/usage.mjs'
+import {
+  addRequest,
+  countRequests,
+  dayRows,
+  openLedger,
+  openLedgerWithOld,
+  pruneLedger,
+  recentDays,
+} from '../towns/ledger.mjs'
 import { costMicros, priceOf } from '../towns/prices.mjs'
 
 const AT = 1_700_000_000 // 2023-11-14 UTC
@@ -45,46 +54,66 @@ const sample = () => ({
   ],
 })
 
-test('同一条请求折两次只算一次，没报计量的另放一栏', () => {
-  const ledger = { days: {}, seen: {} }
-  foldLedger(ledger, 'town-1', sample(), owners, prices)
-  foldLedger(ledger, 'town-1', sample(), owners, prices)
-  assert.equal(Object.keys(ledger.seen).length, 3)
-  const here = ledger.days['2023-11-14'].a1
-  assert.equal(here.calls, 3)
-  assert.equal(here.tokens, 160, '只算服务商报回来的')
-  assert.equal(here.input_tokens, 130)
-  assert.equal(here.cache_hit_tokens, 40)
-  assert.equal(here.unmetered, 1)
-  assert.equal(here.estimated, 150, '估算值另放一栏，不混进真花掉的钱')
-  // 120 输入里 40 命中：80 × 2 + 40 × 0.5 + 30 × 8 = 420 微元
-  assert.equal(here.cost_micros, 420)
-  assert.equal(here.priced, 1)
-  assert.equal(here.unpriced, 1, '有计量没价钱的单列，不写成 0')
-  assert.deepEqual(Object.keys(ledger.days['2023-11-14']), ['a1'], '别的居民不进这个账号的账本')
+const home = async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'town-usage-'))
+  return { root, done: () => rm(root, { recursive: true, force: true }) }
+}
 
-  // 换天以后世界那边归零了，最近的账还在这里
-  foldLedger(
-    ledger,
-    'town-1',
-    {
-      requests: [
-        { id: 1, resident_id: 'r1', status: 'adopted', sent_at: AT + 86_400 * 2, input_tokens: 10 },
-      ],
-    },
-    owners,
-    prices
-  )
-  const week = historyOf(ledger, 7, new Map([['a1', '阿岚']]))
-  assert.deepEqual(
-    week.map((day) => day.day),
-    ['2023-11-16', '2023-11-14'],
-    '新的在前'
-  )
-  assert.equal(week[1].calls, 3)
-  assert.equal(week[1].cost_micros, 420)
-  assert.equal(week[1].unpriced, 1)
-  assert.equal(week[0].agents[0].name, '阿岚')
+test('同一条请求折两次只算一次，没报计量的另放一栏', async () => {
+  const { root, done } = await home()
+  try {
+    const db = openLedger(root, 'u1')
+    try {
+      foldLedger(db, 'town-1', sample(), owners, prices)
+      foldLedger(db, 'town-1', sample(), owners, prices)
+      assert.equal(countRequests(db), 3, '三条落定的请求各记一行')
+      const here = dayRows(db, '2023-11-14').get('a1')
+      assert.equal(here.calls, 3)
+      assert.equal(here.tokens, 160, '只算服务商报回来的')
+      assert.equal(here.input_tokens, 130)
+      assert.equal(here.cache_hit_tokens, 40)
+      assert.equal(here.unmetered, 1)
+      assert.equal(here.estimated, 150, '估算值另放一栏，不混进真花掉的钱')
+      // 120 输入里 40 命中：80 × 2 + 40 × 0.5 + 30 × 8 = 420 微元
+      assert.equal(here.cost_micros, 420)
+      assert.equal(here.priced, 1)
+      assert.equal(here.unpriced, 1, '有计量没价钱的单列，不写成 0')
+      assert.deepEqual([...dayRows(db, '2023-11-14').keys()], ['a1'], '别的居民不进这个账号的账本')
+
+      // 换天以后世界那边归零了，最近的账还在这里
+      foldLedger(
+        db,
+        'town-1',
+        {
+          requests: [
+            {
+              id: 1,
+              resident_id: 'r1',
+              status: 'adopted',
+              sent_at: AT + 86_400 * 2,
+              input_tokens: 10,
+            },
+          ],
+        },
+        owners,
+        prices
+      )
+      const week = historyOf(recentDays(db, 7), new Map([['a1', '阿岚']]))
+      assert.deepEqual(
+        week.map((day) => day.day),
+        ['2023-11-16', '2023-11-14'],
+        '新的在前'
+      )
+      assert.equal(week[1].calls, 3)
+      assert.equal(week[1].cost_micros, 420)
+      assert.equal(week[1].unpriced, 1)
+      assert.equal(week[0].agents[0].name, '阿岚')
+    } finally {
+      db.close()
+    }
+  } finally {
+    await done()
+  }
 })
 
 test('价目表按三档单价算钱，只写模型名也认', () => {
@@ -97,52 +126,100 @@ test('价目表按三档单价算钱，只写模型名也认', () => {
   assert.equal(priceOf(prices, 'deepseek-chat')?.output, 8)
 })
 
-test('账本存得住：读回来还是那几天', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'town-usage-'))
+test('账本存得住：重开还是那几天，旧 usage.json 导进来就改名留底', async () => {
+  const { root, done } = await home()
   try {
-    const ledger = { days: {}, seen: {} }
-    foldLedger(ledger, 'town-1', sample(), owners, prices)
-    await saveLedger(root, 'u1', ledger)
-    const back = await readLedger(root, 'u1')
-    assert.deepEqual(back, ledger)
-    // 文件不在时当空账本，不是报错
-    assert.deepEqual(await readLedger(root, 'u2'), { days: {}, seen: {} })
+    const db = openLedger(root, 'u1')
+    foldLedger(db, 'town-1', sample(), owners, prices)
+    db.close()
+    const back = openLedger(root, 'u1')
+    assert.equal(countRequests(back), 3)
+    assert.equal(dayRows(back, '2023-11-14').get('a1').calls, 3)
+    back.close()
     const files = await readdir(path.join(root, 'users', 'u1'))
-    assert.deepEqual(files, ['usage.json'], '存成一份 usage.json，不散落')
+    assert.deepEqual(files, ['usage.db'], '存成一份 usage.db，不散落')
+
+    // 旧版本的 usage.json：第一次打开时导进日账，然后改名
+    const old = path.join(root, 'users', 'u2')
+    await mkdir(old, { recursive: true })
+    await writeFile(
+      path.join(old, 'usage.json'),
+      JSON.stringify({
+        days: { '2023-11-13': { a1: { calls: 5, tokens: 600, cost_micros: 900 } } },
+      })
+    )
+    const imported = await openLedgerWithOld(root, 'u2')
+    assert.equal(dayRows(imported, '2023-11-13').get('a1').calls, 5)
+    assert.equal(dayRows(imported, '2023-11-13').get('a1').cost_micros, 900)
+    imported.close()
+    const after = await readdir(path.join(root, 'users', 'u2'))
+    assert.deepEqual(after.sort(), ['usage.db', 'usage.json.imported'], '旧文件改名留底')
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await done()
   }
 })
 
-test('旧日子和旧请求号会被清掉', () => {
-  const ledger = {
-    days: {
-      '2023-10-01': {
-        a1: {
-          calls: 1,
-          tokens: 1,
-          input_tokens: 1,
-          cache_hit_tokens: 0,
-          unmetered: 0,
-          estimated: 0,
-        },
-      },
-      '2023-11-13': {
-        a1: {
-          calls: 1,
-          tokens: 1,
-          input_tokens: 1,
-          cache_hit_tokens: 0,
-          unmetered: 0,
-          estimated: 0,
-        },
-      },
-    },
-    seen: { old: AT - 20 * 86_400, recent: AT - 86_400 },
+test('旧日子连请求行一起清掉', async () => {
+  const { root, done } = await home()
+  try {
+    const db = openLedger(root, 'u1')
+    const entry = (day, requestId) => ({
+      town: 'town-1',
+      request_id: requestId,
+      resident: 'r1',
+      agent: 'a1',
+      day,
+      sent_at: AT,
+      model: null,
+      status: 'adopted',
+      input: 0,
+      cache: 0,
+      output: 0,
+      reserved: 0,
+      metered: false,
+      cost: null,
+    })
+    addRequest(db, entry('2023-10-01', '1'))
+    addRequest(db, entry('2023-11-13', '2'))
+    pruneLedger(db, '2023-11-01')
+    assert.equal(countRequests(db), 1)
+    assert.equal(dayRows(db, '2023-10-01').size, 0)
+    assert.equal(dayRows(db, '2023-11-13').size, 1)
+    db.close()
+  } finally {
+    await done()
   }
-  pruneLedger(ledger, AT)
-  assert.equal(ledger.days['2023-10-01'], undefined)
-  assert.ok(ledger.days['2023-11-13'])
-  assert.equal(ledger.seen.old, undefined)
-  assert.equal(ledger.seen.recent, AT - 86_400)
+})
+
+// 同一个 `usage.db` 两边都写：Rust 用 rusqlite、Node 用 node:sqlite，
+// 所以建表与写入语句必须逐字一样。这条用例把两份源码里的 SQL 抽出来对齐，
+// 谁悄悄改了列名或汇总口径，这里就红。
+test('Rust 与 Node 的建表、去重与汇总语句逐字一致', async () => {
+  const rust = await readFile(
+    path.join(import.meta.dirname, '..', '..', 'crates', 'manager', 'src', 'ledger.rs'),
+    'utf8'
+  )
+  const node = await readFile(path.join(import.meta.dirname, '..', 'towns', 'ledger.mjs'), 'utf8')
+  const norm = (text) =>
+    text
+      .replace(/\s+/g, ' ')
+      .replace(/\s*,\s*/g, ',')
+      .replace(/\?[0-9]+/g, '?')
+      .trim()
+  const pick = (text, pattern) => {
+    const found = text.match(pattern)
+    assert.ok(found, `没找到：${pattern}`)
+    return norm(found[0])
+  }
+  const taken = (text) => [
+    pick(text, /CREATE TABLE IF NOT EXISTS request\([\s\S]*?\);/),
+    pick(text, /CREATE INDEX IF NOT EXISTS request_by_day ON request\(day, agent\)/),
+    pick(text, /CREATE TABLE IF NOT EXISTS day\([\s\S]*?\);/),
+    pick(text, /INSERT OR IGNORE INTO request\([\s\S]*?VALUES \([^)]*\)/),
+    pick(text, /INSERT INTO day\([\s\S]*?unpriced = unpriced \+ excluded\.unpriced/),
+  ]
+  const a = taken(rust)
+  const b = taken(node)
+  for (const [index, sql] of a.entries())
+    assert.equal(b[index], sql, `第 ${index + 1} 条语句不一致`)
 })

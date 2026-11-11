@@ -4,7 +4,8 @@
 //! 由世界按居民执行（`set_resident_budget`）。两项都可以空着，空着的那项就沿用世界的全镇额度。
 //!
 //! 世界那边的台账只留最近若干条，日计数过一天就归零；所以账号这边另记一本跨天的账
-//! （`usage.json`）：逐日逐人累加，请求号去重，过几天再清掉旧的。
+//! （`usage.db`，SQLite：一次请求一行 + 按天按人的汇总，见 `ledger` 模块）：请求号去重，
+//! 底部（页面）只读汇总，对账才翻到请求行；过 30 天再清掉。
 use crate::agents::{self, Agent};
 use crate::error::ApiError;
 use crate::hosts::Hosts;
@@ -135,11 +136,6 @@ pub fn push(
     Ok(())
 }
 
-/// 账号的跨天账本存这里：逐日逐人，请求号去重。
-pub fn ledger_file(home: &Path) -> PathBuf {
-    home.join("usage.json")
-}
-
 /// 一天一个人的用量。`tokens` 只算服务商报回来的；没报回来的那几次记在 `unmetered`，
 /// 预留的估算值记在 `estimated`——「不知道」留在另一栏，不混进真花掉的钱。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,28 +163,6 @@ pub struct DayUsage {
     pub unpriced: u64,
 }
 
-/// 逐日逐人的账本，外加已经折进去的请求号（折过就不再重复计）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Ledger {
-    #[serde(default)]
-    pub days: BTreeMap<String, BTreeMap<String, DayUsage>>,
-    /// 请求号 → 发出时间（Unix 秒）。请求序号在世界重启后会从头来，所以号里带着镇、居民与发出时间。
-    #[serde(default)]
-    pub seen: BTreeMap<String, u64>,
-}
-
-pub fn read_ledger(home: &Path) -> Ledger {
-    storage::read_json(&ledger_file(home))
-        .ok()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_ledger(home: &Path, ledger: &Ledger) -> Result<(), ApiError> {
-    let value = serde_json::to_value(ledger).map_err(|_| ApiError::bad("账本存不下来"))?;
-    storage::write_json(&ledger_file(home), &value)
-}
-
 fn usage_of(hosts: &Hosts, town: &str) -> Option<Value> {
     if !hosts.is_running(town) {
         return None;
@@ -200,15 +174,15 @@ fn usage_of(hosts: &Hosts, town: &str) -> Option<Value> {
         .ok()
 }
 
-/// 把世界这次的请求台账折进跨天账本：按请求号去重，还在路上的等它落定。
+/// 把世界这次的请求台账折进 SQLite 账本：`(镇, 请求号)` 唯一，重复折不会重复计。
 /// `owners` 是 居民 → (agent 编号, agent 名字)，不是自己投的那几位不记。
 fn fold(
-    ledger: &mut Ledger,
+    connection: &mut rusqlite::Connection,
     town: &str,
     usage: &Value,
     owners: &BTreeMap<String, (String, String)>,
     prices: &crate::prices::Table,
-) {
+) -> Result<(), ApiError> {
     let now = unix_now();
     for request in usage["requests"].as_array().into_iter().flatten() {
         let Some(resident) = request["resident_id"].as_str() else {
@@ -224,59 +198,48 @@ fn fold(
         }
         let sent_at = number_of(&request["sent_at"]);
         let at = if sent_at == 0 { now } else { sent_at };
-        let key = format!("{town}/{resident}/{at}/{}", number_of(&request["id"]));
-        if ledger.seen.contains_key(&key) {
-            continue;
-        }
-        ledger.seen.insert(key, at);
-        let here = ledger
-            .days
-            .entry(utc_day(at))
-            .or_default()
-            .entry(agent_id.clone())
-            .or_default();
-        here.calls += 1;
+        let day = utc_day(at);
+        // 世界重启后请求号会从头来：号里带上发出时间才唯一
+        let request_id = format!("{at}/{}", number_of(&request["id"]));
         let input = request["input_tokens"].as_u64();
         let output = request["output_tokens"].as_u64();
-        if input.is_some() || output.is_some() {
-            let input = input.unwrap_or(0);
-            let output = output.unwrap_or(0);
-            let cache = number_of(&request["cache_hit_tokens"]);
-            here.tokens += input + output;
-            here.input_tokens += input;
-            here.cache_hit_tokens += cache;
-            match prices.cost_micros(request["model"].as_str(), input, cache, output) {
-                Some(cost) => {
-                    here.cost_micros += cost;
-                    here.priced += 1;
-                }
-                // 有计量、没价钱：记下来，不折算成 0
-                None => here.unpriced += 1,
-            }
+        let metered = input.is_some() || output.is_some();
+        let input = input.unwrap_or(0);
+        let output = output.unwrap_or(0);
+        let cache = number_of(&request["cache_hit_tokens"]);
+        let cost = if metered {
+            prices.cost_micros(request["model"].as_str(), input, cache, output)
         } else {
-            here.unmetered += 1;
-            here.estimated += number_of(&request["reserved_tokens"]);
-        }
+            None
+        };
+        let entry = crate::ledger::Entry {
+            town,
+            request_id: &request_id,
+            resident,
+            agent: agent_id,
+            day: &day,
+            sent_at: at,
+            model: request["model"].as_str(),
+            status,
+            input,
+            cache,
+            output,
+            reserved: number_of(&request["reserved_tokens"]),
+            metered,
+            cost,
+        };
+        crate::ledger::add(connection, &entry)?;
     }
-}
-
-/// 留 30 天的日账、8 天的请求号：再旧的世界那边也早看不到了。
-fn prune(ledger: &mut Ledger, now: u64) {
-    let keep_days = utc_day(now.saturating_sub(30 * 86_400));
-    ledger
-        .days
-        .retain(|day, _| day.as_str() >= keep_days.as_str());
-    let keep_after = now.saturating_sub(8 * 86_400);
-    ledger.seen.retain(|_, at| *at >= keep_after);
+    Ok(())
 }
 
 /// 最近几天的账，新的在前。
-fn history(ledger: &Ledger, days: usize, names: &BTreeMap<String, String>) -> Value {
-    let mut recent: Vec<(&String, &BTreeMap<String, DayUsage>)> = ledger.days.iter().collect();
-    recent.sort_by(|left, right| right.0.cmp(left.0));
+fn history(
+    recent: &[(String, BTreeMap<String, DayUsage>)],
+    names: &BTreeMap<String, String>,
+) -> Value {
     let rows: Vec<Value> = recent
-        .into_iter()
-        .take(days)
+        .iter()
         .map(|(day, per_agent)| {
             let mut sums = DayUsage::default();
             let mut agents = Vec::new();
@@ -361,21 +324,22 @@ fn gather(hosts: &Hosts, agents: &[Agent]) -> (Towns, Owners) {
     (towns, owners)
 }
 
-/// 把这次拿到的请求台账折进跨天账本，变过才写回去。
-fn fold_into(home: &Path, towns: &Towns, owners: &Owners) -> Result<Ledger, ApiError> {
-    let mut ledger = read_ledger(home);
-    let before = ledger.clone();
+/// 把这次拿到的请求台账折进 SQLite 账本，顺手清掉过期的。
+fn fold_into(
+    connection: &mut rusqlite::Connection,
+    home: &Path,
+    towns: &Towns,
+    owners: &Owners,
+) -> Result<(), ApiError> {
     let prices = crate::prices::table(home);
     for (town, usage) in towns {
         if let (Some(usage), Some(by_resident)) = (usage, owners.get(town)) {
-            fold(&mut ledger, town, usage, by_resident, &prices);
+            fold(connection, town, usage, by_resident, &prices)?;
         }
     }
-    prune(&mut ledger, unix_now());
-    if ledger != before {
-        save_ledger(home, &ledger)?;
-    }
-    Ok(ledger)
+    // 留 30 天：再旧的世界那边也早看不到了
+    crate::ledger::prune(connection, &utc_day(unix_now().saturating_sub(30 * 86_400)))?;
+    Ok(())
 }
 
 /// 心跳里顺手折一次：人不在首页（没有 `GET /usage`）也不会把昨天丢掉。
@@ -385,8 +349,8 @@ pub fn fold_towns(hosts: &Hosts, home: &Path) -> Result<(), ApiError> {
         return Ok(());
     }
     let (towns, owners) = gather(hosts, &agents);
-    fold_into(home, &towns, &owners)?;
-    Ok(())
+    let mut connection = crate::ledger::open(home)?;
+    fold_into(&mut connection, home, &towns, &owners)
 }
 
 /// 这个账号今天用了多少：把每个镇里自己那几位居民的用量加起来；顺手把今天的请求折进跨天账本。
@@ -396,7 +360,8 @@ pub fn summary(hosts: &Hosts, storage: &Storage, home: &Path) -> Result<Value, A
     let budget = read(home);
     let (towns, owners) = gather(hosts, &agents);
     // 账本是给「过了今天」看的：世界的日计数会在换天时归零，这里留一份不会丢的
-    let ledger = fold_into(home, &towns, &owners)?;
+    let mut connection = crate::ledger::open(home)?;
+    fold_into(&mut connection, home, &towns, &owners)?;
     let names: BTreeMap<String, String> = agents
         .iter()
         .map(|agent| (agent.id.clone(), agent.name.clone()))
@@ -405,19 +370,17 @@ pub fn summary(hosts: &Hosts, storage: &Storage, home: &Path) -> Result<Value, A
     let (mut calls, mut tokens, mut unmetered) = (0u64, 0u64, 0u64);
     // 今天花掉的钱只存在账本里（世界的 resident 行只有 token），从今天那一行取
     let today = utc_day(unix_now());
-    let today_rows = ledger.days.get(&today);
+    let today_rows = crate::ledger::day(&connection, &today)?;
     let mut cost_micros = 0u64;
     let mut priced = 0u64;
     let mut unpriced = 0u64;
-    if let Some(per_agent) = today_rows {
-        for here in per_agent.values() {
-            cost_micros += here.cost_micros;
-            priced += here.priced;
-            unpriced += here.unpriced;
-        }
+    for here in today_rows.values() {
+        cost_micros += here.cost_micros;
+        priced += here.priced;
+        unpriced += here.unpriced;
     }
     for agent in &agents {
-        let money = today_rows.and_then(|per_agent| per_agent.get(&agent.id));
+        let money = today_rows.get(&agent.id);
         for (town, here) in &agent.deployed {
             let usage = towns.get(town).cloned().unwrap_or(None);
             let empty = Value::Null;
@@ -480,7 +443,7 @@ pub fn summary(hosts: &Hosts, storage: &Storage, home: &Path) -> Result<Value, A
             "unpriced": unpriced,
         },
         "agents": rows,
-        "history": history(&ledger, 7, &names),
+        "history": history(&crate::ledger::days(&connection, 7)?, &names),
     }))
 }
 
@@ -576,7 +539,7 @@ mod tests {
     #[test]
     fn a_request_is_folded_into_the_ledger_once_and_unmetered_keeps_its_own_column() {
         let home = temp_home();
-        let mut ledger = Ledger::default();
+        let mut connection = crate::ledger::open(&home).expect("开账本");
         let owners: BTreeMap<String, (String, String)> =
             [("r1".to_string(), ("a1".to_string(), "阿岚".to_string()))]
                 .into_iter()
@@ -600,10 +563,10 @@ mod tests {
             ]
         });
         let prices = crate::prices::table(&home);
-        fold(&mut ledger, "town-1", &usage, &owners, &prices);
-        fold(&mut ledger, "town-1", &usage, &owners, &prices);
-        assert_eq!(ledger.seen.len(), 3, "三条落定的请求各记一次");
-        let day = ledger.days.get("2023-11-14").expect("折进请求发出那天");
+        fold(&mut connection, "town-1", &usage, &owners, &prices).expect("折账本");
+        fold(&mut connection, "town-1", &usage, &owners, &prices).expect("再折一次");
+        assert_eq!(crate::ledger::requests(&connection).expect("数请求"), 3);
+        let day = crate::ledger::day(&connection, "2023-11-14").expect("读日账");
         let mine = day.get("a1").expect("阿岚那行");
         assert_eq!(mine.calls, 3);
         assert_eq!(mine.tokens, 160, "只算服务商报回来的");
@@ -621,7 +584,8 @@ mod tests {
         let names: BTreeMap<String, String> = [("a1".to_string(), "阿岚".to_string())]
             .into_iter()
             .collect();
-        let view = history(&ledger, 7, &names);
+        let recent = crate::ledger::days(&connection, 7).expect("读几天");
+        let view = history(&recent, &names);
         assert_eq!(view[0]["day"], "2023-11-14");
         assert_eq!(view[0]["calls"], 3);
         assert_eq!(view[0]["cost_micros"], 420);
@@ -629,26 +593,62 @@ mod tests {
         assert_eq!(view[0]["agents"][0]["name"], "阿岚");
     }
 
-    /// 留 30 天的日账、8 天的请求号，再旧的就清掉
+    /// 旧版本的 `usage.json` 第一次打开时导进库里，文件改名留底
     #[test]
-    fn the_ledger_keeps_only_recent_days_and_recent_request_ids() {
-        let mut ledger = Ledger::default();
-        let now = 1_700_000_000u64; // 2023-11-14
-        ledger.days.insert(
-            "2023-10-01".into(),
-            BTreeMap::from([("a1".into(), DayUsage::default())]),
+    fn an_old_json_ledger_is_imported_once_and_kept_aside() {
+        let home = temp_home();
+        storage::write_json(
+            &home.join("usage.json"),
+            &json!({
+                "days": { "2023-11-13": { "a1": { "calls": 5, "tokens": 600, "cost_micros": 900 } } },
+                "seen": { "town-1/r1/1/1": 1_700_000_000u64 }
+            }),
+        )
+        .expect("写旧账本");
+        let connection = crate::ledger::open(&home).expect("开账本");
+        let day = crate::ledger::day(&connection, "2023-11-13").expect("读日账");
+        assert_eq!(day["a1"].calls, 5);
+        assert_eq!(day["a1"].tokens, 600);
+        assert_eq!(day["a1"].cost_micros, 900);
+        assert!(!home.join("usage.json").exists(), "旧文件已改名");
+        assert!(home.join("usage.json.imported").exists());
+    }
+
+    /// 过 30 天的请求行与日账一起清掉
+    #[test]
+    fn only_the_recent_days_stay_in_the_ledger() {
+        let home = temp_home();
+        let mut connection = crate::ledger::open(&home).expect("开账本");
+        for (day, id) in [("2023-10-01", "1"), ("2023-11-13", "2")] {
+            let entry = crate::ledger::Entry {
+                town: "town-1",
+                request_id: id,
+                resident: "r1",
+                agent: "a1",
+                day,
+                sent_at: 1,
+                model: None,
+                status: "adopted",
+                input: 0,
+                cache: 0,
+                output: 0,
+                reserved: 0,
+                metered: false,
+                cost: None,
+            };
+            crate::ledger::add(&mut connection, &entry).expect("记一条");
+        }
+        crate::ledger::prune(&connection, "2023-11-01").expect("清理");
+        assert_eq!(crate::ledger::requests(&connection).expect("数请求"), 1);
+        assert!(crate::ledger::day(&connection, "2023-10-01")
+            .expect("读日账")
+            .is_empty());
+        assert_eq!(
+            crate::ledger::day(&connection, "2023-11-13")
+                .expect("读日账")
+                .len(),
+            1
         );
-        ledger.days.insert(
-            "2023-11-13".into(),
-            BTreeMap::from([("a1".into(), DayUsage::default())]),
-        );
-        ledger.seen.insert("old".into(), now - 20 * 86_400);
-        ledger.seen.insert("recent".into(), now - 86_400);
-        prune(&mut ledger, now);
-        assert!(!ledger.days.contains_key("2023-10-01"));
-        assert!(ledger.days.contains_key("2023-11-13"));
-        assert!(!ledger.seen.contains_key("old"));
-        assert!(ledger.seen.contains_key("recent"));
     }
 
     /// 账本按 UTC 日期分组，和世界那边记的发出时间对得上

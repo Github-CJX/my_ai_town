@@ -455,6 +455,7 @@ dependencies = [
  "host",
  "libc",
  "rand",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
