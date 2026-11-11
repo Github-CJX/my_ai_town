@@ -108,7 +108,11 @@ impl ResidentRuntime {
             return false;
         }
         let success = item.status == InteractionStatus::Succeeded;
-        let value = json!({"ok":success,"interaction":item});
+        let mut value = json!({"ok":success,"interaction":item});
+        if let Some(outcome) = kernel::scene::SceneOutcome::of_interaction(world, &s.actor_id, item)
+        {
+            value["outcome"] = json!(outcome);
+        }
         self.complete_tool(
             world,
             s,
@@ -149,7 +153,12 @@ impl ResidentRuntime {
         } else if group.status == GroupStatus::Succeeded {
             s.streaks.failures = Default::default();
         }
-        let value = json!({"ok":group.status==GroupStatus::Succeeded,"group":group});
+        // 场景结果：叙述只能照这里说（在哪儿、什么姿态、在做什么、身边有谁、和谁有接触）。
+        let outcome = kernel::scene::SceneOutcome::of_group(world, &s.actor_id, &group);
+        let mut value = json!({"ok":group.status==GroupStatus::Succeeded,"group":group});
+        if let Some(outcome) = outcome {
+            value["outcome"] = json!(outcome);
+        }
         if reported_running {
             s.messages.push(Message::text(
                 Role::User,

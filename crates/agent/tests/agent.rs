@@ -8,3 +8,4 @@ mod resident_notebook;
 mod resident_possession;
 mod resident_reading;
 mod resident_runtime;
+mod scene;

@@ -708,7 +708,13 @@ fn execute_interaction(
     if let Some(object) = view.as_object_mut() {
         object.remove("entries");
     }
-    complete(json!({"interaction":view}))
+    // 场景结果：状态与事实由世界给，叙述只能照它说。
+    let outcome = kernel::scene::SceneOutcome::of_interaction(ctx.world, &actor, &result);
+    let mut value = json!({"interaction":view});
+    if let Some(outcome) = outcome {
+        value["outcome"] = json!(outcome);
+    }
+    complete(value)
 }
 fn run_actions(ctx: &mut ToolContext, call: &ToolCall) -> Result<ToolOutcome, ToolError> {
     let args = action_arguments::decode(&call.arguments)?;
