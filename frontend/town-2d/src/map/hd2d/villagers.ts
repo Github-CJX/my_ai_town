@@ -36,8 +36,11 @@ const STRIDE = 1.6 * PIXEL
 const STEP = 4 * STRIDE
 /** 相邻两份名册离得比这远就直接放过去（进出门、换地点），不走过场 */
 const JUMP = 400
-/** 服务端一拍（毫秒），名册按这个间隔来 */
+/** 服务端一拍（毫秒）的默认值：第一份名册还没有实测，先用它 */
 const TICK_MS = 100
+/** 实测拍距的合理范围：一拍约 107 毫秒，快进时一份名册代表的模拟时间更长，卡一下也会变长 */
+const BEAT_MIN_MS = 40
+const BEAT_MAX_MS = 400
 /** 刚来一份名册时立牌比它晚多久：两拍，下一份晚到一拍也还有路可走 */
 const DELAY_MS = 200
 /** 落后超过这么久（切到后台回来、断线重连）就直接跳到最新，不快放 */
@@ -200,6 +203,11 @@ export class Villagers {
   private sky = false
   /** 最新一份名册在时间轴上的时刻（毫秒），每来一份加一拍 */
   private latest = 0
+  /** 这一份名册到得比上一份晚多少毫秒（实测）：服务端一拍不是恰好 100 毫秒，
+   *  按常量加时间轴会越走越偏，缓冲一满就硬跳一下 */
+  private beat = TICK_MS
+  /** 上一份名册到达的时刻 */
+  private synced = 0
   /** 播放到的时刻：立牌画的是这一刻的位置 */
   private play = -DELAY_MS
   /** 播放快慢：每来一份名册按缓冲调一次 */
@@ -234,7 +242,14 @@ export class Villagers {
    *  有人进出、显隐、变色或瞬移时返回 true（走过去的由 step 报告） */
   sync(placements: VillagerPlacement[], fresh = false) {
     if (fresh) {
-      this.latest += TICK_MS
+      // 一拍多长按名册实际到得多快算，而不是写死 100 毫秒：快进时世界跑得快，
+      // 名册里人一步跨得更远，时间轴上少加时间就会让立牌慢慢落后、缓冲撑满后一跳
+      const now = performance.now()
+      this.beat = this.synced
+        ? Math.min(BEAT_MAX_MS, Math.max(BEAT_MIN_MS, now - this.synced))
+        : TICK_MS
+      this.synced = now
+      this.latest += this.beat
       const buffered = this.latest - this.play
       if (buffered > RESYNC_MS) {
         this.play = this.latest - DELAY_MS
@@ -286,7 +301,7 @@ export class Villagers {
         this.moveTo(v, p.x, p.y)
       } else if (fresh) {
         // 站着不动时不记重复的点；刚起步时补上上一拍还站在原地，免得从很久以前的点一下滑过来
-        if (end.t < this.latest - TICK_MS) v.path.push({ ...end, t: this.latest - TICK_MS })
+        if (end.t < this.latest - this.beat) v.path.push({ ...end, t: this.latest - this.beat })
         v.path.push({ t: this.latest, x: p.x, y: p.y })
       } else v.path[v.path.length - 1] = { ...end, x: p.x, y: p.y }
     }

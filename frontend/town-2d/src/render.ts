@@ -191,6 +191,7 @@ export class TownMap {
       // 先把选路格子建好：第一次走路时才建会卡一下
       if (predicted) setTimeout(() => !this.disposed && this.walkGrid(), 0)
     }
+    this.startLiveLoop()
     // 玩家邀请了还没回应的人、正和玩家聊着的人：站着时转身朝向玩家；还在想怎么回时头上冒「…」
     const me = this.liveId ?? ''
     const facing = new Map<string, string>()
@@ -249,6 +250,27 @@ export class TownMap {
   /** 本页发出的行走方向和此刻的步速（米 / 秒）：立牌照着它预先走（见 map/avatarMotion.ts） */
   setAvatarMotion(direction: [number, number], metresPerSecond: number) {
     this.motion?.command(direction, metresPerSecond, performance.now())
+    // 平面地图上没有别人逐帧画，自己把预测位置画出来
+    this.startLiveLoop()
+  }
+  /** 平面地图的逐帧循环：没有立体场景时，名册十拍才来一次，只按名册画会一跳一跳。
+   *  立体场景自己每帧画立牌（见 hd2d/villagers.ts 的 stepLive），那时这里什么都不做 */
+  private liveLoop = 0
+  private startLiveLoop() {
+    if (!this.motionId || this.hd || this.liveLoop || this.disposed) return
+    const loop = (now: number) => {
+      this.liveLoop = 0
+      const motion = this.motion
+      const id = this.motionId
+      if (!motion || !id || this.hd || this.disposed) return
+      const at = motion.current(now)
+      if (at) {
+        const [x, y] = this.walkPoint(at)
+        this.residents.liveAt(id, x, y)
+      }
+      if (motion.active()) this.liveLoop = requestAnimationFrame(loop)
+    }
+    this.liveLoop = requestAnimationFrame(loop)
   }
   avatarAt(): WalkTarget | undefined {
     return this.motion?.current(performance.now())
@@ -1211,6 +1233,7 @@ export class TownMap {
   dispose() {
     this.disposed = true
     cancelAnimationFrame(this.watchLoop)
+    cancelAnimationFrame(this.liveLoop)
     this.abort.abort()
     this.peek.stop()
     this.markReady()
@@ -1318,6 +1341,12 @@ export class TownMap {
   }
   /** 立牌此刻画在哪（地图坐标）：立体场景里立牌和名册差一点，平面图上就是名册位置 */
   getDrawnPos(id: string): [number, number] | undefined {
+    // 平面地图上玩家操控的人按本地预测画（见 startLiveLoop），镜头跟着画出来的位置走，
+    // 不然镜头比人晚十拍，人会在取景框边缘来回蹭
+    if (!this.hd && id === this.motionId) {
+      const at = this.motion?.current(performance.now())
+      if (at) return this.walkPoint(at)
+    }
     const p = this.residents.getMemberPos(id)
     const lag = this.hd?.villagerLag(id)
     return p && lag ? [p[0] + lag[0], p[1] + lag[1]] : p

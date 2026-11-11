@@ -123,6 +123,31 @@ export class ResidentLayer {
     else v.g.setAttribute('transform', `translate(${dx.toFixed(2)},${dy.toFixed(2)})`)
   }
 
+  /** 平面地图没有逐帧循环：玩家操控的人按本地预测逐帧挪，只动位置不动名册带来的文字和状态。
+   *  其余人仍按名册走；立体场景里由那边自己逐帧画立牌，不走这里 */
+  liveAt(id: string, worldX: number, worldY: number) {
+    const v = this.villagers.get(id)
+    if (!v) return
+    this.positions.set(id, [worldX, worldY])
+    this.anchors.set(id, [worldX, worldY])
+    const [x, y] = this.project([worldX, worldY])
+    const s = this.markerScale,
+      sy = s * this.upright
+    v.mark.setAttribute(
+      'transform',
+      `translate(${x},${y})${s === 1 && sy === 1 ? '' : ` scale(${s},${sy})`}`
+    )
+    const body = this.bodyRect([x, y])
+    for (const key of ['x', 'y', 'width', 'height'] as const)
+      v.hit.setAttribute(key, String(body[key]))
+    v.name.setAttribute('x', String(x))
+    v.name.setAttribute('y', String(y - this.nameRise()))
+    v.verb.setAttribute('x', String(x))
+    v.verb.setAttribute('y', String(y + 72 * sy))
+    v.wait.setAttribute('x', String(x + 78 * s))
+    v.wait.setAttribute('y', String(y - this.nameRise()))
+  }
+
   /** 被屋顶盖住的人只留名字和状态，头像藏起来 */
   setCovered(covered: (p: [number, number]) => boolean) {
     for (const [id, v] of this.villagers) {
