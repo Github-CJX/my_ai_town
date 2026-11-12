@@ -5,7 +5,7 @@
 
 use crate::network::{account_of, Clients};
 use crate::runtime::{Outcome, Runtime};
-use protocol::{LetterView, ServerMsg};
+use protocol::{LetterView, PauseKind, ServerMsg};
 
 impl Runtime {
     /// 这位连接代表谁：票面账号编号 → 登记表里属于他的化身。
@@ -62,7 +62,16 @@ impl Runtime {
     fn receipt_note(&self, to: &str) -> Vec<String> {
         let mut notes = Vec::new();
         if self.speed == 0.0 {
-            notes.push("小镇现在停着，等跑起来她才看得到".to_string());
+            // 世界停着有好几种停法：额度用完、模型出错、她自己的回复接连作废。挨着她的那条
+            // 说清楚，主人才知道去改额度还是去查密钥；对不上就说个大概。
+            match self
+                .town_holds()
+                .into_iter()
+                .find(|hold| hold.resident_id == to)
+            {
+                Some(hold) => notes.push(hold_note(hold.kind, &hold.reason)),
+                None => notes.push("小镇现在停着，等跑起来她才看得到".to_string()),
+            }
         } else if !self.world.awake(to) {
             notes.push("她这会儿睡着（或者动不了），醒了会看到".to_string());
         } else if self
@@ -157,9 +166,27 @@ fn receipt(name: &str, notes: &[String]) -> String {
     }
 }
 
+/// 世界为什么停着：额度用尽的去改额度，故障的去修服务，回复过时的点「开始」。
+/// 主人只看得见 QQ，这几句是他唯一能查到的线索，所以照实说、还说下一步该做什么。
+fn hold_note(kind: PauseKind, reason: &str) -> String {
+    match kind {
+        PauseKind::Budget => format!(
+            "小镇因为她今天的额度用完了停着（{reason}），把额度调大再点「开始」她才看得到这封信"
+        ),
+        PauseKind::Fault => {
+            format!("小镇因为她那边出了故障停着（{reason}），修好再点「开始」她才看得到这封信")
+        }
+        PauseKind::Stale => {
+            "她的回复接连作废，小镇因此停着；点「开始」让她接着走才能看到这封信".to_string()
+        }
+        PauseKind::NoModel => "小镇现在停着，等跑起来她才看得到".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::receipt;
+    use super::{hold_note, receipt};
+    use protocol::PauseKind;
 
     #[test]
     fn a_receipt_says_where_the_letter_went_and_why_she_may_not_read_it_yet() {
@@ -180,5 +207,28 @@ mod tests {
             both,
             "信递到「大肥鱼」手上了：她这会儿睡着（或者动不了），醒了会看到；她现在没法回话：没有选模型"
         );
+    }
+
+    #[test]
+    fn a_stopped_town_says_which_kind_of_stop_it_is_and_what_to_do_next() {
+        let budget = hold_note(PauseKind::Budget, "调用 12/12；请修改额度再继续");
+        assert_eq!(
+            budget,
+            "小镇因为她今天的额度用完了停着（调用 12/12；请修改额度再继续），把额度调大再点「开始」她才看得到这封信"
+        );
+        assert!(budget.contains("把额度调大"));
+        let fault = hold_note(PauseKind::Fault, "DeepSeek 的密钥用不了了");
+        assert!(
+            fault.contains("出了故障") && fault.contains("修好再点「开始」"),
+            "{fault}"
+        );
+        assert!(fault.contains("DeepSeek 的密钥用不了了"), "{fault}");
+        // 回复作废与「等模型」都不是额度问题：别让人白跑去改额度
+        let stale = hold_note(PauseKind::Stale, "");
+        assert!(
+            stale.contains("回复接连作废") && !stale.contains("额度"),
+            "{stale}"
+        );
+        assert!(!hold_note(PauseKind::NoModel, "").contains("额度"));
     }
 }
