@@ -450,5 +450,8 @@ fn the_roster_sends_only_what_changes_and_details_go_separately() {
         );
     }
     let size = serde_json::to_string(&member).unwrap().len();
-    assert!(size < 2000, "一拍里的村民应该很轻，实际 {size} 字节：{member}");
+    assert!(
+        size < 2000,
+        "一拍里的村民应该很轻，实际 {size} 字节：{member}"
+    );
 }

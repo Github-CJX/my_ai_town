@@ -31,6 +31,8 @@ pub(crate) struct JoinRequest {
     pub home: Option<String>,
     /// 入住时选好的模型；没带时先住下，等玩家选好模型再行动
     pub model: Option<ModelChoice>,
+    /// 投放它的账号：世界据此让这个账号管自己的村民
+    pub owner: Option<String>,
 }
 
 /// 检查通过、尚未安置的新人：编号、姓名、住宅、出生位置与采用的模板。
@@ -87,6 +89,7 @@ impl Runtime {
                 template_version: r.template_version,
                 appearance: r.appearance.clone(),
                 model: r.model_binding.clone(),
+                owner: r.owner.clone(),
             })
             .collect();
         PopulationView {
@@ -498,6 +501,7 @@ impl Runtime {
             persona: plan.persona.clone(),
             appearance: plan.template.fields.appearance.clone(),
             model_binding: req.model.clone(),
+            owner: req.owner.clone(),
             needs: default_tuning(),
             order: 0,
         });

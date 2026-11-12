@@ -405,6 +405,7 @@ fn population(revision: u64) -> PopulationView {
                 provider: "deepseek".into(),
                 model: "deepseek-chat".into(),
             }),
+            owner: Some("u65e0145e1722544f".into()),
         }],
         homes: vec![home()],
         entry_name: Some("南入口".into()),
@@ -1606,6 +1607,7 @@ pub fn client_samples() -> Vec<ClientMsg> {
                 provider: "deepseek".into(),
                 model: "deepseek-chat".into(),
             }),
+            owner: Some("u65e0145e1722544f".into()),
         },
         ClientMsg::GetResidentJoinResult {
             world_id: "w1".into(),

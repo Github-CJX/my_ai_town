@@ -65,6 +65,10 @@ interface CenterDeps {
   audio: Pick<GameAudio, 'music' | 'effects'>
   /** 小镇默认模型的价格（花费上限按它换算）；价格没收录时为 null */
   townPrice: () => import('./pricing').Price | null
+  /** 是不是管理员：普通账号只看得到自己的村民和游戏设置（小镇、模型服务、限额、重置都收起来） */
+  admin: () => boolean
+  /** 自己的账号编号：和人口登记里的投放人比，认「我的村民」 */
+  me: () => string | null
 }
 
 /** 村民子页的编号是「基础编号:村民编号」，目录只认基础编号 */
@@ -76,6 +80,8 @@ export function initSettingsCenter(deps: CenterDeps) {
   const savebarHint = $('settings-savebar-hint')
 
   let residents: ResidentContext[] = []
+  /** 村民 → 投放他的账号：普通账号只编辑自己的村民 */
+  const owners = new Map<string, string>()
   /** 村民组正在编辑的村民 */
   let current: ResidentContext | null = null
   /** 村民 → 使用的模型；还没读到的不在表里 */
@@ -139,6 +145,25 @@ export function initSettingsCenter(deps: CenterDeps) {
   const pageOf = (id: string) => pages.find((p) => p.id === id)
   const visible = () => !$('settings-view').hidden
 
+  /** 普通账号看得到的页：村民子页和游戏设置；小镇、模型服务、限额、重置只有管理员有 */
+  const memberGroups = new Set<SettingsPage['group']>(['town', 'model', 'danger'])
+  const reachable = (p: SettingsPage) => deps.admin() || !memberGroups.has(p.group)
+  const firstReachable = () => pages.find(reachable) ?? pages[0]
+  /** 人多时村民组里只留自己的那几位（管理员看全部） */
+  const mine = (r: { id: string }) => {
+    if (deps.admin()) return true
+    const me = deps.me()
+    return !!me && owners.get(r.id) === me
+  }
+  /** 按角色收放目录：账号档案回来才能定，所以进设定和人口变化时各算一次 */
+  function applyRole() {
+    const admin = deps.admin()
+    nav?.setGroups({ town: admin, model: admin, game: true, danger: admin })
+    nav?.setEmptyText(admin ? '还没有村民' : '你还没有村民在镇上')
+    const page = pageOf(currentId)
+    if (page && !reachable(page)) showPage(firstReachable().id)
+  }
+
   function ensurePages(resident: ResidentContext) {
     if (residentPages.has(resident.id)) return
     const childDeps: ResidentPageDeps = {
@@ -188,6 +213,8 @@ export function initSettingsCenter(deps: CenterDeps) {
   }
 
   function showPage(id: string) {
+    // 普通账号点不到小镇、模型服务、限额和重置：从别处（警告条上的「去配置」）进来的也换成看得到的页
+    if (!deps.admin() && memberGroups.has(pageOf(id)?.group ?? 'town')) id = firstReachable().id
     // 别的页上「去配置此服务」：跳到模型服务页并点开那一行
     if (id.startsWith('prov-')) {
       providers.expand(id.slice('prov-'.length))
@@ -254,13 +281,20 @@ export function initSettingsCenter(deps: CenterDeps) {
   return {
     /** 从地图或村民页点「编辑」：村民组切到这位村民，打开他的使用模型页 */
     ensureResident(resident: ResidentContext) {
-      current = resident
+      // 别人的村民不让进：换成自己那一位（管理员看全部，不受影响）
+      const target = mine(resident) ? resident : (current ?? residents[0] ?? null)
+      if (!target) return firstReachable().id
+      current = target
       syncResidentNav()
-      return `resident-model:${resident.id}`
+      ensurePages(target)
+      return `resident-model:${target.id}`
     },
     /** 人口登记变化：不在村里的村民，子页一并删掉；村民组换到还在的人 */
-    setResidents(list: { id: string; name: string }[]) {
-      residents = list.map((r) => ({ id: r.id, name: r.name }))
+    setResidents(list: { id: string; name: string; owner?: string }[]) {
+      owners.clear()
+      for (const r of list) if (r.owner) owners.set(r.id, r.owner)
+      // 普通账号只编辑自己投放的村民：别人的村民在目录里不出现，也进不去
+      residents = list.filter(mine).map((r) => ({ id: r.id, name: r.name }))
       const present = new Set(residents.map((r) => r.id))
       let removedCurrent = false
       for (const [id, group] of residentPages) {
@@ -282,12 +316,13 @@ export function initSettingsCenter(deps: CenterDeps) {
       syncResidentNav()
       providers.render()
       if (visible()) requestBindings()
-      if (removedCurrent) showPage(pages[0].id)
+      if (removedCurrent) showPage(firstReachable().id)
       else refreshDirty()
     },
     showPage,
     refreshDirty,
     enter(pageId?: string) {
+      applyRole()
       if (!pageId) {
         const selected = deps.selectedResident()
         const r = residents.find((item) => item.id === selected?.id)

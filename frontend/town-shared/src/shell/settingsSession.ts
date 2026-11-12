@@ -17,16 +17,23 @@ export function createSettingsSession(
   send: (msg: ClientMsg) => void,
   game: boolean,
   /** 进设定前交还化身控制；交还失败就留在地图上 */
-  releaseAvatar: () => Promise<boolean>
+  releaseAvatar: () => Promise<boolean>,
+  /** 账号档案：只有管理员有调速度的权限，普通账号进设定不暂停世界（也没权暂停） */
+  account: { ready: () => Promise<void>; admin: () => boolean }
 ) {
   let inSettings = false
   let speedBefore: number | null = null
   let savedViewBox: number[] | null = null
   let currentSpeed: number | null = null
   let center: SettingsCenter | null = null
-  /** 顶栏写明返回地图后世界怎样继续 */
+  /** 顶栏写明返回地图后世界怎样继续（普通账号不管速度，不写这一行） */
   function showResume() {
-    $('settings-resume').textContent = speedBefore ? '返回地图后继续运行' : '返回地图后保持暂停'
+    const admin = account.admin()
+    $('settings-resume').textContent = !admin
+      ? ''
+      : speedBefore
+        ? '返回地图后继续运行'
+        : '返回地图后保持暂停'
   }
   /** 世界重置或设定改变后不再恢复进入前的速度 */
   function forgetSpeed() {
@@ -57,10 +64,12 @@ export function createSettingsSession(
         return
       }
       if (!(await releaseAvatar())) return
+      // 档案没问回来之前不知道是不是管理员：先等它，免得管理员头一次进来只看到普通账号那一套
+      await account.ready()
       inSettings = true
-      speedBefore = currentSpeed
+      speedBefore = account.admin() ? currentSpeed : null
       showResume()
-      send({ type: 'set_speed', request_id: newId(), speed: 0 })
+      if (account.admin()) send({ type: 'set_speed', request_id: newId(), speed: 0 })
       savedViewBox = map.getViewBox()
       // 游戏界面：设定中心是地图上的居中小窗，地图留在背后（inert 防止误操作）
       $('obs-view').hidden = !game
@@ -81,7 +90,9 @@ export function createSettingsSession(
       $('obs-view').hidden = false
       $('obs-view').inert = false
       if (savedViewBox) map.setViewBox(savedViewBox)
-      if (speedBefore) send({ type: 'set_speed', request_id: newId(), speed: speedBefore })
+      // 普通账号没暂停过世界，也就没有速度要还
+      if (speedBefore && account.admin())
+        send({ type: 'set_speed', request_id: newId(), speed: speedBefore })
       speedBefore = null
     },
   }

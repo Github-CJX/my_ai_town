@@ -9,17 +9,26 @@ export function createAvatarAccount() {
   /** 老版本管理服务没有账号接口：按本机单人玩 */
   let legacy = false
   let asked = false
+  /** 问过之后什么时候回来：设定页要按角色决定显示哪些分组，得等它 */
+  let loading: Promise<void> | null = null
 
   return {
     /** 问一次管理服务：这个页面用哪个档案。慢一点也没关系，问回来之前当「还没有账号」 */
     load() {
-      if (asked) return
+      if (asked) return loading ?? Promise.resolve()
       asked = true
-      void readAccounts().then((list) => {
+      loading = readAccounts().then((list) => {
         legacy = list === null
         who = list?.current ?? null
       })
+      return loading
     },
+
+    /** 账号问回来了：设定页在决定角色前等它 */
+    ready: () => loading ?? Promise.resolve(),
+
+    /** 这个账号的编号（人口登记里的投放人用它比对）；还不知道时 null */
+    id: () => who?.id ?? null,
 
     /** 能不能附身村民：管理员可以（开镇、调世界用），普通账号只能玩自己的化身 */
     admin: () => legacy || who?.role === 'admin',

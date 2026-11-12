@@ -471,6 +471,8 @@ export function createTownRoutes({
             template_id: template.template_id,
             template_version: template.version,
             name: agent.name,
+            // 投放它的账号：世界据此让他自己改人设、样子、模型，别人不行
+            owner: me.id,
             ...(api ? { model: { provider: api.provider, model: api.model } } : {}),
             ...(agent.home && view.homes.some((home) => home.locale === agent.home)
               ? { home: agent.home }

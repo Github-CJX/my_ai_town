@@ -57,7 +57,10 @@ interface ShellInputs {
 
 export function createPanels(input: ShellInputs) {
   const { map, events, localeName, send, selectedMap, game } = input
-  const session = createSettingsSession(map, send, game, () => avatar.release())
+  const session = createSettingsSession(map, send, game, () => avatar.release(), {
+    ready: () => avatar.accountReady(),
+    admin: () => avatar.isAdmin(),
+  })
   const chatHistory = createChatHistory(send, localeName, game, () => infoPanel.setCollapsed(false))
   // 化身的「完整交谈记录」用居中弹窗：右栏此刻是化身自己的面板，塞进信息栏会被每拍的名册收起
   const avatarHistory = createChatHistory(send, localeName, true, () => {})
@@ -186,6 +189,8 @@ export function createPanels(input: ShellInputs) {
     },
     audio: input.audio,
     townPrice: () => priceOf(models.options()[0]),
+    admin: () => avatar.isAdmin(),
+    me: () => avatar.accountId(),
   })
   session.bind(center)
   worldSettings.setOpenSettings(() => session.enter('worldview'))

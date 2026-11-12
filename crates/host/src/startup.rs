@@ -180,6 +180,7 @@ pub(crate) fn migrate_population(
             persona,
             appearance: Default::default(),
             model_binding: None,
+            owner: None,
             needs: world
                 .actor(&id)
                 .map_or_else(default_tuning, |a| a.needs.tuning),

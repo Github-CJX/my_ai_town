@@ -286,6 +286,9 @@ pub enum ClientMsg {
         /// 入住时就定下用哪个模型思考；不带时先住下，选好模型后再行动
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<ModelChoice>,
+        /// 投放它的账号（管理服务给的编号）：世界据此让账号管自己的村民；不带表示不确定归属
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
     },
     /// 断线后按操作编号查询加入结果（回 JoinResult）
     GetResidentJoinResult {

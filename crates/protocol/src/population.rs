@@ -365,6 +365,9 @@ pub struct ResidentRegistration {
     /// 这位村民用的模型；还没选时不写。页面据此分清「没选模型」和「选了但服务还没连上」
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<crate::ModelChoice>,
+    /// 投放它的账号（管理服务给的编号）；None 表示原有居民，或不知道是谁投放的
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

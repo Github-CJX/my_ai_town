@@ -404,6 +404,39 @@ pub fn join_as(
         .clone()
 }
 
+/// 加入必须成功，返回服务器分配的 id。带投放人：世界据此让这个账号管自己的村民。
+#[track_caller]
+pub fn join_id_owned(ws: &mut WebSocket<TcpStream>, template_id: &str, owner: &str) -> String {
+    configure_world(ws);
+    let population =
+        reply(ws, json!({"type":"get_population"}), "population")["population"].clone();
+    let preview = reply(
+        ws,
+        json!({"type":"preview_resident_join","template_id":template_id}),
+        "join_preview",
+    )["preview"]
+        .clone();
+    let op_id = format!(
+        "op-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    send(
+        ws,
+        json!({"type":"join_resident","op_id":op_id,"world_id":population["world_id"],
+            "template_id":template_id,"template_version":preview["template_version"],
+            "name":preview["name"],"home":preview["home"],"owner":owner}),
+    );
+    let outcome = until(ws, |m| {
+        (m["type"] == "resident_joined" || m["type"] == "join_result")
+            && m["outcome"]["op_id"] == op_id
+    })["outcome"]
+        .clone();
+    assert_eq!(outcome["ok"], true, "{outcome}");
+    outcome["resident_id"].as_str().unwrap().to_string()
+}
 /// 加入必须成功，返回服务器分配的 id。
 #[track_caller]
 pub fn join_id(ws: &mut WebSocket<TcpStream>, template_id: &str) -> String {

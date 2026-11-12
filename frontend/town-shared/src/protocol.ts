@@ -470,6 +470,8 @@ export interface ResidentRegistration {
   appearance: Appearance
   /** 这位村民用的模型；还没选时不写 */
   model?: ModelChoice
+  /** 投放它的账号编号（页面只用来判断「这是我的村民吗」） */
+  owner?: string
 }
 interface HomeView {
   locale: string
@@ -963,6 +965,8 @@ export type ClientMsg =
       home?: string
       /** 入住时就定下用哪个模型思考；不带时先住下，选好模型再行动 */
       model?: ModelChoice
+      /** 投放它的账号编号：世界据此让账号管自己的村民 */
+      owner?: string
     }
   | { type: 'get_resident_join_result'; world_id: string; op_id: string }
   /** 请一位村民离开：只在管理服务里由投放它的账号用，村民自己不会发 */

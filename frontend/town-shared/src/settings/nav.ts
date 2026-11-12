@@ -70,16 +70,22 @@ export function createSettingsNav(
   const empty = el('p', '还没有村民', 'settings-no-resident')
   const residentItems = el('div', '', 'settings-resident-items')
 
+  const heads = {
+    town: group('小镇'),
+    resident: group('村民'),
+    model: group('模型'),
+    game: group('游戏'),
+  }
   root.replaceChildren(
-    group('小镇'),
+    heads.town,
     ...sections.town.map((p) => item(p)),
-    group('村民'),
+    heads.resident,
     picker,
     empty,
     residentItems,
-    group('模型'),
+    heads.model,
     ...sections.model.map((p) => item(p)),
-    group('游戏'),
+    heads.game,
     ...sections.game.map((p) => item(p)),
     ...sections.danger.map((p) => item(p, 'nav-item nav-danger'))
   )
@@ -115,6 +121,10 @@ export function createSettingsNav(
         })
       )
     },
+    /** 村民组空着时那句话：管理员是「还没有村民」，普通账号是「你还没有村民在镇上」 */
+    setEmptyText(text: string) {
+      empty.textContent = text
+    },
     mark(id: string) {
       for (const [pid, b] of buttons) b.classList.toggle('on', pid === id)
     },
@@ -126,6 +136,22 @@ export function createSettingsNav(
       if (!badge) return
       badge.textContent = text
       badge.classList.toggle('warn', warn)
+    },
+    /** 按角色收起分组：普通账号只看得到「村民」（自己的那几位）和「游戏」 */
+    setGroups(show: { town: boolean; model: boolean; game: boolean; danger: boolean }) {
+      const toggle = (list: NavItem[], on: boolean) => {
+        for (const p of list) {
+          const b = buttons.get(p.id)
+          if (b) b.hidden = !on
+        }
+      }
+      heads.town.hidden = !show.town
+      toggle(sections.town, show.town)
+      heads.model.hidden = !show.model
+      toggle(sections.model, show.model)
+      heads.game.hidden = !show.game
+      toggle(sections.game, show.game)
+      toggle(sections.danger, show.danger)
     },
   }
 }

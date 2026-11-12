@@ -246,6 +246,21 @@ impl Runtime {
         }
     }
 
+    /// 这条连接能不能管这位村民：管理员都行；普通账号只行自己的那一位。
+    /// 登记的投放人是空（原有居民、老档、管理服务自己请进来的）时只有管理员能动，免得被随便认领。
+    fn allows_owner(&self, clients: &Clients, connection: u64, resident: &str) -> bool {
+        if crate::network::allows_admin(clients, connection) {
+            return true;
+        }
+        match (
+            crate::network::account_of(clients, connection),
+            self.population.owner_of(resident),
+        ) {
+            (Some(who), Some(owner)) => !owner.is_empty() && who == owner,
+            _ => false,
+        }
+    }
+
     /// 唯一的分派表：每种客户端消息一行，新增消息编译器会指出漏项。
     fn dispatch(&mut self, msg: ClientMsg, connection: u64, clients: &Clients) -> Outcome {
         use ClientMsg::*;
@@ -253,6 +268,12 @@ impl Runtime {
         if let Some(what) = admin_action(&msg) {
             if !crate::network::allows_admin(clients, connection) {
                 return Outcome::reply(error_msg(format!("只有管理员可以{what}")));
+            }
+        }
+        // 自己的村民自己管：改人设、样子、模型要投放它的那个账号，管理员照样可以。
+        if let Some((what, resident)) = owner_action(&msg) {
+            if !self.allows_owner(clients, connection, resident) {
+                return Outcome::reply(error_msg(format!("只有投放这位村民的账号可以{what}")));
             }
         }
         match msg {
@@ -374,6 +395,7 @@ impl Runtime {
                 name,
                 home,
                 model,
+                owner,
             } => self.join(
                 JoinRequest {
                     op_id,
@@ -383,6 +405,7 @@ impl Runtime {
                     name,
                     home,
                     model,
+                    owner,
                 },
                 clients,
             ),
@@ -768,6 +791,19 @@ fn kept_in_memory(error: &HostError) -> String {
     format!("保存失败，内存状态保留，下次检查点重试：{error}")
 }
 
+/// 只有投放这位村民的账号（或管理员）能做的事，对应一句「只有投放这位村民的账号可以…」。
+/// 世界不认账号，只认票面里的账号编号和登记表里记的投放人，所以两边都得有。
+fn owner_action(msg: &ClientMsg) -> Option<(&'static str, &String)> {
+    match msg {
+        ClientMsg::SetResidentModel { resident, .. } => Some(("改村民用的模型", resident)),
+        ClientMsg::SetResidentKey { resident, .. } => Some(("换村民的密钥", resident)),
+        ClientMsg::SetPersona { resident, .. } => Some(("改人设", resident)),
+        ClientMsg::SetResidentAppearance { resident_id, .. } => Some(("改村民的样子", resident_id)),
+        ClientMsg::SetResidentBody { resident_id, .. } => Some(("改村民的身体", resident_id)),
+        _ => None,
+    }
+}
+
 pub(crate) fn event(world: &World, text: &str) -> ServerMsg {
     ServerMsg::Event {
         sim_minutes: world.minutes(),
@@ -794,13 +830,8 @@ fn admin_action(msg: &ClientMsg) -> Option<&'static str> {
         ClientMsg::RemoveProp { .. } => Some("收道具"),
         ClientMsg::PlaceProp { .. } => Some("摆道具"),
         ClientMsg::SetModelConfig { .. } => Some("改模型设置"),
-        ClientMsg::SetResidentModel { .. } => Some("改村民用的模型"),
-        ClientMsg::SetResidentKey { .. } => Some("换村民的密钥"),
         ClientMsg::RestartBuiltinModel { .. } => Some("重启内置模型"),
         ClientMsg::TestModelConnection { .. } => Some("试模型连接"),
-        ClientMsg::SetPersona { .. } => Some("改人设"),
-        ClientMsg::SetResidentAppearance { .. } => Some("改村民的样子"),
-        ClientMsg::SetResidentBody { .. } => Some("改村民的身体"),
         ClientMsg::SaveResidentTemplate { .. } => Some("存村民模板"),
         ClientMsg::ArchiveResidentTemplate { .. } => Some("收起村民模板"),
         ClientMsg::GenerateResidentTemplate { .. } => Some("生成村民"),
@@ -827,7 +858,13 @@ fn admin_action(msg: &ClientMsg) -> Option<&'static str> {
         | ClientMsg::GetResidentJoinResult { .. }
         | ClientMsg::GetDiary { .. }
         | ClientMsg::GetNotebook { .. }
-        | ClientMsg::GetNotebookDetail { .. } => None,
+        | ClientMsg::GetNotebookDetail { .. }
+        // 自己的村民自己管：这几条按登记表里的投放人判，见 owner_action。
+        | ClientMsg::SetResidentModel { .. }
+        | ClientMsg::SetResidentKey { .. }
+        | ClientMsg::SetPersona { .. }
+        | ClientMsg::SetResidentAppearance { .. }
+        | ClientMsg::SetResidentBody { .. } => None,
     }
 }
 

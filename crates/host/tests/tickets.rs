@@ -226,3 +226,59 @@ fn an_account_can_only_control_its_own_avatar() {
 
     town.kill();
 }
+
+/// 自己的村民自己管：投放他的账号能改人设，别的账号只能看着，管理员照样能改。
+#[test]
+fn the_account_that_placed_a_resident_may_edit_it() {
+    let mut town = town_with_token();
+    town.query = Some(format!("session={SECRET}&ticket={}", admin_ticket()));
+    let mut admin = town.start();
+    until(&mut admin, |m| m["type"] == "roster");
+    let resident = join_id_owned(&mut admin, "tpl_a", "u-a");
+
+    // 投放人 u-a：改人设放行
+    let mut mine = plain_socket(
+        &town,
+        &format!("session={SECRET}&ticket={}", user_ticket("u-a")),
+    )
+    .expect("投放人的票应该能连上");
+    until(&mut mine, |m| m["type"] == "roster");
+    send(
+        &mut mine,
+        json!({"type": "set_persona", "request_id": "p-1", "resident": resident,
+            "text": "我是阿树，负责照看街口的花。"}),
+    );
+    let saved = until(&mut mine, |m| m["request_id"] == "p-1");
+    assert_eq!(saved["type"], "agent_saved", "{saved}");
+    assert_eq!(saved["ok"], true, "{saved}");
+
+    // 别的账号：世界拒掉，不只是页面不提供入口
+    let mut other = plain_socket(
+        &town,
+        &format!("session={SECRET}&ticket={}", user_ticket("u-b")),
+    )
+    .expect("另一个账号的票应该能连上");
+    until(&mut other, |m| m["type"] == "roster");
+    send(
+        &mut other,
+        json!({"type": "set_persona", "request_id": "p-2", "resident": resident,
+            "text": "我是别人，想改你的人设。"}),
+    );
+    let refused = until(&mut other, |m| m["type"] == "error");
+    let message = refused["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("只有投放这位村民的账号可以改人设"),
+        "{message}"
+    );
+
+    // 管理员不用是投放人
+    send(
+        &mut admin,
+        json!({"type": "set_persona", "request_id": "p-3", "resident": resident,
+            "text": "我是镇长，替他把人设补全。"}),
+    );
+    let by_admin = until(&mut admin, |m| m["request_id"] == "p-3");
+    assert_eq!(by_admin["ok"], true, "{by_admin}");
+
+    town.kill();
+}

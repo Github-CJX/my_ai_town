@@ -1006,6 +1006,8 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 "template_id": template_id,
                 "template_version": template_version,
                 "name": agent.name,
+                // 投放它的账号：世界据此让他自己改人设、样子、模型，别人不行
+                "owner": me.id.clone(),
             });
             if let Some(api) = &api {
                 command["model"] = json!({ "provider": api.provider, "model": api.model });

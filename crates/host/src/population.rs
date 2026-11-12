@@ -35,6 +35,9 @@ pub struct Registration {
         skip_serializing_if = "Option::is_none"
     )]
     pub model_binding: Option<ModelChoice>,
+    /// 投放它的账号（管理服务给的编号）；None 表示原有居民，或不知道是谁投放的。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     /// 需求参数随登记保存，重置进度时重新应用。
     pub needs: NeedsTuning,
     /// 加入顺序，重置时按它重新安置。0 表示由登记表分配。
@@ -115,6 +118,13 @@ impl Population {
                 .find(|r| r.id == target || r.name == target)
                 .ok_or_else(|| HostError::Population(format!("查无此人：{target}"))),
         }
+    }
+
+    /// 投放这位村民的账号；查无此人或不知道归属时 None（编号与旧客户端的人名寻址都认）。
+    pub fn owner_of(&self, target: &str) -> Option<&str> {
+        self.find(Some(target))
+            .ok()
+            .and_then(|r| r.owner.as_deref())
     }
 
     pub fn joined_from(&self, template_id: &str) -> Option<&Registration> {

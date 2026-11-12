@@ -105,6 +105,10 @@ export function createAvatar(deps: AvatarDeps) {
     possess: (resident: string) => avatar.possess(resident),
     /** 这个账号是不是管理员：附身村民、给这台电脑加账号都只给管理员 */
     isAdmin: () => avatar.isAdmin(),
+    /** 这个账号的编号：设定页拿它认「我的村民」；还不知道时 null */
+    accountId: () => avatar.accountId(),
+    /** 账号档案问回来了没有：按角色分栏之前等它 */
+    accountReady: () => avatar.accountReady(),
     handleMsg: (message: ServerMsg) => avatar.handleMsg(message),
     connected: () => avatar.connected(),
     disconnected: () => avatar.disconnected(),
@@ -512,6 +516,16 @@ class AvatarController {
   /** 这个账号是不是管理员。还没问到档案（老管理服务、本机单人）就按管理员算，和以前一样 */
   isAdmin(): boolean {
     return this.account.admin()
+  }
+
+  /** 这个账号的编号：设定页拿它认「我的村民」；还不知道时 null */
+  accountId(): string | null {
+    return this.account.id()
+  }
+
+  /** 账号档案问回来了：设定页在按角色分栏之前等它，免得管理员头一次进去只看到普通账号那一套 */
+  accountReady(): Promise<void> {
+    return this.account.ready()
   }
 
   /** 世界里有几个化身在场、而本页并没有控制：观察者页面用它说「围观中 · N 人在玩」。
