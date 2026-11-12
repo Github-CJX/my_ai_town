@@ -225,7 +225,7 @@ impl Runtime {
             strangers: self.world.strangers(),
             mock: self.driver.mock,
             model: self.driver.target.model.clone(),
-            persistent: self.store.is_some(),
+            persistent: self.saves.is_some(),
             physiology: self.world.physiology(),
             provider: self.driver.target.provider.clone(),
             ready: self.world_settings.ready(),

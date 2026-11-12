@@ -4,7 +4,7 @@ use super::{atomic_write, SAVE_FILE_NAME};
 use crate::agent_worker::AgentSave;
 use crate::HostError;
 use agent::{memory::MemoryRecord, notebook::Page};
-use kernel::World;
+use protocol::WorldFact;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -208,7 +208,7 @@ impl ResidentStore {
 
     pub(super) fn stage(
         &mut self,
-        world: &World,
+        events: &BTreeMap<String, Vec<WorldFact>>,
         saved: &mut Option<AgentSave>,
     ) -> Result<Residents, HostError> {
         let Some(saved) = saved else {
@@ -218,7 +218,8 @@ impl ResidentStore {
         let mut manifest = BTreeMap::new();
         let mut staged = BTreeMap::new();
         for (actor, s) in &mut saved.runtime.sessions {
-            let mut docs = agent::notebook::documents(world, s);
+            let events = events.get(actor).map_or(&[][..], Vec::as_slice);
+            let mut docs = agent::notebook::documents_from(events, s);
             for record in std::mem::take(&mut s.memory.records) {
                 let path = format!(
                     ".state/records/D{:03}.jsonl",

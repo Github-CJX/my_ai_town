@@ -36,7 +36,8 @@ pub(crate) struct Runtime {
     pub pace: f64,
     pub driver: ResidentDriver,
     pub settings: Settings,
-    pub store: Option<host::persistence::SaveStore>,
+    /// 存档写入端：渲染记忆文件、编码、写入与投影都在它那条线程上，模拟线程只交任务。
+    pub saves: Option<host::persistence::Saves>,
     pub population: Population,
     pub library: Library,
     pub prop_library: host::props::PropLibrary,
@@ -565,6 +566,8 @@ impl Runtime {
 
     /// 一拍：推进世界、收模型结果、发新请求、广播 roster。存盘或轨迹写入失败只写日志，不中断运行。
     pub(crate) fn tick(&mut self, clients: &Clients) {
+        // 上一拍交给存盘线程的那一份写完了没有：成功了才换时钟锚点。
+        self.poll_saves(clients);
         self.avatar_tick(clients);
         let content_before = self.world.contents().revision();
         let inventory_before = self.world.inventory().revision();
@@ -754,13 +757,40 @@ impl Runtime {
         holds
     }
 
-    /// 存盘。失败时内存状态不动、返回存盘错误；只在失败与恢复的边界写日志。
+    /// 周期存盘：把这一拍做成一份存盘任务交给存盘线程，模拟线程只做世界快照、会话克隆与取事件。
+    /// 交出去不代表写成功——结果下一拍由 [`Runtime::poll_saves`] 取回，那时才换时钟锚点。
+    /// `force` 只表示“绕过节流，现在就交”，不表示同步等它写完（要同步结果的走 [`Runtime::checkpoint_now`]）。
     pub(crate) fn checkpoint(&mut self, force: bool) -> Result<(), HostError> {
-        let Some(store) = &mut self.store else {
+        // 上一份写坏了：这时不排队，直接同步再试一次。挡住写盘的原因（权限、目录被占）往往几秒内就消失，
+        // 而坏掉的存盘会挡住所有要落盘的命令，所以这里宁可让模拟线程停一下也要马上知道恢复没有。
+        if self.save_failed {
+            return self.checkpoint_now();
+        }
+        if self
+            .saves
+            .as_ref()
+            .is_none_or(|saves| !force && !saves.due())
+        {
+            return Ok(());
+        }
+        let job = self.save_job();
+        let Some(saves) = &mut self.saves else {
             return Ok(());
         };
+        let result = saves.submit(job);
+        if let Err(error) = &result {
+            if !self.save_failed {
+                self.save_failed = true;
+                eprintln!("[host] {}", kept_in_memory(error));
+            }
+        }
+        result
+    }
+
+    /// 把此刻的世界连同村民会话做成一份存盘任务：只克隆、只取事件，不做渲染与写盘。
+    fn save_job(&self) -> host::persistence::SaveJob {
         let next_clock = self.clock.stamped(self.world.minutes());
-        let result = store.checkpoint_bundle(
+        host::persistence::save_job(
             host::persistence::Checkpoint {
                 world: &self.world,
                 speed: self.speed,
@@ -768,24 +798,60 @@ impl Runtime {
                 clock: &next_clock,
                 population: Some(&self.population),
             },
-            || Some(self.driver.save()),
-            force,
-        );
-        if matches!(result, Ok(true)) {
-            self.clock = next_clock;
+            Some(self.driver.save()),
+        )
+    }
+
+    /// 同步存盘：事务回滚、退出与开工前的那一份必须真的落盘才算数（这里等写盘，模拟线程停一下）。
+    pub(crate) fn checkpoint_now(&mut self) -> Result<(), HostError> {
+        if self.saves.is_none() {
+            return Ok(());
         }
-        match &result {
-            Ok(true) if self.save_failed => {
+        let next_clock = self.clock.stamped(self.world.minutes());
+        let job = self.save_job();
+        let result = match self.saves.as_mut() {
+            Some(saves) => saves.commit_now(job),
+            None => Ok(()),
+        };
+        if result.is_ok() {
+            self.clock = next_clock;
+            if self.save_failed {
                 self.save_failed = false;
                 eprintln!("[host] 存盘已恢复");
             }
-            Err(error) if !self.save_failed => {
+        } else if let Err(error) = &result {
+            if !self.save_failed {
                 self.save_failed = true;
                 eprintln!("[host] {}", kept_in_memory(error));
             }
-            _ => {}
         }
-        result.map(|_| ())
+        result
+    }
+
+    /// 取回存盘线程写完的结果：成功才把时钟锚点换成那一份的；失败只在这条边界写日志、通知客户端。
+    pub(crate) fn poll_saves(&mut self, clients: &Clients) {
+        let Some(written) = self.saves.as_mut().map(host::persistence::Saves::poll) else {
+            return;
+        };
+        for written in written {
+            match written.result {
+                Ok(()) => {
+                    self.clock = written.clock;
+                    if self.save_failed {
+                        self.save_failed = false;
+                        eprintln!("[host] 存盘已恢复");
+                    }
+                }
+                Err(error) => {
+                    if !self.save_failed {
+                        self.save_failed = true;
+                        let note = kept_in_memory(&error);
+                        eprintln!("[host] {note}");
+                        broadcast(clients, &error_msg(note));
+                    }
+                }
+            }
+        }
     }
 }
 

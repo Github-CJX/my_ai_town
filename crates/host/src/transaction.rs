@@ -62,7 +62,8 @@ impl Runtime {
     ) -> Result<T, Aborted<E>> {
         let before = self.capture();
         let cause = match change(self) {
-            Ok(value) => match self.checkpoint(true) {
+            // 事务要「写到盘上才算数」：等这一次同步写完，失败就回滚。
+            Ok(value) => match self.checkpoint_now() {
                 Ok(()) => return Ok(value),
                 Err(error) => Abort::SaveFailed(error),
             },

@@ -2,6 +2,7 @@
 use super::Page;
 use crate::{prompts, session::Session, tools::limits};
 use kernel::World;
+use protocol::WorldFact;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, rc::Rc};
@@ -68,38 +69,51 @@ impl DocumentsCache {
             let mut older = key.clone();
             older.cursor = cached_key.cursor;
             if older == *cached_key && key.cursor > cached_key.cursor {
-                append_events(world, s, Rc::make_mut(docs), cached_key.cursor);
+                let events = world
+                    .actor(&s.actor_id)
+                    .map_or(&[][..], |a| a.journal.events_after(cached_key.cursor));
+                append_events(events, Rc::make_mut(docs));
                 *cached_key = key;
                 return Rc::clone(docs);
             }
         }
-        let docs = Rc::new(build(world, s));
+        let docs = Rc::new(build(actor_events(world, &s.actor_id, 0), s));
         self.cached = Some((key, Rc::clone(&docs)));
         docs
     }
 }
 
-fn append_events(world: &World, s: &Session, docs: &mut Documents, after: u64) {
-    if let Some(actor) = world.actor(&s.actor_id) {
-        for event in actor.journal.events_after(after) {
-            let path = format!(
-                "events/D{:03}.jsonl",
-                kernel::calendar::day_index(event.at) + 1
-            );
-            let text = docs.entry(path).or_default();
-            text.push_str(&serde_json::to_string(event).expect("world event is serializable"));
-            text.push('\n');
-        }
+/// 这位村民的世界事件（从 `after` 起）；`documents` 的重建路径只需事件，不需要整个 `World`。
+fn actor_events<'a>(world: &'a World, actor: &str, after: u64) -> &'a [WorldFact] {
+    world
+        .actor(actor)
+        .map_or(&[][..], |a| a.journal.events_after(after))
+}
+
+fn append_events(events: &[WorldFact], docs: &mut Documents) {
+    for event in events {
+        let path = format!(
+            "events/D{:03}.jsonl",
+            kernel::calendar::day_index(event.at) + 1
+        );
+        let text = docs.entry(path).or_default();
+        text.push_str(&serde_json::to_string(event).expect("world event is serializable"));
+        text.push('\n');
     }
 }
 
 /// 与落盘目录使用同一份文件视图；工具只能读当前村民的快照，不接受操作系统路径。
 /// 每次调用整份重建；运行器内部用 DocumentsCache。
 pub fn documents(world: &World, s: &Session) -> Documents {
-    build(world, s)
+    build(actor_events(world, &s.actor_id, 0), s)
 }
 
-fn build(world: &World, s: &Session) -> Documents {
+/// 同上，但世界事件由调用方先取好：存盘线程拿不到 `World`，只拿事件。
+pub fn documents_from(events: &[WorldFact], s: &Session) -> Documents {
+    build(events, s)
+}
+
+fn build(events: &[WorldFact], s: &Session) -> Documents {
     let mut docs = BTreeMap::new();
     let mut index = prompts::index_header(&s.actor_id, s.notebook.through_event);
     let mut topics: Vec<_> = s.notebook.pages.values().collect();
@@ -134,7 +148,7 @@ fn build(world: &World, s: &Session) -> Documents {
             render_page(page),
         );
     }
-    append_events(world, s, &mut docs, 0);
+    append_events(events, &mut docs);
     for (id, messages) in s.archives() {
         let text = messages
             .iter()

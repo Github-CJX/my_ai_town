@@ -35,7 +35,7 @@ impl Runtime {
                 request_id,
                 true,
                 None,
-                if self.store.is_some() {
+                if self.saves.is_some() {
                     "天气设置已保存"
                 } else {
                     "天气已应用；当前服务未启用存档"

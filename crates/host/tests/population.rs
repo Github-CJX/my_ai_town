@@ -332,6 +332,14 @@ fn join_rolls_back_when_saving_fails_and_keeps_world_and_registry_consistent() {
     let first = join_id(&mut ws, "tpl_a");
     assert_eq!(first, "resident_001");
     let blocker = town.save().with_file_name("world.json.tmp");
+    // 存盘在单独一条线程上做：先等手头这一份落定，再把临时文件名占成目录，
+    // 否则可能正好撞上正在写的 world.json.tmp（新建目录时报 AlreadyExists）。
+    for _ in 0..200 {
+        if !blocker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     fs::create_dir(&blocker).unwrap();
     let failed = join(&mut ws, "tpl_b", None);
     assert_eq!(failed["ok"], false, "{failed}");

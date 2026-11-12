@@ -19,10 +19,12 @@ use std::{
 mod migration;
 mod residents;
 mod retired_commissions;
+mod writer;
 use migration::{Backup, SCHEMA_VERSION};
 use residents::{ResidentStore, Residents};
+pub use writer::{Saves, Written};
 
-const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
 /// 缺省存档文件名；村民记忆目录按它旁边的 residents/ 投影。
 pub const SAVE_FILE_NAME: &str = "world.json";
 
@@ -68,6 +70,55 @@ pub struct Checkpoint<'a> {
     pub population: Option<&'a Population>,
 }
 
+/// 一次要写盘的完整内容。模拟线程上只做这三件事：世界快照、会话克隆、按村民取世界事件；
+/// 渲染记忆文件、编码、写入与投影都在存盘线程上做（见 [`Saves`]），
+/// 否则每秒一次的那一坨会把模拟循环堵住，客户端看到的就是“走一走顿一下”。
+pub struct SaveJob {
+    /// 交任务的序号：存盘线程只有一条，但同步写（事务、退出）可能插在排队的份前面，
+    /// 序号让后交的那份不会被先写出来的旧份盖掉。
+    pub sequence: u64,
+    pub snapshot: WorldSnapshot,
+    /// 每位村民的世界事件：记忆文件里的 events/ 段由它重建，渲染时不需要整个世界。
+    pub events: std::collections::BTreeMap<String, Vec<protocol::WorldFact>>,
+    pub agent: Option<AgentSave>,
+    pub speed: f64,
+    pub world_settings: WorldSettings,
+    pub clock: ClockSave,
+    pub population: Option<Population>,
+}
+
+/// 把检查点连同村民会话做成一次存盘任务。会话要整份克隆，所以调用方先做节流判断。
+pub fn save_job(checkpoint: Checkpoint<'_>, agent: Option<AgentSave>) -> SaveJob {
+    let Checkpoint {
+        world,
+        speed,
+        world_settings,
+        clock,
+        population,
+    } = checkpoint;
+    let mut events = std::collections::BTreeMap::new();
+    if let Some(agent) = &agent {
+        for actor in agent.runtime.sessions.keys() {
+            events.insert(
+                actor.clone(),
+                world
+                    .actor(actor)
+                    .map_or_else(Vec::new, |a| a.journal.events_after(0).to_vec()),
+            );
+        }
+    }
+    SaveJob {
+        sequence: 0,
+        snapshot: world.snapshot(),
+        events,
+        agent,
+        speed,
+        world_settings: world_settings.clone(),
+        clock: clock.clone(),
+        population: population.cloned(),
+    }
+}
+
 pub struct SaveStore {
     path: PathBuf,
     world_key: String,
@@ -78,6 +129,8 @@ pub struct SaveStore {
     _lock: File,
     previous: Vec<u8>,
     last_check: Instant,
+    /// 已经写进盘的最高序号，见 [`SaveJob::sequence`]。
+    committed_sequence: u64,
     residents: ResidentStore,
 }
 
@@ -154,6 +207,7 @@ impl SaveStore {
             _lock: lock,
             previous: Vec::new(),
             last_check: Instant::now(),
+            committed_sequence: 0,
         })
     }
 
@@ -315,6 +369,7 @@ impl SaveStore {
 
     /// `force` 为假时按周期节流；节流只在这一处判断。返回 false 表示这次被节流、没有写。
     /// Agent 会话要整份克隆，`resident_agent` 在节流判断之后才调用。
+    /// 这是同步版本（测试、单跑工具用）；运行中的应用走 [`Saves`]，把重活放到存盘线程。
     pub fn checkpoint_bundle(
         &mut self,
         checkpoint: Checkpoint<'_>,
@@ -324,25 +379,38 @@ impl SaveStore {
         if !force && self.last_check.elapsed() < AUTOSAVE_INTERVAL {
             return Ok(false);
         }
-        let Checkpoint {
-            world,
+        let job = save_job(checkpoint, resident_agent());
+        self.commit(job)
+    }
+
+    /// 把一次存盘任务写到盘上：渲染村民记忆文件、编码、原子写入、投影可读目录。
+    /// 只在存盘线程、退出与事务性命令上调用（它们要同步结果），模拟线程不再直接进来。
+    pub fn commit(&mut self, job: SaveJob) -> Result<bool, HostError> {
+        let SaveJob {
+            sequence,
+            snapshot,
+            events,
+            mut agent,
             speed,
             world_settings,
             clock,
             population,
-        } = checkpoint;
-        let mut resident_agent = resident_agent();
-        let resident_files = self.residents.stage(world, &mut resident_agent)?;
+        } = job;
+        if sequence < self.committed_sequence {
+            // 盘上已经是最新的一份：旧份不写，免得把新状态盖回去。
+            return Ok(false);
+        }
+        let resident_files = self.residents.stage(&events, &mut agent)?;
         let saved = SaveFile {
-            world_settings: world_settings.clone(),
-            clock: clock.clone(),
+            world_settings,
+            clock,
             schema_version: SCHEMA_VERSION,
             resident_files,
             world_key: self.world_key.clone(),
             speed,
-            world: world.snapshot(),
-            resident_agent,
-            population: population.cloned(),
+            world: snapshot,
+            resident_agent: agent,
+            population,
         };
         let bytes = serde_json::to_vec(&saved)
             .map_err(|e| HostError::Save(format!("编码存档失败：{e}")))?;
@@ -356,6 +424,7 @@ impl SaveStore {
             }
             self.previous = bytes;
         }
+        self.committed_sequence = sequence;
         // world.json 与不可变对象已经提交；可读目录是可重建投影。
         // 投影失败不能让命令回滚到已不再属于磁盘的旧世界，下一次检查点会重试。
         if let Err(error) = self.residents.publish(&saved.resident_files) {

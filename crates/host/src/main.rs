@@ -253,7 +253,8 @@ fn build_runtime(
         world,
         settings,
         driver,
-        store,
+        // 存盘交给单独一条线程：模拟线程只交快照、会话克隆与事件，编码写入投影都在那条线程上。
+        saves: store.map(host::persistence::Saves::open),
         population,
         library,
         prop_library,
@@ -299,7 +300,7 @@ fn start_driver(
 
 /// 监听、写就绪文件、主循环；收到退出信号或 stdin 关闭后保存并退出。
 fn serve(mut runtime: Runtime, args: &Args, map_hash: String) -> Result<(), HostError> {
-    runtime.checkpoint(true)?;
+    runtime.checkpoint_now()?;
     let identity = protocol::ServerMsg::WorldIdentity {
         town_id: args.town_id.clone(),
         map_hash,
@@ -337,7 +338,8 @@ fn serve(mut runtime: Runtime, args: &Args, map_hash: String) -> Result<(), Host
             std::thread::sleep(rest);
         }
     }
-    runtime.checkpoint(true)?;
+    // 退出前这一份要真的写到盘上，不能只交给存盘线程就走。
+    runtime.checkpoint_now()?;
     println!("[host] 已保存并退出：{}", runtime.world.clock());
     Ok(())
 }
