@@ -542,6 +542,13 @@ body:has(.map-launcher) {
 #budget-dialog {
   width: min(460px, calc(100vw - 32px));
 }
+/* 用量明细：两张表，比建村民那个窄一点 */
+#usage-dialog {
+  width: min(720px, calc(100vw - 32px));
+}
+#usage-view {
+  margin: 12px 0 14px;
+}
 .budget-sheet {
   display: flex;
   flex-direction: column;

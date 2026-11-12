@@ -34,6 +34,7 @@ import { installPlatform, isCompact, isTouch, onBack, systemBars } from 'town-sh
 import { installSelects } from 'town-shared/design/select'
 import { installFavicon, logoUrl } from 'town-shared/brand/brand'
 import { installHomeSettings } from './settings'
+import { initAccountUsage } from 'town-shared/accountUsage/view'
 // 小镇选择页：一句话说清这是什么游戏、小镇列表（写着玩到第几天、住了几个人）、静态预览、进入或继续玩。
 // 预览不启动世界。
 installPlatform()
@@ -548,6 +549,18 @@ $('budget-save').addEventListener('click', () => {
 })
 $('budget-clear').addEventListener('click', () => void storeBudget({}))
 
+// 用量明细：和设定中心里「我的用量」是同一块面板，打开时重读一次（数字来自管理服务的记账）
+const usageDialog = $('usage-dialog') as HTMLDialogElement
+const usagePanel = initAccountUsage($('usage-view'))
+
+function openUsage() {
+  agentTip.hidden = true
+  usageDialog.showModal()
+  void usagePanel.refresh()
+}
+
+$('usage-close').addEventListener('click', () => usageDialog.close())
+
 const townName = (id: string) => maps.find((map) => map.id === id)?.name ?? id
 function agentSay(text: string) {
   agentTip.textContent = text
@@ -792,7 +805,9 @@ function renderAgents() {
     'agent-budget'
   )
   limit.title = '限定这个账号投出去的 agent 每天最多用多少'
-  wallet.append(limit)
+  const detail = button('用量明细', () => openUsage(), 'agent-usage')
+  detail.title = '今天和近几天用掉的调用、token 和钱（按这个账号的 agent 记）'
+  wallet.append(limit, detail)
   agentList.replaceChildren(
     ...(picked ? [strip, renderAgentActions(picked, here), wallet] : [strip, wallet])
   )

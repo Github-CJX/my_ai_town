@@ -15,6 +15,7 @@ import { createSoundPage } from './settings/sound'
 import { createDisplayPage } from './settings/display'
 import { createLimitsPage } from './settings/limits'
 import { createResetPage } from './settings/reset'
+import { createAccountUsagePage } from './settings/accountUsage'
 import { createPhysiologyPage } from './settings/physiology'
 import { createSettingsNav } from './settings/nav'
 import { $ } from './dom'
@@ -131,6 +132,7 @@ export function initSettingsCenter(deps: CenterDeps) {
     createLimitsPage(pageDeps, deps.townPrice),
     createSoundPage(deps.game, deps.audio),
     createDisplayPage(deps.map, deps.game),
+    createAccountUsagePage(),
     createResetPage(pageDeps, deps.townName)
   )
   const inGroup = (group: SettingsPage['group']) => pages.filter((p) => p.group === group)

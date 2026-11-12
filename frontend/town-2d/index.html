@@ -146,6 +146,16 @@
         </div>
       </div>
     </dialog>
+    <!-- 账号自己的用量：投出去的 agent 今天、近几天花了多少（数字来自管理服务的记账） -->
+    <dialog id="usage-dialog" class="villager-dialog" aria-label="我的用量">
+      <div class="villager-sheet">
+        <h2 class="budget-title">我的用量</h2>
+        <div id="usage-view"></div>
+        <div class="agent-actions">
+          <button id="usage-close">关闭</button>
+        </div>
+      </div>
+    </dialog>
     <script type="module" src="/src/launcher/page.ts"></script>
   </body>
 </html>
