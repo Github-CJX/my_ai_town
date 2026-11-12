@@ -312,3 +312,61 @@ test('桥：连着敲的几句合成一封信，只回一句「到手了」', as
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('桥：同一句拉信失败只记一次，好了以后换个错再记一次', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'qq-bridge-'))
+  const logs = []
+  // 世界那边随时可能拒读：她还没进过镇时一直是同一句「还没有你的化身」
+  let refusal = '还没有你的化身：先登进小镇'
+  const link = {
+    connected: true,
+    connect() {},
+    stop() {},
+    async sendLetter() {
+      return { ok: true, message: '信递到「大肥鱼」手上了' }
+    },
+    async letters() {
+      if (refusal) throw Error(refusal)
+      return { letters: [], cursor: 0 }
+    },
+  }
+  try {
+    await mkdir(path.join(root, 'config'), { recursive: true })
+    await writeFile(
+      path.join(root, 'config', 'qq.json'),
+      JSON.stringify({ app_id: '1', app_secret: 's' })
+    )
+    await saveBindings(
+      path.join(root, 'config', 'qq-bindings.json'),
+      bind(parseBindings(null), entry())
+    )
+    const bridge = createBridge({
+      root,
+      endpointFor: () => 'ws://127.0.0.1:1/?session=x&ticket=y',
+      log: (message) => logs.push(message),
+      send: async () => {},
+      tokenFactory: async () => ({ token: 't', expiresAt: Date.now() + 3600_000 }),
+      gatewayFactory: () => ({ start() {}, stop() {} }),
+      worldLinkFactory: () => link,
+      pollMs: 5,
+      mergeMs: 0,
+    })
+    const failures = () => logs.filter((line) => line.startsWith('拉信失败'))
+
+    await bridge.start()
+    await settle(60)
+    assert.equal(failures().length, 1, '同样的错只该记一次')
+
+    // 世界好了：不再记。再坏的时候换一句错，还要再记（不然会误以为「这次没事」）
+    refusal = ''
+    await settle(40)
+    assert.equal(failures().length, 1)
+    refusal = '世界连接断了'
+    await settle(60)
+    assert.equal(failures().length, 2)
+    assert.match(failures()[1], /世界连接断了/)
+    bridge.stop()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

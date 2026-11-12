@@ -106,6 +106,7 @@ export function createBridge({
     state.busy = true
     try {
       const { letters } = await state.link.letters({ after: state.binding.cursor })
+      state.pollError = ''
       for (const letter of letters) {
         if (!letter.incoming) continue
         const okay = await say(state, letterNotice({ name: letter.from_name, text: letter.text }))
@@ -113,7 +114,13 @@ export function createBridge({
         await moveTo(state, letter.event_id)
       }
     } catch (error) {
-      log(`拉信失败：${text(error)}`)
+      // 同一句错不每两秒刷一遍：她还没进过镇时世界只会说「还没有你的化身」，
+      // 一直刷会把日志灌满，出事那天反而看不见。
+      const message = text(error)
+      if (state.pollError !== message) {
+        state.pollError = message
+        log(`拉信失败：${message}`)
+      }
     } finally {
       state.busy = false
     }
@@ -140,6 +147,8 @@ export function createBridge({
       queue: [],
       mergeTimer: null,
       flushing: false,
+      /** 上一轮拉信失败的那句（同一句不重复记日志）。 */
+      pollError: '',
     }
     states.set(binding.openid, state)
     state.link.connect()
