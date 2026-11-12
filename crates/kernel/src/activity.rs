@@ -52,7 +52,8 @@ pub enum TravelStage {
 }
 
 impl Activity {
-    pub(crate) fn advancing(&self) -> bool {
+    /// 手上有没有还要一阵才完成的事（赶路、定时活动）。传讯的回执据此说「她正忙」。
+    pub fn advancing(&self) -> bool {
         !matches!(self.kind, ActKind::Placeholder { .. })
     }
     pub(crate) fn kind(&self) -> ActivityKind {

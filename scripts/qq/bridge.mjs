@@ -5,7 +5,8 @@
 //! 桥这边不另做一套权限判断。
 //!
 //! 两条腿各自异步，谁都不等谁：
-//!   QQ → 世界：收到私聊就 `send_letter`，立刻回一句「信递过去了」（或世界给的拒绝原因）；
+//!   QQ → 世界：收到私聊先攒一小会儿（`mergeMs`），几句连着敲的合成一封信再 `send_letter`，
+//!   立刻回一句「信递过去了」——世界会把她此刻的状态（停着/睡着/正忙/没法回话）缀在后面；
 //!   世界 → QQ：每 2 秒按自己的事件游标拉一次新信，`incoming` 的就是她写的，回给主人。
 //!
 //! 官方被动回复窗口 60 分钟、同一条最多 4 句，见 `./letters.mjs`。
@@ -31,6 +32,8 @@ const REFRESH_MS = 5 * 60 * 1000
 /** 没绑定的号码来找她，最多留这么多条待认领，也只留这么久（认领要在网页上点）。 */
 const CLAIM_MAX = 20
 const CLAIM_MS = 30 * 60 * 1000
+/** 一个人连着敲几行再发：等这么久没有下一句，就把这几句当一封信递进去。 */
+const MERGE_MS = 1500
 
 export function createBridge({
   root,
@@ -42,6 +45,7 @@ export function createBridge({
   gatewayFactory = createGateway,
   worldLinkFactory = createWorldLink,
   pollMs = POLL_MS,
+  mergeMs = MERGE_MS,
   now = () => Date.now(),
 } = {}) {
   const configFile = path.join(root, 'config', 'qq.json')
@@ -132,6 +136,10 @@ export function createBridge({
         endpoint: async () => endpointFor(binding.town, binding.account),
         log,
       }),
+      /** 还没递进去的几句（同一个人连着敲的），凑够一次再当一封信发。 */
+      queue: [],
+      mergeTimer: null,
+      flushing: false,
     }
     states.set(binding.openid, state)
     state.link.connect()
@@ -141,19 +149,21 @@ export function createBridge({
     return state
   }
 
-  /** 一条私聊：先记下能被动回几句，再把话递进镇里。 */
-  async function onMessage(state, event) {
-    state.track.note(event.id, now())
-    const content = letterContent(event.content)
-    if (!content) {
-      await say(state, '信上什么都没写：说一句话再发过来。')
-      return
-    }
-    if (!state.link.connected) {
-      await say(state, '小镇现在没连上（可能没在跑），这封信没递出去。')
-      return
-    }
+  /** 她连着发来几句：合成一封信递进去，别让镇里收一串半句话。 */
+  async function flush(state) {
+    if (state.mergeTimer) clearTimeout(state.mergeTimer)
+    state.mergeTimer = null
+    if (state.flushing) return
+    const parts = state.queue.splice(0)
+    if (!parts.length) return
+    const content = letterContent(parts.join('\n'))
+    if (!content) return
+    state.flushing = true
     try {
+      if (!state.link.connected) {
+        await say(state, '小镇现在没连上（可能没在跑），这封信没递出去。')
+        return
+      }
       const sent = await state.link.sendLetter({ to: state.binding.resident, text: content })
       if (!sent.ok) {
         await say(state, `没递到：${sent.message}`)
@@ -161,10 +171,31 @@ export function createBridge({
       }
       log(`递信给「${sent.letter?.to_name ?? state.binding.resident}」：${content.length} 字`)
       // 回一句「到手了」：主人在 QQ 里看不到镇里发生什么，没有回执就分不清是没发出去还是她还没回。
+      // 世界会把她此刻的状态（停着/睡着/正忙/没法回话）缀在这句后面，见 crates/host/src/letters.rs。
       await say(state, sent.message)
     } catch (error) {
       await say(state, `没递到：${text(error)}`)
+    } finally {
+      state.flushing = false
     }
+  }
+
+  /** 一条私聊：先记下能被动回几句，再攒一小会儿递进镇里。 */
+  async function onMessage(state, event) {
+    state.track.note(event.id, now())
+    const content = letterContent(event.content)
+    if (!content) {
+      await say(state, '信上什么都没写：说一句话再发过来。')
+      return
+    }
+    state.queue.push(content)
+    if (mergeMs <= 0) {
+      await flush(state)
+      return
+    }
+    if (state.mergeTimer) clearTimeout(state.mergeTimer)
+    state.mergeTimer = setTimeout(() => void flush(state), mergeMs)
+    state.mergeTimer.unref?.()
   }
 
   /** 认领用的短号：同一个 openid 每次都一样，重发消息不会多出一行。 */
@@ -250,6 +281,7 @@ export function createBridge({
     async reload() {
       for (const state of states.values()) {
         clearInterval(state.timer)
+        if (state.mergeTimer) clearTimeout(state.mergeTimer)
         state.link.stop()
       }
       states.clear()
@@ -281,6 +313,7 @@ export function createBridge({
       stopped = true
       for (const state of states.values()) {
         clearInterval(state.timer)
+        if (state.mergeTimer) clearTimeout(state.mergeTimer)
         state.link.stop()
       }
       states.clear()

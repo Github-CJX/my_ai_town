@@ -42,16 +42,43 @@ impl Runtime {
                     .actor(&to)
                     .and_then(|actor| actor.journal.events_after(event_id - 1).first())
                     .and_then(|fact| self.letter_view(&from, fact));
+                let notes = self.receipt_note(&to);
                 Outcome::reply(ServerMsg::LetterSent {
                     request_id,
                     ok: true,
-                    message: format!("信递到「{name}」手上了"),
+                    message: receipt(&name, &notes),
                     letter: letter.map(Box::new),
                 })
                 .persisted()
             }
             Err(error) => Outcome::reply(refused(request_id, &error.to_string())),
         }
+    }
+
+    /// 信递到了，可她此刻未必看得到：把「世界停着 / 睡着 / 正忙 / 没法回话」缀在回执后面。
+    ///
+    /// 主人在 QQ 里看不见镇里发生了什么。没有这几个字，他分不清「她没收到」「收到了还没空看」
+    /// 与「她根本没法回话」，只能干等。这些只是**说明**：信照常写进世界事实，一件都不少。
+    fn receipt_note(&self, to: &str) -> Vec<String> {
+        let mut notes = Vec::new();
+        if self.speed == 0.0 {
+            notes.push("小镇现在停着，等跑起来她才看得到".to_string());
+        } else if !self.world.awake(to) {
+            notes.push("她这会儿睡着（或者动不了），醒了会看到".to_string());
+        } else if self
+            .world
+            .actor(to)
+            .is_some_and(|actor| actor.current.advancing())
+        {
+            notes.push("她正忙，信先搁下，做完手上的事就看".to_string());
+        }
+        let missing =
+            self.driver
+                .missing_models(&self.population, &self.settings, &self.owner_keys);
+        if let Some(reason) = missing.get(to) {
+            notes.push(format!("她现在没法回话：{reason}"));
+        }
+        notes
     }
 
     /// 读自己化身与村民之间的传讯：只要那一本账里的事件，别的账号的信不会出现在这里。
@@ -118,5 +145,40 @@ fn refused(request_id: String, message: &str) -> ServerMsg {
         ok: false,
         message: message.into(),
         letter: None,
+    }
+}
+
+/// 递信回执：一句「到手了」，后面缀上她此刻的状态说明（可能一条也没有）。
+fn receipt(name: &str, notes: &[String]) -> String {
+    if notes.is_empty() {
+        format!("信递到「{name}」手上了")
+    } else {
+        format!("信递到「{name}」手上了：{}", notes.join("；"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::receipt;
+
+    #[test]
+    fn a_receipt_says_where_the_letter_went_and_why_she_may_not_read_it_yet() {
+        assert_eq!(receipt("大肥鱼", &[]), "信递到「大肥鱼」手上了");
+        assert_eq!(
+            receipt("大肥鱼", &["小镇现在停着，等跑起来她才看得到".into()]),
+            "信递到「大肥鱼」手上了：小镇现在停着，等跑起来她才看得到"
+        );
+        // 两条并列：睡着时也可能没配模型，两件事都要说，不能让后一条盖掉前一条
+        let both = receipt(
+            "大肥鱼",
+            &[
+                "她这会儿睡着（或者动不了），醒了会看到".into(),
+                "她现在没法回话：没有选模型".into(),
+            ],
+        );
+        assert_eq!(
+            both,
+            "信递到「大肥鱼」手上了：她这会儿睡着（或者动不了），醒了会看到；她现在没法回话：没有选模型"
+        );
     }
 }

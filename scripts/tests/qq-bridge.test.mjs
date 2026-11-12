@@ -172,6 +172,7 @@ test('桥：主人一句话变成一封传讯，她回的信变成主人的私�
       },
       worldLinkFactory: () => world.link,
       pollMs: 5,
+      mergeMs: 0, // 这几条测的是「一句话怎么走」，不掺合并的等待
     })
     await bridge.start()
     // 主人发来一句话：桥把它递给镇里那位村民，并回一句「收到了」
@@ -225,6 +226,7 @@ test('桥：没绑村民的号码不理，世界没连上就回一句实话', as
       },
       worldLinkFactory: () => world.link,
       pollMs: 5,
+      mergeMs: 0, // 这几条测的是「一句话怎么走」，不掺合并的等待
     })
     await bridge.start()
     await gatewaySpec.onEvent({
@@ -259,3 +261,54 @@ test('桥：没绑村民的号码不理，世界没连上就回一句实话', as
 function settle(ms = 10) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+test('桥：连着敲的几句合成一封信，只回一句「到手了」', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'qq-bridge-'))
+  const world = fakeWorld()
+  const said = []
+  let gatewaySpec = null
+  try {
+    await mkdir(path.join(root, 'config'), { recursive: true })
+    await writeFile(
+      path.join(root, 'config', 'qq.json'),
+      JSON.stringify({ app_id: '1', app_secret: 's' })
+    )
+    await saveBindings(
+      path.join(root, 'config', 'qq-bindings.json'),
+      bind(parseBindings(null), entry())
+    )
+    const bridge = createBridge({
+      root,
+      endpointFor: () => 'ws://127.0.0.1:1/?session=x&ticket=y',
+      log: () => {},
+      send: async (message) => said.push(message),
+      tokenFactory: async () => ({ token: 't', expiresAt: Date.now() + 3600_000 }),
+      gatewayFactory: (spec) => {
+        gatewaySpec = spec
+        return { start() {}, stop() {} }
+      },
+      worldLinkFactory: () => world.link,
+      pollMs: 5,
+      mergeMs: 30,
+    })
+    await bridge.start()
+    // 三句话前后脚到：镇里只该收到一封信，内容按顺序连起来
+    for (const [id, content] of [
+      ['m-1', '在吗'],
+      ['m-2', '今天镇上'],
+      ['m-3', '下雨了吗'],
+    ])
+      await gatewaySpec.onEvent({
+        name: 'C2C_MESSAGE_CREATE',
+        data: { id, content, author: { user_openid: 'A1B2C3' } },
+      })
+    assert.equal(world.sent.length, 0) // 还在攒，没到时间不外发
+    await settle(80)
+    assert.deepEqual(world.sent, [{ to: 'resident_005', text: '在吗\n今天镇上\n下雨了吗' }])
+    assert.equal(said.length, 1) // 三句话只回一句
+    assert.equal(said[0].msgId, 'm-3') // 用的是最后一句的 msg_id（被动窗口按它算）
+    bridge.stop()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
