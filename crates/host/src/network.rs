@@ -19,7 +19,8 @@ use tungstenite::{
     Message, WebSocket,
 };
 
-/// 每个连接最多积压这么多条待发消息（每拍至少广播一条名册）；超出说明客户端收不过来，断开这条连接。
+/// 每个连接最多积压这么多条待发消息（回执、事件这类不能丢的）；超出说明客户端收不过来，断开这条连接。
+/// 名册这类每拍重发的快照不排队，只保留最新的一份（见 [`Peer::snapshot`]）。
 const OUTBOUND_QUEUE: usize = 1024;
 /// 一次写入超过这么久没写完就断开这条连接。
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -31,6 +32,10 @@ const INPUT_QUEUE: usize = 32;
 
 pub(crate) struct Peer {
     sender: SyncSender<String>,
+    /// 待发的最新一份名册快照：每拍覆盖，不排队。连接线程每次读之前取走它发出去，
+    /// 客户端慢的时候只会晚一点看到最新状态，不会把旧的几百份排着队慢慢倒出来（那正是
+    /// 「卡一下再突然冲过去」的来历）。
+    latest: Arc<Mutex<Option<String>>>,
     /// 同一个套接字的副本：积压超限时从这里关闭，连接线程的读写随即失败退出。
     socket: TcpStream,
     /// 还没交给模拟循环的方向输入和到达的时刻，按先后排：化身按到达时刻换方向（见 avatar/tick.rs）。
@@ -57,6 +62,11 @@ impl Peer {
             }
             Err(TrySendError::Disconnected(_)) => false,
         }
+    }
+
+    /// 放下一份新快照，覆盖还没发出去的旧快照。快照是可合并的整份状态，丢掉旧的没有损失。
+    fn snapshot(&self, message: String) {
+        *self.latest.lock().unwrap() = Some(message);
     }
 }
 
@@ -85,6 +95,8 @@ pub(crate) enum NetworkEvent {
         connection: u64,
         message: Box<ClientMsg>,
     },
+    /// 新连接握手成功：名册下一拍就有，村民细节这种变了才发的要单独补一份。
+    Connected(u64),
     Disconnected(u64),
 }
 pub(crate) fn send_to(clients: &Clients, connection: u64, message: &ServerMsg) {
@@ -150,11 +162,13 @@ pub(crate) fn listen(
                 continue;
             };
             let (tx, rx) = sync_channel::<String>(OUTBOUND_QUEUE);
+            let latest: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
             let id = ids.fetch_add(1, Ordering::Relaxed);
             accepted.lock().unwrap().insert(
                 id,
                 Peer {
                     sender: tx,
+                    latest: latest.clone(),
                     socket,
                     inputs: Vec::new(),
                     admin,
@@ -163,9 +177,11 @@ pub(crate) fn listen(
                 },
             );
             let to_sim = to_sim.clone();
+            // 补发村民细节这种事交给模拟循环：名册下一拍就有，细节得有人单独发。
+            let _ = to_sim.try_send(NetworkEvent::Connected(id));
             let peers = accepted.clone();
             thread::spawn(move || {
-                serve_connection(ws, rx, to_sim.clone(), id, &peers);
+                serve_connection(ws, rx, latest, to_sim.clone(), id, &peers);
                 peers.lock().unwrap().remove(&id);
                 let _ = to_sim.send(NetworkEvent::Disconnected(id));
             });
@@ -244,15 +260,23 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// 一条连接：把广播队列全部发出，再读一条客户端命令（超时即过），直到任一方向断开。
+/// 一条连接：先发出最新的一份名册快照、再把排队的回执与事件全部发出，然后读一条客户端命令
+/// （超时即过），直到任一方向断开。
 fn serve_connection(
     mut ws: WebSocket<TcpStream>,
     rx: Receiver<String>,
+    latest: Arc<Mutex<Option<String>>>,
     to_sim: SyncSender<NetworkEvent>,
     connection: u64,
     peers: &Clients,
 ) {
     loop {
+        // 快照每拍覆盖一次：这里发出去的永远是最新的一份，晚到也只晚这一下。
+        if let Some(snapshot) = latest.lock().unwrap().take() {
+            if !send(&mut ws, connection, snapshot) {
+                return;
+            }
+        }
         loop {
             match rx.try_recv() {
                 Ok(msg) => {
@@ -422,4 +446,12 @@ pub(crate) fn broadcast(clients: &Clients, msg: &ServerMsg) {
         .lock()
         .unwrap()
         .retain(|id, peer| peer.deliver(*id, json.clone()));
+}
+
+/// 广播一份整份状态（名册）：每个连接只留最新的一份，慢了就丢掉旧的，不排长队、也不因此断线。
+pub(crate) fn broadcast_snapshot(clients: &Clients, msg: &ServerMsg) {
+    let json = encode(msg);
+    for peer in clients.lock().unwrap().values() {
+        peer.snapshot(json.clone());
+    }
 }

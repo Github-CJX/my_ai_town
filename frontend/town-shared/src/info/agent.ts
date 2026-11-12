@@ -1,4 +1,4 @@
-import type { ResidentAgentView } from '../protocol'
+import type { ResidentAgentFull } from '../protocol'
 import { el as text } from '../dom'
 import { clock, playerText } from '../format'
 import {
@@ -10,10 +10,10 @@ import {
   memoryStatusLabels,
 } from '../labels'
 
-type Goal = ResidentAgentView['goals'][number]
-type Result = ResidentAgentView['results'][number]
-type Interaction = NonNullable<ResidentAgentView['interactions']>[number]
-type Memory = ResidentAgentView['memories'][number]
+type Goal = ResidentAgentFull['goals'][number]
+type Result = ResidentAgentFull['results'][number]
+type Interaction = ResidentAgentFull['interactions'][number]
+type Memory = ResidentAgentFull['memories'][number]
 
 const resultStatusLabels = {
   succeeded: '完成',
@@ -23,7 +23,7 @@ const resultStatusLabels = {
 }
 
 /** 状态和原因；调用次数、token 这些在「消耗」页里 */
-function header(view: ResidentAgentView): HTMLElement[] {
+function header(view: ResidentAgentFull): HTMLElement[] {
   return [
     text('strong', agentStateLabels[view.state]),
     text('p', playerText(view.reason), 'dim'),
@@ -115,7 +115,7 @@ export function createAgentView(box: HTMLElement) {
     previous = ''
     box.replaceChildren(text('p', '该村民没有 Agent 会话', 'dim'))
   }
-  function render(view?: ResidentAgentView) {
+  function render(view?: ResidentAgentFull) {
     if (!view) {
       if (previous) clear()
       return

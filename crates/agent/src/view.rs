@@ -8,7 +8,8 @@ use crate::{
 };
 use kernel::{world::Actor, World};
 use protocol::{
-    AgentState, ResidentAgentView, ResidentGoalView, ResidentMemoryView, ResidentUsage,
+    AgentState, ResidentAgentView, ResidentDetailView, ResidentGoalView, ResidentMemoryView,
+    ResidentUsage,
 };
 
 /// 观察仪各列表的上限。
@@ -209,6 +210,7 @@ fn memory_views(s: &Session, a: &Actor) -> Vec<ResidentMemoryView> {
 }
 
 impl ResidentRuntime {
+    /// 名册里每拍都发的那一份：状态、原因和当日用量。
     pub fn view(&self, world: &World, actor: &str) -> Option<ResidentAgentView> {
         let s = self.session(actor)?;
         let a = world.actor(actor)?;
@@ -216,6 +218,21 @@ impl ResidentRuntime {
         Some(ResidentAgentView {
             state,
             reason,
+            daily_calls: s.daily.calls,
+            daily_limit: self.state().limits.calls_per_day,
+            daily_tokens: s.daily.tokens,
+            daily_input_tokens: s.daily.input_tokens,
+            daily_cache_hit_tokens: s.daily.cache_hit_tokens,
+            replies: s.tally.replies,
+            stale_replies: s.tally.stale_replies,
+        })
+    }
+
+    /// 体积大、变得慢的那一份：目标、动作结果、进行中的互动和记着的事。
+    pub fn detail(&self, world: &World, actor: &str) -> Option<ResidentDetailView> {
+        let s = self.session(actor)?;
+        let a = world.actor(actor)?;
+        Some(ResidentDetailView {
             goals: goal_views(s),
             results: recent_results(a),
             interactions: world
@@ -226,13 +243,6 @@ impl ResidentRuntime {
                 .map(|i| interaction::summary(world, i))
                 .collect(),
             memories: memory_views(s, a),
-            daily_calls: s.daily.calls,
-            daily_limit: self.state().limits.calls_per_day,
-            daily_tokens: s.daily.tokens,
-            daily_input_tokens: s.daily.input_tokens,
-            daily_cache_hit_tokens: s.daily.cache_hit_tokens,
-            replies: s.tally.replies,
-            stale_replies: s.tally.stale_replies,
         })
     }
 }

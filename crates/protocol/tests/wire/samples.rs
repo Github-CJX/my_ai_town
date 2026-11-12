@@ -40,10 +40,24 @@ fn action_result() -> ActionResult {
     }
 }
 
+/// 名册里那一份：只放会变的小字段；大而慢的字段在 [`detail_view`]。
 fn agent_view() -> ResidentAgentView {
     ResidentAgentView {
         state: AgentState::Thinking,
         reason: "正在等待模型响应".into(),
+        daily_calls: 3,
+        daily_limit: 120,
+        daily_tokens: 12_000,
+        daily_input_tokens: 10_000,
+        daily_cache_hit_tokens: 4_000,
+        replies: 3,
+        stale_replies: 1,
+    }
+}
+
+/// 变了才单独发的细节：目标、动作结果、互动和记忆。
+fn detail_view() -> ResidentDetailView {
+    ResidentDetailView {
         goals: vec![ResidentGoalView {
             id: "read".into(),
             title: "去图书馆读书".into(),
@@ -100,13 +114,6 @@ fn agent_view() -> ResidentAgentView {
                 }),
             }],
         }],
-        daily_calls: 3,
-        daily_limit: 120,
-        daily_tokens: 12_000,
-        daily_input_tokens: 10_000,
-        daily_cache_hit_tokens: 4_000,
-        replies: 3,
-        stale_replies: 1,
     }
 }
 
@@ -615,6 +622,10 @@ pub fn server_samples() -> Vec<ServerMsg> {
                     },
                 ],
             }],
+        },
+        ServerMsg::ResidentDetail {
+            resident: "resident_ashu".into(),
+            detail: detail_view(),
         },
         ServerMsg::Event {
             sim_minutes: 432.5,

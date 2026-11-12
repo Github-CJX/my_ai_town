@@ -1,9 +1,10 @@
 import type { AvatarLook, AvatarState } from './avatar/types'
-import type { PlaceGrid, RosterMember, ServerMsg } from './protocol'
+import type { PlaceGrid, ServerMsg } from './protocol'
+import type { DetailedMember } from './residents/details'
 import type { PropCatalog, PropView } from './props/types'
 import type { Insets } from './mapView'
 import type { DepthBlur, Quality } from './quality'
-export type ResidentEntry = { locale: string; member: RosterMember }
+export type ResidentEntry = { locale: string; member: DetailedMember }
 /** 居民在屏幕上的范围（CSS 像素）：脚底点的 x 与 y、头顶的 y、身体半宽 */
 export interface ScreenBox {
   x: number

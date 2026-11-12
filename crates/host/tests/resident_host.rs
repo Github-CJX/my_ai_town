@@ -416,3 +416,39 @@ fn residents_without_a_model_wait_until_one_is_chosen() {
         "工具模型不应收到村民请求"
     );
 }
+
+/// 名册每拍都发，只带这一拍会变的状态；目标、动作结果、互动和记忆体积大、变得慢，
+/// 单独发 resident_detail，变了才发，新连接补发一次。
+#[test]
+fn the_roster_sends_only_what_changes_and_details_go_separately() {
+    let mut town = Town::new();
+    town.mock_delay = None;
+    let mut ws = town.start();
+    let id = join_id(&mut ws, "tpl_a");
+
+    let detail = until(&mut ws, |m| {
+        m["type"] == "resident_detail" && m["resident"] == id
+    });
+    for field in ["goals", "results", "interactions", "memories"] {
+        assert!(
+            detail["detail"][field].is_array(),
+            "细节要单独送来：{field} {detail}"
+        );
+    }
+
+    let roster = until(&mut ws, |m| {
+        m["type"] == "roster" && members(m).iter().any(|x| x["id"] == id)
+    });
+    let member = members(&roster)
+        .into_iter()
+        .find(|m| m["id"] == id)
+        .unwrap();
+    for field in ["goals", "results", "interactions", "memories"] {
+        assert!(
+            member["resident_agent"].get(field).is_none(),
+            "名册不该每拍重发 {field}：{member}"
+        );
+    }
+    let size = serde_json::to_string(&member).unwrap().len();
+    assert!(size < 2000, "一拍里的村民应该很轻，实际 {size} 字节：{member}");
+}

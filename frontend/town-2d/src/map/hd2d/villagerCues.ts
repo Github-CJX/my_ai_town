@@ -1,4 +1,5 @@
-import type { AgentState, NeedBand, NeedKind, RosterMember } from 'town-shared/protocol'
+import type { AgentState, NeedBand, NeedKind } from 'town-shared/protocol'
+import type { DetailedMember } from 'town-shared/residents/details'
 import type { Body, Mood } from './villagerActing'
 import type { Sign } from './villagerSigns'
 
@@ -48,7 +49,7 @@ const FRESH_RECOVERY = 3
 
 /** 从名册里摘线索；minutes 是名册的游戏时间 */
 export function cueOf(
-  member: RosterMember,
+  member: DetailedMember,
   minutes: number,
   persona?: string,
   indoors?: boolean

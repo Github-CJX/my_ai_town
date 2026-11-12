@@ -51,6 +51,7 @@ fn server_variants() -> Vec<String> {
         PlaceGrid,
         PropResult,
         Roster,
+        ResidentDetail,
         Event,
         ModelConfig,
         ConfigSaved,

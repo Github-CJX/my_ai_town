@@ -2,7 +2,7 @@
 //! 客户端命令不能让进程退出：存盘失败只回错误回执并写日志，内存状态保留，下次检查点重试。
 use crate::{
     join::JoinRequest,
-    network::{broadcast, broadcast_event, send_to, Clients},
+    network::{broadcast, broadcast_event, broadcast_snapshot, send_to, Clients},
     owner_keys::OwnerKeys,
     resident_driver::ResidentDriver,
     settings::Settings,
@@ -16,6 +16,9 @@ use host::{
 };
 use kernel::World;
 use protocol::{Alert, ClientMsg, ContentCommand, EventInfo, ServerMsg, WeatherCode};
+
+/// 村民的细节（目标、动作结果、互动、记忆）多少拍算一次：10 拍约一秒，变了才发。
+const DETAIL_REFRESH_TICKS: u64 = 10;
 
 pub(crate) struct Runtime {
     /// 建新世界的地图数据与规则；重置时用它再建一次。
@@ -45,6 +48,10 @@ pub(crate) struct Runtime {
     pub owners: host::owners::Owners,
     /// 上一次存盘是否失败；只在状态变化时写日志，避免每秒刷屏。
     pub save_failed: bool,
+    /// 已经发出去的村民细节（序列化后比对）：变了才发，不跟着每拍的名册走。
+    pub details_sent: std::collections::BTreeMap<String, String>,
+    /// 走过的拍数：细节不每拍都算。
+    pub ticks: u64,
 }
 
 /// 一条消息发给谁。
@@ -587,8 +594,36 @@ impl Runtime {
         if inventory_before != self.world.inventory().revision() {
             broadcast(clients, &self.props_message());
         }
-        broadcast(clients, &self.roster());
+        // 名册每拍都发，是可合并的整份状态：客户端慢了只给它最新的一份，不排长队。
+        broadcast_snapshot(clients, &self.roster());
+        self.publish_details(clients);
         self.avatar_publish(clients);
+    }
+
+    /// 村民的慢变量（目标、动作结果、互动、记忆）：每 10 拍（约 1 秒）算一次，变了才发。
+    /// 名册每拍都发，放不下这些大字段——3 位村民时一份名册 36 KB，10 Hz 就是每位旁观者 360 KB/s。
+    fn publish_details(&mut self, clients: &Clients) {
+        self.ticks = self.ticks.wrapping_add(1);
+        if self.ticks % DETAIL_REFRESH_TICKS != 0 {
+            return;
+        }
+        let details = self.driver.details(&self.world);
+        let live: std::collections::BTreeSet<&str> =
+            details.iter().map(|(id, _)| id.as_str()).collect();
+        // 已经不在小镇里的村民：把上次发的记下来那条删掉，免得下次同名的人被当成「没变」。
+        self.details_sent.retain(|id, _| live.contains(id.as_str()));
+        for (resident, detail) in details {
+            let text = serde_json::to_string(&detail).unwrap_or_default();
+            if self
+                .details_sent
+                .get(&resident)
+                .is_some_and(|last| *last == text)
+            {
+                continue;
+            }
+            self.details_sent.insert(resident.clone(), text);
+            broadcast(clients, &ServerMsg::ResidentDetail { resident, detail });
+        }
     }
 
     /// 这一拍的推进速度。平时按正常速度走，走路、交谈都看得清；只有大家都在做一件还要好一阵的事

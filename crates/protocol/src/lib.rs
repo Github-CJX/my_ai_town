@@ -85,8 +85,8 @@ pub use props::{
 pub use resident::{
     ActionResultView, AgentLimitRanges, AgentLimits, AgentState, AgentUsage, EvidenceSource,
     GoalStatus, HoldCause, LimitRange, MemoryKind, MemoryStatus, PauseKind, RequestKind,
-    RequestStatus, RequestView, ResidentAgentView, ResidentGoalView, ResidentInteractionView,
-    ResidentMemoryView, ResidentUsage, UsageSummary, WorldHold,
+    RequestStatus, RequestView, ResidentAgentView, ResidentDetailView, ResidentGoalView,
+    ResidentInteractionView, ResidentMemoryView, ResidentUsage, UsageSummary, WorldHold,
 };
 pub use roster::{
     ActivityKind, MemberKind, MovementPhase, MovementView, PlanView, RosterLocale, RosterMember,

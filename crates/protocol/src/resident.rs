@@ -179,15 +179,13 @@ pub enum EvidenceSource {
     Inferred,
 }
 
+/// 名册里每拍都发的那一份：只放会变的小字段。
+/// 目标、动作结果、互动和记忆体积大、变得慢，放在 [`ResidentDetailView`] 里单独发，
+/// 不跟着每拍的名册走——3 位村民的名册原来 36 KB，10 Hz 就是每位旁观者 360 KB/s。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResidentAgentView {
     pub state: AgentState,
     pub reason: String,
-    pub goals: Vec<ResidentGoalView>,
-    pub results: Vec<ActionResultView>,
-    #[serde(default)]
-    pub interactions: Vec<ResidentInteractionView>,
-    pub memories: Vec<ResidentMemoryView>,
     pub daily_calls: u64,
     pub daily_limit: u64,
     pub daily_tokens: u64,
@@ -201,6 +199,20 @@ pub struct ResidentAgentView {
     pub replies: u64,
     #[serde(default)]
     pub stale_replies: u64,
+}
+
+/// 村民那边的慢变量：持续目标、最近的动作结果、进行中的互动和记着的事。
+/// 体积大、变得慢：不跟着每拍的名册走，变了才单独发一次（见 `ServerMsg::ResidentDetail`）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResidentDetailView {
+    #[serde(default)]
+    pub goals: Vec<ResidentGoalView>,
+    #[serde(default)]
+    pub results: Vec<ActionResultView>,
+    #[serde(default)]
+    pub interactions: Vec<ResidentInteractionView>,
+    #[serde(default)]
+    pub memories: Vec<ResidentMemoryView>,
 }
 
 /// 观察仪里的一条动作结果：动作结果本身加上动作种类。

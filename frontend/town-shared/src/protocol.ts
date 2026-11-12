@@ -216,6 +216,7 @@ interface WorldFact {
     previous_version: string | null
   }
 }
+/** 名册里每拍都发的那一份：只放会变的小字段 */
 export interface ResidentAgentView {
   state: AgentState
   reason: string
@@ -227,6 +228,13 @@ export interface ResidentAgentView {
   /** 生活决策回复累计数与其中因世界变化过时、未执行的数 */
   replies: number
   stale_replies: number
+}
+
+/**
+ * 体积大、变得慢的那一份：变了才单独发（resident_detail），前端把它并回名册。
+ * 名册每拍都发，放不下这些字段——3 位村民时一份名册 36 KB，10 Hz 就是每位旁观者 360 KB/s。
+ */
+export interface ResidentDetailView {
   goals: {
     id: string
     title: string
@@ -256,6 +264,9 @@ export interface ResidentAgentView {
     events: WorldFact[]
   }[]
 }
+
+/** 面板读的那一份：名册里的状态加上单独发来的细节；细节还没到时是空列表 */
+export type ResidentAgentFull = ResidentAgentView & ResidentDetailView
 
 /** 小镇当前使用的服务商与模型 */
 export interface ActiveModelChoice {
@@ -709,6 +720,8 @@ export type ServerMsg =
       holds?: WorldHold[]
       locales: { locale: string; members: RosterMember[] }[]
     }
+  /** 某位村民的慢变量（目标、动作结果、互动、记忆）：变了才发，前端并回名册 */
+  | { type: 'resident_detail'; resident: string; detail: ResidentDetailView }
   /** 世界日志一行：text 给人读，kind、actor、alert 给前端判断；place 是发生地（空 = 全镇都看得见） */
   | {
       type: 'event'

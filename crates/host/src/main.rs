@@ -261,6 +261,8 @@ fn build_runtime(
         owner_keys: Default::default(),
         owners: host::owners::Owners::open(owners_path),
         save_failed: false,
+        details_sent: Default::default(),
+        ticks: 0,
     })
 }
 

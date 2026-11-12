@@ -231,6 +231,19 @@ impl ResidentDriver {
         }
         message
     }
+    /// 所有村民的慢变量，按编号排好；不在小镇里（没有会话）的人跳过。
+    /// 名册每拍都发，这些大字段单独发、变了才发。
+    pub fn details(&self, world: &World) -> Vec<(String, protocol::ResidentDetailView)> {
+        let mut rows: Vec<(String, protocol::ResidentDetailView)> = self
+            .runtime
+            .state()
+            .sessions
+            .keys()
+            .filter_map(|id| self.runtime.detail(world, id).map(|d| (id.clone(), d)))
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
+    }
     fn resident_rows(&self, world: &World) -> Vec<ResidentUsage> {
         self.runtime
             .state()

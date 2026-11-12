@@ -119,6 +119,13 @@ pub enum ServerMsg {
         holds: Vec<WorldHold>,
         locales: Vec<RosterLocale>,
     },
+    /// 某位村民的慢变量（目标、动作结果、互动、记忆）。体积大、变得慢：
+    /// 不跟着每拍的名册走，变了才单独发一次；新连接连上时补发一遍。
+    ResidentDetail {
+        resident: String,
+        #[serde(serialize_with = "crate::sorted")]
+        detail: crate::ResidentDetailView,
+    },
     /// 观察日志行：正文给人读，种类、人物与提示卡细节给前端判断
     Event {
         sim_minutes: f64,

@@ -92,6 +92,12 @@ impl Runtime {
 
     pub(crate) fn network_command(&mut self, event: NetworkEvent, clients: &Clients) {
         match event {
+            // 名册下一拍就有；村民的细节变了才发，新连接得单独补一份。
+            NetworkEvent::Connected(id) => {
+                for (resident, detail) in self.driver.details(&self.world) {
+                    network::send_to(clients, id, &ServerMsg::ResidentDetail { resident, detail });
+                }
+            }
             NetworkEvent::Disconnected(id) => {
                 if let Some(lease) = self
                     .avatar_controls

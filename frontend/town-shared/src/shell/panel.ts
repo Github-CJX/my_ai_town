@@ -1,6 +1,7 @@
 // 外壳与各面板之间的统一接口：面板先登记，外壳再按登记顺序把消息和事件逐个交给它们。
 import type { ResidentEntry } from '../gameMap'
 import type { ServerMsg } from '../protocol'
+import { withDetail } from '../residents/details'
 
 export type RosterMsg = Extract<ServerMsg, { type: 'roster' }>
 
@@ -13,7 +14,8 @@ export interface RosterFrame {
 
 export function rosterFrame(msg: RosterMsg): RosterFrame {
   const entries = msg.locales.flatMap((l) =>
-    l.members.map((member) => ({ locale: l.locale, member }))
+    // 名册每拍只有状态；目标、动作结果、互动和记忆是单独发来的，这里并回去
+    l.members.map((member) => ({ locale: l.locale, member: withDetail(member) }))
   )
   return { msg, entries, residents: entries.filter((e) => e.member.kind !== 'avatar') }
 }

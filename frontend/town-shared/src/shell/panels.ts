@@ -30,6 +30,7 @@ import type { ClientMsg, JoinOutcome, ServerMsg, TemplateCard } from '../protoco
 import type { ModelOption } from '../models/session'
 import { priceOf, type Price } from '../pricing'
 import { initResidentsPage } from '../residents'
+import { forgetDetails, rememberDetail } from '../residents/details'
 import { initSettingsCenter } from '../settingsCenter'
 import { initUsage } from '../usage'
 import { createWeatherPanel } from '../weather/panel'
@@ -486,6 +487,7 @@ function register(input: ShellInputs, p: RegisteredParts) {
         ? `本场景已恢复初始条件，回到 ${msg.clock}，已暂停`
         : `已重置为空村，回到 ${msg.clock}，已暂停；请村民搬进来后再点开始`
     )
+    forgetDetails()
     registry.reset()
   }
   const observedPanel: ShellPanel = {
@@ -507,6 +509,10 @@ function register(input: ShellInputs, p: RegisteredParts) {
     disconnected: () => map.disconnect?.(),
   }
   const hubs = {
+    // 村民的慢变量（目标、动作结果、互动、记忆）单独发：先记下来，下一拍名册帧并回 member.resident_agent
+    detail: {
+      handleMsg: (m: ServerMsg) => m.type === 'resident_detail' && (rememberDetail(m), true),
+    },
     roster: {
       handleMsg: (m: ServerMsg) => m.type === 'roster' && (roster(m), true),
     },
@@ -559,6 +565,9 @@ function register(input: ShellInputs, p: RegisteredParts) {
     p.avatarHistory,
     mapPanel,
     p.worldSettings,
+    // 新连接连上时世界会补发一遍村民细节；断线时先清掉，免得拿旧世界的人当这个世界的人
+    { connected: forgetDetails, disconnected: forgetDetails },
+    hubs.detail,
     hubs.roster,
     p.chatBubbles,
     events,
