@@ -107,3 +107,53 @@ fn only_the_account_that_placed_a_resident_may_write_to_her() {
 
     town.kill();
 }
+
+/// 她此刻的处境要写进回执：世界停着的时候，信收下了，但她这会儿看不了。
+#[test]
+fn a_receipt_says_the_town_is_stopped_so_she_has_not_read_it_yet() {
+    let mut town = town_with_token();
+    town.query = Some(format!("session={SECRET}&ticket={}", admin_ticket()));
+    let mut admin = town.start();
+    until(&mut admin, |m| m["type"] == "roster");
+    let resident = join_id_owned(&mut admin, "tpl_a", "u-a");
+    let world = reply(&mut admin, json!({"type": "get_population"}), "population")["population"]
+        ["world_id"]
+        .clone();
+
+    // 投放人的化身：他进镇之后才有「谁递的信」。
+    let mut mine = plain_socket(
+        &town,
+        &format!("session={SECRET}&ticket={}", user_ticket("u-a")),
+    )
+    .expect("投放人的票应该能连上");
+    until(&mut mine, |m| m["type"] == "roster");
+    let view = crate::avatar::state(&mut mine);
+    let entered = crate::avatar::command(
+        &mut mine,
+        &view,
+        1,
+        json!({"kind":"enter","name":"老陈","appearance":{"marker":"陈","color":"#387963"}}),
+    );
+    assert_eq!(entered["ok"], true, "{entered}");
+
+    send(
+        &mut admin,
+        json!({"type": "set_speed", "request_id": "pause", "speed": 0}),
+    );
+    // 数值比较要按浮点：`json!(0)` 是整数，和 `0.0` 在 serde_json 里不相等。
+    until(&mut admin, |m| {
+        m["type"] == "roster" && m["speed"].as_f64() == Some(0.0)
+    });
+
+    let sent = reply(
+        &mut mine,
+        json!({"type": "send_letter", "request_id": "l-4", "world_id": world,
+            "to": resident, "text": "在吗？"}),
+        "letter_sent",
+    );
+    assert_eq!(sent["ok"], true, "{sent}");
+    let message = sent["message"].as_str().unwrap_or_default();
+    assert!(message.contains("小镇现在停着"), "{message}");
+
+    town.kill();
+}
