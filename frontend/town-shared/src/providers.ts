@@ -94,6 +94,29 @@ export const PRESETS: ProviderPreset[] = [
     defaultModel: '',
   },
   {
+    // 只列走 chat/completions 的模型；Zen 里 Claude 系（/messages）、GPT-5 系与 muse 系（/responses）不能放进来
+    id: 'opencode',
+    name: 'OpenCode Zen',
+    baseUrl: 'https://opencode.ai/inference/openai/v1',
+    needsKey: true,
+    models: [
+      'deepseek-v4.1-flash',
+      'deepseek-v4-pro',
+      'kimi-k2.7-code',
+      'kimi-k3',
+      'minimax-m3',
+      'minimax-m2.7',
+      'qwen3.8-max',
+      'mistral-large-4',
+      'deepseek-v4.1-flash-free',
+      'glm-5.3-flash-free',
+      'mimo-v2.6-flash-free',
+      'longcat-2.5-free',
+      'big-pickle',
+    ],
+    defaultModel: 'deepseek-v4.1-flash',
+  },
+  {
     // 老项目走 Ollama 原生 API；本项目统一 OpenAI 兼容端点
     id: 'ollama',
     name: 'Ollama（本地）',

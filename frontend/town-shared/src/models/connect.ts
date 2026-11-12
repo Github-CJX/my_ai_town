@@ -11,7 +11,15 @@ import { isTouch, onBack } from '../platform'
 import './connect.css'
 
 /** 填个密钥就能用的服务（有默认模型），前四个先列出来，其余点「更多」 */
-export const QUICK = ['deepseek', 'kimi', 'zhipu-glm', 'minimax', 'alibaba-bailian', 'xiaomi-mimo']
+export const QUICK = [
+  'deepseek',
+  'kimi',
+  'zhipu-glm',
+  'minimax',
+  'alibaba-bailian',
+  'xiaomi-mimo',
+  'opencode',
+]
 const FIRST = 4
 /** 申请密钥的地方：只给到平台首页，路径变了也打得开 */
 export const SIGN_UP: Record<string, string> = {
@@ -21,6 +29,7 @@ export const SIGN_UP: Record<string, string> = {
   minimax: 'https://platform.minimaxi.com',
   'alibaba-bailian': 'https://bailian.console.aliyun.com',
   'xiaomi-mimo': 'https://platform.xiaomimimo.com',
+  opencode: 'https://opencode.ai/auth',
 }
 
 export interface ModelConfig {
