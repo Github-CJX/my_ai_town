@@ -13,15 +13,19 @@ import { generatePrefab, isBuiltinTown, missingPrefabs, prefabTownId } from './p
 import { api, TownApiError } from './api'
 import {
   ACCOUNT_NEEDED,
+  bindQq,
   controlTown,
   deleteAgent,
   deployAgent,
   keepRunning,
   readAgents,
+  readQqBindings,
   readUsage,
   saveBudget,
+  unbindQq,
   type AccountUsage,
   type HomeAgent,
+  type QqBindings,
   type ResidentStatus,
   withdrawAgent,
 } from 'town-shared/townApi'
@@ -561,6 +565,132 @@ function openUsage() {
 
 $('usage-close').addEventListener('click', () => usageDialog.close())
 
+// QQ：把一个 QQ 号绑给某位已经投放到镇上的村民。之后那个号私聊机器人 = 和她说话，
+// 她回的信也回到 QQ。绑定表由管理服务存在 config/qq-bindings.json，一个对一边。
+const qqDialog = $('qq-dialog') as HTMLDialogElement
+const qqForm = $('qq-form')
+const qqPick = $('qq-agent') as HTMLSelectElement
+const qqOpenid = $('qq-openid') as HTMLInputElement
+const qqList = $('qq-list')
+const qqTip = $('qq-tip')
+let qqBusy = false
+
+function qqSay(text: string) {
+  qqTip.textContent = text
+  qqTip.hidden = !text
+}
+
+function renderQq(data: QqBindings) {
+  qqPick.replaceChildren()
+  for (const item of data.agents) {
+    const option = document.createElement('option')
+    // 同一个 agent 可能住在两个镇：值里带上镇，绑的时候才对得上那一位
+    option.value = `${item.agent}|${item.town}`
+    option.textContent = `${item.resident_name}（${townName(item.town)}）`
+    qqPick.append(option)
+  }
+  qqForm.hidden = !data.agents.length
+  qqList.replaceChildren()
+  if (!data.bindings.length) {
+    const empty = document.createElement('p')
+    empty.className = 'qq-empty'
+    empty.textContent = data.agents.length
+      ? '还没有绑：选一位村民，填上她的 openid。'
+      : '还没有能绑的村民：先把一个 agent 投放到小镇里。'
+    qqList.append(empty)
+    return
+  }
+  for (const item of data.bindings) {
+    const row = document.createElement('div')
+    row.className = 'qq-row'
+    const who = document.createElement('span')
+    who.className = 'qq-who'
+    who.textContent = `${item.resident_name}（${townName(item.town)}）`
+    const id = document.createElement('span')
+    id.className = 'qq-openid'
+    id.textContent = item.openid
+    id.title = '打码过的 openid：管理服务不回原样'
+    const drop = button('解开', () => void dropQq(item), 'qq-drop')
+    drop.disabled = qqBusy
+    drop.title = `解开之后 ${item.openid} 发来的话就不递给她了`
+    const state = document.createElement('span')
+    state.className = item.online ? 'qq-on' : 'qq-off'
+    state.textContent = item.online ? '在听' : '没连上'
+    row.append(who, id, state, drop)
+    qqList.append(row)
+  }
+}
+
+async function loadQq() {
+  const data = await readQqBindings()
+  if (!data) {
+    qqSay('这个版本的管理服务还没有 QQ 绑定接口（要新版管理服务）。')
+    return
+  }
+  renderQq(data)
+}
+
+function openQq() {
+  agentTip.hidden = true
+  qqSay('')
+  qqDialog.showModal()
+  void loadQq()
+}
+
+/** 选中的那一行：`agent|town` → 接口要的两个字段 */
+function qqPickOf() {
+  const picked = qqPick.value
+  const [agent, town] = picked.split('|')
+  return { agent, town }
+}
+
+async function bindSelected() {
+  if (qqBusy) return
+  const { agent, town } = qqPickOf()
+  if (!agent) return qqSay('先选一位村民。')
+  const openid = qqOpenid.value.trim()
+  if (!openid) return qqSay('还没填 openid：在机器人后台的日志里找，形如 6A0B…，不是 QQ 号码。')
+  qqBusy = true
+  try {
+    const data = await bindQq({ agent, openid, town })
+    renderQq(data)
+    qqOpenid.value = ''
+    qqSay('绑上了：那个 QQ 现在私聊机器人，话就递到她手上。')
+  } catch (error) {
+    qqSay(errorText(error))
+  } finally {
+    qqBusy = false
+  }
+}
+
+async function dropQq(item: { resident_name: string; town: string; resident: string }) {
+  if (qqBusy) return
+  if (!window.confirm(`解开「${item.resident_name}」的 QQ？之后那个号发来的话就不递给她了。`))
+    return
+  const agent = qqAgentOf(item.resident)
+  if (!agent) return qqSay('找不到这位村民对应的 agent：刷新一下页面再试。')
+  qqBusy = true
+  try {
+    const data = await unbindQq({ agent, town: item.town })
+    renderQq(data)
+    qqSay('解开了。')
+  } catch (error) {
+    qqSay(errorText(error))
+  } finally {
+    qqBusy = false
+  }
+}
+
+/** 解开时用村民编号找回是哪个 agent：行里只摆了名字 */
+function qqAgentOf(resident: string) {
+  for (const agent of myAgents)
+    for (const place of agent.deployed) if (place.resident === resident) return agent.id
+  return ''
+}
+
+$('qq-bind').addEventListener('click', () => void bindSelected())
+$('qq-close').addEventListener('click', () => qqDialog.close())
+
 const townName = (id: string) => maps.find((map) => map.id === id)?.name ?? id
 function agentSay(text: string) {
   agentTip.textContent = text
@@ -807,7 +937,11 @@ function renderAgents() {
   limit.title = '限定这个账号投出去的 agent 每天最多用多少'
   const detail = button('用量明细', () => openUsage(), 'agent-usage')
   detail.title = '今天和近几天用掉的调用、token 和钱（按这个账号的 agent 记）'
-  wallet.append(limit, detail)
+  // QQ：谁投的谁绑，绑的是这个账号自己名下的村民（管理服务会再核一遍主人）
+  const qq = button('绑定 QQ', () => openQq(), 'agent-qq')
+  qq.title = '把一个 QQ 号绑给某位村民：私聊机器人就等于和她说话'
+  qq.hidden = !myAgents.some((agent) => agent.deployed.length)
+  wallet.append(limit, detail, qq)
   agentList.replaceChildren(
     ...(picked ? [strip, renderAgentActions(picked, here), wallet] : [strip, wallet])
   )

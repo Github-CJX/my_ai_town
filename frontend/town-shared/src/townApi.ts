@@ -319,6 +319,56 @@ export function saveBudget(
   return home('/budget', body)
 }
 
+/** 能绑 QQ 的候选：已经投放到镇上的村民（没投放就没有能收信的人） */
+export type QqCandidate = {
+  agent: string
+  name: string
+  town: string
+  resident: string
+  resident_name: string
+}
+
+/** 一条绑定：一个 QQ 号替一位村民收信，反过来也只有一个 */
+export type QqBindingRow = {
+  resident: string
+  resident_name: string
+  town: string
+  /** 打码过的 openid：管理服务不回原样 */
+  openid: string
+  since: string
+  /** 桥连上世界没有：false 也可能只是小镇这会儿没在跑 */
+  online: boolean
+}
+
+export type QqBindings = {
+  ok: true
+  agents: QqCandidate[]
+  bindings: QqBindingRow[]
+}
+
+/** 我的 agent 和它们的 QQ 绑定；管理服务还没装这一块（老版本）时返回 null */
+export async function readQqBindings(): Promise<QqBindings | null> {
+  try {
+    return await home<QqBindings>('/qq/binding')
+  } catch {
+    return null
+  }
+}
+
+/** 把一个 QQ 号绑给某位村民：openid 是机器人后台报的号，不是 QQ 号码 */
+export function bindQq(body: {
+  agent: string
+  openid: string
+  town?: string
+}): Promise<QqBindings> {
+  return home('/qq/binding', body)
+}
+
+/** 解开：之后那个 QQ 发来的话就当陌生号码，不理 */
+export function unbindQq(body: { agent: string; town?: string }): Promise<QqBindings> {
+  return home('/qq/unbind', body)
+}
+
 /** 某个小镇现在能用的村民模板：小镇没在运行时拿不到 */
 export async function readTemplates(id: string): Promise<AgentTemplate[]> {
   const response = await fetch(`/api/towns/${encodeURIComponent(id)}/templates`, {

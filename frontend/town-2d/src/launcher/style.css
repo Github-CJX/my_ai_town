@@ -581,6 +581,61 @@ body:has(.map-launcher) {
   color: var(--ui-ink);
   font-size: 13px;
 }
+/* 绑定 QQ：一张表单 + 已绑的几条，和额度弹层一样窄 */
+#qq-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+#qq-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0;
+}
+.qq-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: 10px;
+  background: var(--ui-fill);
+  font-size: 12px;
+}
+.qq-who {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qq-openid {
+  color: var(--ui-ink-soft);
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.02em;
+}
+.qq-on,
+.qq-off {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--ui-line);
+}
+.qq-on {
+  color: var(--ui-accent);
+}
+.qq-off {
+  color: var(--ui-ink-muted);
+}
+.qq-empty {
+  margin: 0;
+  color: var(--ui-ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .enter-game {
   display: flex;
   min-height: 52px;

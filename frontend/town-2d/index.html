@@ -156,6 +156,34 @@
         </div>
       </div>
     </dialog>
+    <!-- QQ：把一个 QQ 号绑给某位村民，之后私聊机器人就等于和她说话 -->
+    <dialog id="qq-dialog" class="villager-dialog" aria-label="绑定 QQ">
+      <div class="villager-sheet budget-sheet">
+        <h2 class="budget-title">在 QQ 里找她</h2>
+        <p class="budget-note">
+          绑上之后，你用那个 QQ 私聊机器人，话会递到她手里；她回的信也回到你的 QQ。
+          她在镇里的记忆、人设、正在做的事都不变。一个 QQ 只绑一位村民，一位村民也只绑一个 QQ。
+        </p>
+        <div id="qq-form">
+          <label class="budget-field">
+            <span>哪位村民</span>
+            <select id="qq-agent"></select>
+          </label>
+          <label class="budget-field">
+            <span>她的 QQ openid</span>
+            <input id="qq-openid" type="text" placeholder="机器人后台报的号，不是 QQ 号码" />
+          </label>
+          <div class="agent-actions">
+            <button id="qq-bind" class="agent-deploy">绑上</button>
+          </div>
+        </div>
+        <div id="qq-list" class="qq-list"></div>
+        <p id="qq-tip" class="agent-tip" role="status" hidden></p>
+        <div class="agent-actions">
+          <button id="qq-close">关闭</button>
+        </div>
+      </div>
+    </dialog>
     <script type="module" src="/src/launcher/page.ts"></script>
   </body>
 </html>
