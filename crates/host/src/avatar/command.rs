@@ -421,7 +421,24 @@ impl Runtime {
             let possessing = self
                 .controlled_avatar(connection)
                 .is_some_and(|id| self.world.is_possessed(&id));
-            if !lease.held_by(connection) || possessing {
+            // 后台标签页可能停止发送心跳，但 WebSocket 仍是原来的连接。
+            // 旧租约已进入断线窗口时，同一个连接点「继续化身」不应被误判为
+            // 正在控制其他角色；只允许重取此前自己控制的身体，不得借机接管别人。
+            if !lease.held_by(connection) {
+                let previous = self.controlled_avatar(connection);
+                if let Some(id) = previous.filter(|id| {
+                    !self.world.is_possessed(id) && who.is_none_or(|wanted| wanted == id)
+                }) {
+                    self.grant_control(connection, id.clone());
+                    self.world
+                        .avatar_profile_of(&id, name, appearance.clone())?;
+                    return Ok(());
+                }
+                return Err(AvatarFailure::ControlLost(
+                    "控制已超时，请重新进入自己的化身",
+                ));
+            }
+            if possessing {
                 return Err(AvatarFailure::Occupied("这个连接正在控制别的角色"));
             }
             // 已经在场时再报一次名字和样子，就是改名换样子（改名不换人）。

@@ -200,3 +200,22 @@ test('服务端真被挡住 1.5 秒：本地停下等校正', async () => {
   const drift = Math.abs(after[after.length - 1].pos[0] - last.pos[0])
   assert.ok(drift < 0.05, `停下后不该再走：${drift.toFixed(3)} 米`)
 })
+
+test('浏览器卡帧 400ms：本地仍须走完服务端实际接受的 350ms 输入，不能只算末尾 250ms', async () => {
+  const { AvatarMotion } = await load()
+  const motion = new AvatarMotion(clear)
+  motion.sample({ space: 's', position: [0, 0] }, 1000)
+  motion.command([1, 0], 2, 1000)
+  const p = motion.current(1400).position
+  // 世界端 INPUT_TIMEOUT = 350ms，所以这一段服务端只走了 0.7 米
+  assert.ok(Math.abs(p[0] - 0.7) < 0.002, `预测必须追到 0.7 米，当前 ${p[0]}`)
+})
+
+test('浏览器长时间没输入：不能把过期的方向延长到当前时刻', async () => {
+  const { AvatarMotion } = await load()
+  const motion = new AvatarMotion(clear)
+  motion.sample({ space: 's', position: [0, 0] }, 1000)
+  motion.command([1, 0], 1, 1000)
+  const p = motion.current(5000).position
+  assert.ok(Math.abs(p[0] - 0.35) < 0.002, `只能走 350ms，不能把后台那 4 秒都走掉：${p[0]}`)
+})

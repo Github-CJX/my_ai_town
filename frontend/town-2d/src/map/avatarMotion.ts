@@ -16,10 +16,14 @@ const CORRECT_MS = 150
 const MAX_LAG_MS = 500
 /** 预测轨迹留多久（毫秒） */
 const HISTORY_MS = MAX_LAG_MS + 200
-/** 差得比这远（米）直接跳过去：进出门、被服务端拉回原处 */
+/** 同一空间的服务端坐标突然比预测差很多，常见原因是输入/快照延迟：
+ *  行走时不能按固定阈值瞬移回去；只有没有行走指令时才把这种跳变视作世界传送。 */
 const SNAP_METRES = 2.5
-/** 一帧最多按这么长推进（毫秒）：切回页面、主线程卡住之后不一下子冲出去 */
-const MAX_STEP_MS = 250
+/** 大误差的最大视觉纠偏速度（米/秒）。防止超过阈值时从「瞬移」变成一帧急拉。 */
+const MAX_CORRECT_METRES_PER_SECOND = 2
+/** 主线程长时间停顿后，误差纠正每帧最多应用这么长的时间，防止一帧猛拉。
+ * 但本地行走必须按真实已流逝的时间（最多输入的 350ms 有效期）计算，不能截断！ */
+const MAX_CORRECT_STEP_MS = 250
 /** 推进时每一小步最多走多远（米）：和服务端一样 0.1 米一步，撞墙判断不跨过窄墙 */
 const SUB_STEP_METRES = 0.1
 /** 一直在发方向、名册里的位置却这么久（毫秒）没动：服务端被挡住了，本地也停下等校正。
@@ -32,6 +36,8 @@ const STUCK_MS = 700
  *  点地图走过去时方向跟着化身状态重发，服务端一拍卡上一阵、状态没来，那边已经停了：
  *  本地接着走就会走过头，再被拉回来重走一遍 */
 const INPUT_TIMEOUT_MS = 350
+/** 续发定时器在主线程繁忙时可能稍晚执行，短暂超过输入过期时间不等于真的传送。 */
+const RECENT_MOVEMENT_MS = 1500
 
 type Point = [number, number]
 
@@ -82,7 +88,8 @@ export class AvatarMotion {
     if (
       !this.known ||
       at.space !== this.space ||
-      Math.hypot(p[0] - this.pos[0], p[1] - this.pos[1]) > SNAP_METRES
+      (((!this.vel[0] && !this.vel[1]) || now - this.commandAt > RECENT_MOVEMENT_MS) &&
+        Math.hypot(p[0] - this.pos[0], p[1] - this.pos[1]) > SNAP_METRES)
     ) {
       this.reset(at, now)
       return
@@ -132,21 +139,39 @@ export class AvatarMotion {
 
   /** 推进到 now：按本地发出的速度走（撞墙沿墙滑或停下），再补上一部分和服务端的差 */
   private advance(now: number) {
-    const dt = Math.min(MAX_STEP_MS, now - this.last)
-    if (dt <= 0) return
+    const from = this.last
+    const elapsed = now - from
+    if (elapsed <= 0) return
     this.last = now
     if (!this.known) return
-    // 方向在这一段中途过期的，只走到过期那一刻
-    const walk = Math.min(dt, this.commandAt + INPUT_TIMEOUT_MS - (now - dt))
+    // 方向在这一段中途过期的，只走到过期那一刻。不能因为上一帧超过 250ms
+    // 就用最后 250ms 计算：服务端按真实时间走，本地会丢掉前一截行走距离，
+    // 下一份权威坐标又把人向前纠正，造成卡顿后突然拉扯。
+    const walk = Math.max(
+      0,
+      Math.min(now, this.commandAt + INPUT_TIMEOUT_MS) - Math.max(from, this.commandAt)
+    )
     if ((this.vel[0] || this.vel[1]) && !this.stuck && walk > 0) {
       const dx = this.vel[0] * walk,
         dy = this.vel[1] * walk
       const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / SUB_STEP_METRES))
       for (let i = 0; i < steps; i++) this.step(dx / steps, dy / steps)
     }
-    const k = 1 - Math.exp(-dt / CORRECT_MS)
-    const cx = this.error[0] * k,
-      cy = this.error[1] * k
+    const correctionDt = Math.min(MAX_CORRECT_STEP_MS, elapsed)
+    const k = 1 - Math.exp(-correctionDt / CORRECT_MS)
+    const wantedX = this.error[0] * k,
+      wantedY = this.error[1] * k
+    // 较大误差要在多帧内修正，不能一次拉回。上限只约束正在移动的预测，
+    // 静止时仍允许较快回到服务端权威坐标。
+    const wanted = Math.hypot(wantedX, wantedY)
+    const recentlyMoving =
+      (this.vel[0] !== 0 || this.vel[1] !== 0) && now - this.commandAt < RECENT_MOVEMENT_MS
+    const maxCorrect = recentlyMoving
+      ? (MAX_CORRECT_METRES_PER_SECOND * correctionDt) / 1000
+      : Infinity
+    const scale = wanted > maxCorrect ? maxCorrect / wanted : 1
+    const cx = wantedX * scale,
+      cy = wantedY * scale
     this.error = [this.error[0] - cx, this.error[1] - cy]
     this.pos = [this.pos[0] + cx, this.pos[1] + cy]
     // 补上的差连同记下的轨迹一起挪：下一份名册比的是挪过以后的轨迹，同一段差不会补两遍

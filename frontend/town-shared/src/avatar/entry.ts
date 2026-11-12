@@ -78,9 +78,18 @@ function entryDialog(
     if (enter.disabled) return
     enter.disabled = true
     // 网络超时并不意味着服务端未执行；不得自动以新身份再发送一次进入请求。
-    void execute(choice.command('enter', name.value, picker.value, avatarId)).finally(() => {
-      enter.disabled = false
-    })
+    void execute(choice.command('enter', name.value, picker.value, avatarId))
+      .then((ok) => {
+        // 原先失败只把按钮重新启用，没有任何对话框反馈；失败提示可能被弹窗挡住。
+        if (!ok && !backdrop.hidden)
+          hint.textContent = '进入失败或尚未收到服务器确认，请确认网络和化身状态后重试。'
+      })
+      .catch(() => {
+        if (!backdrop.hidden) hint.textContent = '连接异常，未能确认是否进入，请稍后查看化身状态。'
+      })
+      .finally(() => {
+        enter.disabled = false
+      })
   }
   return {
     backdrop,

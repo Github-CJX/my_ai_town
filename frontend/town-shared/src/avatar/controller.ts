@@ -28,7 +28,7 @@ import { keycap, runningTalk } from './view'
 import './style.css'
 
 export interface AvatarDeps {
-  send: (message: ClientMsg) => void
+  send: (message: ClientMsg) => void | boolean
   map: GameMap
   openHistory: (id: string, name: string) => void
   localeName: (id: string) => string
@@ -165,6 +165,9 @@ class AvatarController {
   private state: AvatarState | null = null
   private world = ''
   private online = false
+  /** 最近一次来自世界服务端的权威化身状态。背景标签页暂停计时器后必须主动刷新。 */
+  private lastStateAt = 0
+  private refreshing: Promise<boolean> | null = null
   /** 化身命令的序号，换租约时从服务端给的值接着用 */
   private sequence = 0
   private tab: AvatarTab | null = null
@@ -268,6 +271,18 @@ class AvatarController {
       () => void this.leave()
     )
     this.timer = window.setInterval(() => this.pulse(), 5000)
+    // 切回后台很久的页面时，WebSocket 可能还开着，但 Rust 租约的 15 秒心跳已失效。
+    const wake = () => {
+      if (
+        !document.hidden &&
+        this.online &&
+        this.world &&
+        performance.now() - this.lastStateAt > 2000
+      )
+        void this.refreshSession()
+    }
+    document.addEventListener('visibilitychange', wake, { signal })
+    window.addEventListener('focus', wake, { signal })
   }
 
   /** 界面按钮、菜单和面板里的操作 */
@@ -307,7 +322,10 @@ class AvatarController {
     return createAvatarNavigation({
       map: this.map,
       signal,
-      getState: () => this.state,
+      // 服务端已经几秒没有给权威状态时，不再继续发送方向并在本地空走。
+      // 网络断续时靠旧 epoch/旧位置猜测移动，只会在恢复后被权威坐标拉回来。
+      getState: () =>
+        this.lastStateAt && performance.now() - this.lastStateAt <= 3000 ? this.state : null,
       getWorld: () => this.world,
       getHolds: () => this.holds,
       owned: () => this.owned(),
@@ -552,12 +570,28 @@ class AvatarController {
     return count
   }
 
-  /** 入口按钮：还认得自己就直接回到上次的位置，认不出才打开对话框选样子。
-   *  回不去（附身还没交还、这个化身已在场）时退回对话框，让玩家看到真正的原因 */
-  enterAgain() {
-    const { state } = this
-    if (!this.online || !state?.supported || !this.map.avatarSupported) return
-    if (this.owned()) return
+  /** 长时间离开后先刷新服务端租约，不用页面里可能过期的 controlled/actor 做决定。 */
+  private refreshSession(): Promise<boolean> {
+    if (this.refreshing) return this.refreshing
+    if (!this.online || !this.world) return Promise.resolve(false)
+    const task = this.execute({ kind: 'view' })
+    this.refreshing = task
+    void task.finally(() => {
+      if (this.refreshing === task) this.refreshing = null
+    })
+    return task
+  }
+
+  /** 入口按钮：先查询权威状态，确认没有控制权后才重新进入。 */
+  async enterAgain() {
+    if (!this.online || !this.map.avatarSupported) {
+      this.ui.showToast('连接尚未就绪，请等待小镇恢复连接', true)
+      return
+    }
+    if (performance.now() - this.lastStateAt > 2000) {
+      if (!(await this.refreshSession())) return
+    }
+    if (!this.online || !this.state?.supported || this.owned()) return
     const me = this.self()
     if (!me) return this.openDialog()
     this.reenter(me)
@@ -574,9 +608,10 @@ class AvatarController {
       appearance: look,
     }).then((ok) => {
       if (ok || this.owned()) return
-      // 失败可能是超时/掉线但世界已经接管；不要自动创建第二个化身。
-      // 保留账号关联身份，让玩家检查连接后手动重试。
-      if (this.online) this.openDialog()
+      // 超时不代表服务端没有执行。不要自动打开创建弹窗：此前它还携带旧 avatar ID，
+      // 用户再点「创建」只会得到同样的拒绝，看上去所有按钮都失效。
+      if (this.online)
+        this.ui.showToast('尚未重新取得控制权，请检查提示或稍后再点「继续化身」', true)
     })
   }
 
@@ -887,6 +922,7 @@ class AvatarController {
   private receive(next: AvatarState) {
     const old = this.state
     this.state = next
+    this.lastStateAt = performance.now()
     if (!this.navigation.canWalk()) this.footsteps.update(false)
     if (
       next.controlled &&
@@ -901,6 +937,7 @@ class AvatarController {
       this.stopMoving()
     }
     if (next.resume_token) this.lease.store(next.resume_token)
+    else if (!next.controlled) this.lease.store() // 控制已结束：旧令牌不能无限留在本页
     // 记着自己是谁：退出化身或离开小镇再回来，用这个编号接着当同一个人
     if (next.controlled && next.actor) {
       this.identity.remember(next.actor)
@@ -956,6 +993,8 @@ class AvatarController {
     this.footsteps.update(false)
     this.lease.store()
     this.state = null
+    this.lastStateAt = 0
+    this.refreshing = null
     this.holds = []
     this.invitations.results.clear()
     this.world = ''
@@ -1001,6 +1040,8 @@ class AvatarController {
       this.navigation.walk.tick()
     }
     if (message.type === 'avatar_result') {
+      if (!message.ok && message.code === 'control_lost' && !message.state.controlled)
+        this.lease.store() // 恢复窗口已过：旧令牌不再有效
       const p = this.commands.settle(message.request_id, message.ok)
       // 离开太久被收回控制是正常情况：用普通提示，不当作出错
       if (message.message && !(p?.silent && !message.ok))
@@ -1030,6 +1071,8 @@ class AvatarController {
     this.stopMoving()
     this.footsteps.update(false)
     this.online = false
+    this.lastStateAt = 0
+    this.refreshing = null
     this.commands.clear()
     this.render()
   }

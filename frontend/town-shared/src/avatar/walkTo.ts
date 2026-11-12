@@ -2,12 +2,13 @@ import type { WalkStep, WalkTarget } from '../gameMap'
 // 点击移动：后端只接受方向（avatar_input），没有「走到某点」的命令。
 // 路线由地图选好（见 town-2d 的 route.ts），这里逐段走：设好路线和每收到一次化身状态时按最新位置
 // 重算方向，到了一个路径点换下一个，遇到门先站到门口再开门。撞墙由后端沿墙滑动；
-// 一段路连续几拍走不动就重新选一次路线，还是不行才算走不过去。
+// 一段路在这么久里几乎没往前走就重新选一次路线，还是不行才算走不过去。
 
-/** 连续这么多拍几乎没动就算这一段走不动 */
-const STUCK_TICKS = 6
-/** 位移小于一拍步长的这个比例算没动 */
-const STILL_RATIO = 0.1
+/** 卡住判定按真实时间，不按收到的快照条数：网络拥塞时可能在一瞬间收到多份旧位置，
+ *  按条数会误以为已经原地站了许多拍、反复重新规划路线 */
+const STUCK_MS = 1300
+/** 这段时间里移动不到这么多米才算真的被挡住 */
+const MIN_PROGRESS_METRES = 0.035
 /** 中途路径点不必踩准：离它这么近、又看得到下一个路径点，就提前转向 */
 const WAYPOINT_RADIUS = 1
 /** 看不到下一个路径点（拐角那边隔着走不过去的地方）时，要走到离拐角这么近才转向 */
@@ -37,6 +38,8 @@ interface WalkDeps {
   /** 两点之间的直线能不能走；地图不会判断时不给，当作能走 */
   sees?: (from: WalkTarget, to: WalkTarget) => boolean
   end: (reason: WalkEnd) => void
+  /** 测试可注入单调时钟；正常运行用浏览器时钟 */
+  now?: () => number
 }
 
 export function createWalkTo(deps: WalkDeps) {
@@ -46,14 +49,16 @@ export function createWalkTo(deps: WalkDeps) {
   let replans = 0
   let opening = false
   let last: [number, number] | null = null
-  let still = 0
+  let stillSince = 0
+  const now =
+    deps.now ?? (() => (typeof performance === 'undefined' ? Date.now() : performance.now()))
   let lastDirection: [number, number] = [0, 0]
   /** 上一次选定的方向（单位向量）：小幅校正不改它，换段时清空 */
   let heading: [number, number] = [0, 0]
   const goal = () => route[route.length - 1]?.point
   function rest() {
     last = null
-    still = 0
+    stillSince = 0
     heading = [0, 0]
   }
   function finish(reason: WalkEnd) {
@@ -75,6 +80,9 @@ export function createWalkTo(deps: WalkDeps) {
     route = next
     index = 0
     rest()
+    lastDirection = [0, 0]
+    // 在下一份新状态和新方向出来之前，不再按已失效的路线盲走
+    deps.emit([0, 0])
   }
   return {
     /** steps 是完整路线，最后一个点是真正的目标；radius 是停在目标多远处 */
@@ -85,6 +93,7 @@ export function createWalkTo(deps: WalkDeps) {
       replans = 0
       opening = false
       rest()
+      lastDirection = [0, 0]
     },
     clear() {
       if (route.length) finish('cancelled')
@@ -135,12 +144,17 @@ export function createWalkTo(deps: WalkDeps) {
         if (++index >= route.length) return finish('arrived')
       }
       const step0 = Math.max(deps.step(), 0.01)
+      const time = now()
       if (last) {
         const moved = Math.hypot(here.position[0] - last[0], here.position[1] - last[1])
-        still = moved < step0 * STILL_RATIO ? still + 1 : 0
-        if (still >= STUCK_TICKS) return retry()
+        if (moved >= MIN_PROGRESS_METRES) {
+          last = [...here.position]
+          stillSince = time
+        } else if (time - stillSince >= STUCK_MS) return retry()
+      } else {
+        last = [...here.position]
+        stillSince = time
       }
-      last = [...here.position]
       // 剩下不足两拍时按比例缩短向量减速：后端取 n = hypot(方向).max(1)，短向量就是慢速，不会被放大回满速。
       const scale = Math.min(1, distance / (2 * step0))
       const aim: [number, number] = distance > 0 ? [dx / distance, dy / distance] : [0, 0]

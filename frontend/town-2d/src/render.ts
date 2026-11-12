@@ -184,7 +184,10 @@ export class TownMap {
   setAvatarState(state: AvatarState | null) {
     this.walkUnits = state?.units
     this.liveId = state?.controlled && state.actor?.present ? state.actor.id : null
-    const predicted = this.liveId && !state?.awaiting_arrival ? this.liveId : null
+    // 排查「WASD 和点击都抽动」：?avatar-authoritative=1 暂停本地预测，
+    // 直接按服务端名册画位置。若抖动消失，故障在预测/输入链路；若仍乱跳，需查服务器位置。
+    const authoritative = new URLSearchParams(location.search).has('avatar-authoritative')
+    const predicted = this.liveId && !state?.awaiting_arrival && !authoritative ? this.liveId : null
     if (predicted !== this.motionId) {
       this.motionId = predicted
       this.motion = predicted

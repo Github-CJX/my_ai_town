@@ -48,14 +48,18 @@ function load() {
 
 /** 一拍走多少米（服务端 normal_pace 的一拍） */
 const STEP = 0.1
+/** 一拍多长（毫秒）：化身状态约每 100 毫秒一份 */
+const BEAT = 100
 /** 目标点：正东 10 米 */
 const TARGET = { space: 'outdoor', position: [10, 0] }
 
-/** 搭一个走到 TARGET 的 walkTo：位置由调用方给，方便模拟「校正」与「走不动」 */
+/** 搭一个走到 TARGET 的 walkTo：位置由调用方给，方便模拟「校正」与「走不动」。
+ *  时钟自己走（每拍 BEAT 毫秒）：卡住判定按真实时间算，不按收到几份位置 */
 function walker({ here, replan = () => null, stop = 0.5 }) {
   const emitted = []
   const ends = []
   const replans = []
+  let clock = 0
   const walk = createWalkTo({
     here,
     step: () => STEP,
@@ -67,28 +71,34 @@ function walker({ here, replan = () => null, stop = 0.5 }) {
       return replan(to)
     },
     end: (reason) => ends.push(reason),
+    now: () => clock,
   })
   walk.set([{ point: TARGET }], stop)
-  return { walk, emitted, ends, replans }
+  /** 走一拍：先把时钟推到下一拍，再按最新位置算方向 */
+  const beat = () => {
+    clock += BEAT
+    walk.tick()
+  }
+  return { walk, emitted, ends, replans, beat }
 }
 
 let createWalkTo = null
 
-test('世界确认的位置不再前进：重新选路，换不出来就算走不过去', async () => {
+test('世界确认的位置不再前进：到点重新选路，换不出来就算走不过去', async () => {
   createWalkTo ??= (await load()).createWalkTo
   // 位置停在离目标 5 米处不动：方向一直发得出去，但人没在动
-  const { walk, emitted, ends, replans } = walker({
+  const { beat, emitted, ends, replans } = walker({
     here: () => ({ space: 'outdoor', position: [5, 0] }),
   })
-  for (let tick = 0; tick < 6; tick += 1) walk.tick()
-  assert.equal(replans.length, 0, '前五拍还在走，不该重新选路')
-  walk.tick()
+  for (let tick = 0; tick < 12; tick += 1) beat()
+  assert.equal(replans.length, 0, '一秒多还在原地，先当作正在走')
+  for (let tick = 0; tick < 4; tick += 1) beat()
   assert.deepEqual(
     replans.map((to) => to.position),
     [[10, 0]],
-    '连续 6 拍几乎没动就该重新选一次路'
+    '确认位置一秒多没有前进就该重新选一次路，不要一直往前推'
   )
-  assert.deepEqual(ends, ['blocked'], '换不出新路线就算走不过去，不要一直往前推')
+  assert.deepEqual(ends, ['blocked'], '换不出新路线就算走不过去')
   assert.deepEqual(emitted.at(-1), [0, 0], '放弃时要发出停下的方向')
 })
 
@@ -97,7 +107,7 @@ test('位置小幅校正不改方向、也不重新选路，到了就停', async
   // 位置按真实进度推进，但每拍带一点横向/纵向抖动：这是世界确认位置被校正的样子
   let at = 0
   let side = 1
-  const { walk, emitted, ends, replans } = walker({
+  const { beat, emitted, ends, replans } = walker({
     here: () => {
       at = Math.min(TARGET.position[0], at + STEP)
       side = -side
@@ -107,7 +117,7 @@ test('位置小幅校正不改方向、也不重新选路，到了就停', async
   const forward = []
   for (let tick = 0; tick < 200 && !ends.length; tick += 1) {
     const before = emitted.length
-    walk.tick()
+    beat()
     if (emitted.length > before) {
       const [x, y] = emitted.at(-1)
       if (x || y) forward.push([x, y])

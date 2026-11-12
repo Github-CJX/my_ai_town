@@ -12,7 +12,7 @@ interface AvatarNavigationDeps {
   getHolds: () => WorldHold[]
   owned: () => boolean
   mapVisible: () => boolean
-  send: (msg: ClientMsg) => void
+  send: (msg: ClientMsg) => void | boolean
   execute: (cmd: AvatarCommand) => Promise<boolean>
   targets: () => AvatarTarget[]
   /** Tab 换当前对象；没有可换的返回 false */
@@ -81,11 +81,14 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
     const state = getState()
     if (!owned()) return
     if (!canWalk()) direction = [0, 0]
-    onDirection?.(direction)
-    // 还没拿到租约时不发；发出去的同时交给地图预先画（服务端按到达时刻换方向，两边走的路一样）
-    map.setAvatarMotion?.(state?.epoch ? direction : [0, 0], metresPerSecond())
-    if (!state?.epoch) return
-    send({
+    if (!state?.epoch) {
+      onDirection?.([0, 0])
+      map.setAvatarMotion?.([0, 0], 0)
+      return
+    }
+    // WebSocket 不可用时绝不能先预测行走：画面已经前进、服务端却没收到输入，
+    // 下一份权威坐标又会把人拉回，WASD 和鼠标点击都会抽动。
+    const delivered = send({
       type: 'avatar_input',
       world_id: getWorld(),
       epoch: state.epoch,
@@ -94,6 +97,11 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
       direction,
       ...(running() && { run: true }),
     })
+    const accepted = delivered !== false
+    onDirection?.(accepted ? direction : [0, 0])
+    // 发出去的同时交给地图预先画（服务端按到达时刻换方向，两边走的路一样）；
+    // 没发出去就当场停住，别让预测自己往前走
+    map.setAvatarMotion?.(accepted ? direction : [0, 0], accepted ? metresPerSecond() : 0)
   }
   const emitManualDirection = (direction: [number, number]) => {
     if ((direction[0] || direction[1]) && canWalk()) onWalk?.()
@@ -108,21 +116,15 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
   const bagAction = () => {
     if (owned() && mapVisible()) toggleBag()
   }
-  /** 世界确认的米制位置：选路线、选方向、判断走不动都只认这个，不认本地预测。
-   *  预测和服务端会因为输入到达时间、校正而差一点，用预测来选方向会自己转起来（抽动） */
-  const confirmedPoint = (): WalkTarget | undefined => {
-    const state = getState()
-    const a = state?.actor
+  /** 世界确认的米制位置：选路线、选方向、判断走不动、判断够不够得着都只认这个。
+   *  本地预测会随延迟和位置校正前后移动，拿它反过来操纵寻路就形成
+   *  「预测 → 纠偏 → 反向输入」的反馈环，网络一抖人物就来回抽动、越走越偏。 */
+  const herePoint = (): WalkTarget | undefined => {
+    const a = getState()?.actor
     if (!a) return undefined
     const at = a.locus.at
-    if (at.kind === 'free') return { space: at.space, position: at.position }
+    if (at.kind === 'free') return { space: at.space, position: [...at.position] }
     return map.walkTargetOf?.('person', a.id)
-  }
-  /** 化身此刻的米制位置：地图在预测自己的小人时用它画的位置（服务端马上要走到的地方，比名册新），
-   *  不然用服务端给的自由位置；站在落脚点时退回地图上的坐标 */
-  const herePoint = (): WalkTarget | undefined => {
-    const predicted = map.avatarAt?.()
-    return predicted ?? confirmedPoint()
   }
   // 走到目标后要做的那件事（提示编号）；只是走过去时为空
   let arriveAction: string | null = null
@@ -140,13 +142,13 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
   let autoPortal = false
   /** 选一条绕开障碍的路线；地图没有选路能力时退回直线 */
   function planRoute(to: WalkTarget): WalkStep[] | null {
-    const here = confirmedPoint() ?? herePoint()
+    const here = herePoint()
     if (!here) return null
     if (!map.walkRoute) return [{ point: to }]
     return map.walkRoute(here, to)
   }
   const walk = createWalkTo({
-    here: () => confirmedPoint() ?? herePoint(),
+    here: herePoint,
     step: stepMetres,
     canWalk,
     emit: emitDirection,

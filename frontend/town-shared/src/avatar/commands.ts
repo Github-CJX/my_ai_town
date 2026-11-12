@@ -13,9 +13,10 @@ export function createAvatarCommands({
   nextSequence: () => number
   stopMoving: () => void
   showToast: (message: string, sticky?: boolean) => void
-  send: (message: ClientMsg) => void
+  send: (message: ClientMsg) => void | boolean
 }) {
-  let pendingMutation = false
+  let pendingMutationId: string | null = null
+  let pendingMutationKind: AvatarCommand['kind'] | null = null
   // silent：自动发起的命令（恢复上次控制），失败不打扰用户
   const pending = new Map<
     string,
@@ -28,13 +29,25 @@ export function createAvatarCommands({
       return false
     }
     const mutation = !['view', 'heartbeat'].includes(command.kind)
-    if (mutation && pendingMutation) return false
-    if (mutation) {
-      stopMoving()
-      pendingMutation = true
+    if (mutation && pendingMutationId) {
+      if (command.kind === 'enter' && pendingMutationKind === 'resume') {
+        // 用户主动进场优先：背景恢复可能卡在 8 秒超时窗口里。两个命令即使
+        // 都送到服务端也会按连接顺序处理，旧恢复回执的状态仍会正常刷新 UI。
+        settle(pendingMutationId, false)
+        pendingMutationId = null
+        pendingMutationKind = null
+      } else {
+        showToast('上一条化身操作还在等待回执，请稍后重试', true)
+        return false
+      }
     }
     // 非安全上下文（http://ip:port）没有 crypto.randomUUID，统一走 newId
     const request_id = newId()
+    if (mutation) {
+      stopMoving()
+      pendingMutationId = request_id
+      pendingMutationKind = command.kind
+    }
     const result = new Promise<boolean>((finish) => {
       const timer = window.setTimeout(() => {
         pending.delete(request_id)
@@ -44,7 +57,7 @@ export function createAvatarCommands({
       pending.set(request_id, { finish, timer, silent: command.kind === 'resume' })
     })
     try {
-      send({
+      const delivered = send({
         type: 'avatar',
         world_id: world,
         request_id,
@@ -52,12 +65,17 @@ export function createAvatarCommands({
         sequence: nextSequence(),
         command,
       })
+      if (delivered === false) throw new Error('WebSocket unavailable')
     } catch {
       settle(request_id, false)
       showToast('发送失败，请检查网络连接', true)
     }
     const ok = await result
-    if (mutation) pendingMutation = false
+    // clear() 后旧 Promise 仍会 resolve，不能把刚提交的新请求解锁。
+    if (pendingMutationId === request_id) {
+      pendingMutationId = null
+      pendingMutationKind = null
+    }
     return ok
   }
 
@@ -76,14 +94,15 @@ export function createAvatarCommands({
       p.finish(false)
     }
     pending.clear()
-    pendingMutation = false
+    pendingMutationId = null
+    pendingMutationKind = null
   }
   return {
     execute,
     settle,
     clear,
     get pendingMutation() {
-      return pendingMutation
+      return pendingMutationId !== null
     },
   }
 }

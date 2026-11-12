@@ -65,8 +65,18 @@ export function createConnection(
   const pending = new Map<string, Receipt>()
   const isOpen = () => verified && ws !== null && ws.readyState === WebSocket.OPEN
   const send = (command: ClientMsg) => {
-    if (ws && isOpen()) ws.send(JSON.stringify(command))
-    else events.local('未连接，无法下发', true)
+    if (ws && isOpen()) {
+      try {
+        ws.send(JSON.stringify(command))
+        return true
+      } catch {
+        // WebSocket 可在 readyState 检查之后立即关闭。
+        events.local('连接中断，指令未发送', true)
+        return false
+      }
+    }
+    events.local('未连接，无法下发', true)
+    return false
   }
   const save = (command: SaveCommand, receipt: Receipt) => {
     if (!ws || !isOpen()) {
