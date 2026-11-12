@@ -64,7 +64,13 @@ test('the admin keeps a town running in the background: others can only enter it
     // 朋友：管理员建的普通账号（没有管理员权限）
     const made = await api('/users', { name: '朋友', pin: '1357' })
     assert.equal(made.status, 200, JSON.stringify(made))
-    const friend = call(base, `town_user=${made.user.id}`)
+    const login = await fetch(`${base}/users/select`, {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ id: made.user.id, pin: '1357' }),
+    })
+    assert.equal(login.status, 200)
+    const friend = call(base, login.headers.get('set-cookie').split(';')[0])
 
     // 一开始没有常驻
     assert.equal((await api('')).resident, null)

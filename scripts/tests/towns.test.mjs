@@ -6,7 +6,7 @@ import path from 'node:path'
 import { createManager } from '../town-manager.mjs'
 import { worldQuery } from '../towns/hosts.mjs'
 import { seal } from '../mapgen/document.mjs'
-import { client, root as source, signIn } from './support.mjs'
+import { client, root as source, signIn, userSession } from './support.mjs'
 const spec = {
   name: '隔离地图',
   seed: 51,
@@ -103,6 +103,8 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
     assert.deepEqual(savedMap.layout, draft.document.layout)
     const [a, aa] = await Promise.all([api(`/${saved.id}/open`, {}), api(`/${saved.id}/open`, {})])
     assert.equal(a.endpoint, aa.endpoint)
+    assert.match(a.endpoint, /\/ws\//)
+    assert(!a.endpoint.includes('session='), '浏览器不能拿到世界 HMAC 签票密钥')
     // 一句话建镇的说明和小镇存在一起：列表简介是玩家那句话，进镇时带着世界观建议和适合住进来的人
     assert.equal(a.creation.worldview, '这里的人想靠海吃饭。')
     const listed = (await api('')).towns.find((town) => town.id === saved.id)
@@ -232,7 +234,7 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
         (p) => p.id === 'user:map-book'
       )
     )
-    await api(`/${a.id}/close`, {})
+    await api(`/${a.id}/close`, { lease: restored.lease })
     assert.equal((await api('')).towns.find((town) => town.id === a.id).running, false)
     restored = await api(`/${a.id}/open`, {})
     const oldEndpoint = restored.endpoint
@@ -253,9 +255,12 @@ test('preview/save/open/reopen/reset/isolation work with actual hosts and persis
     )
     assert.equal(await fs.readFile(path.join(root, 'towns', a.id, 'map.json'), 'utf8'), filesBefore)
     await assert.rejects(api(`/${a.id}/map?hash=wrong`), /地图已变化/)
+    // 假票要走页面那条路验：管理服务的 /ws 只把票转给世界，世界按签票密钥验签。
+    // m.hosts.open 给的是进程内部地址，worldQuery 会替它现签一张真票，改票面没用。
+    const publicUrl = (await api(`/${a.id}/open`, {})).endpoint
     await assert.rejects(
       worldQuery(
-        restored.endpoint.replace(/session=.*/, 'session=incorrect'),
+        publicUrl.replace(/ticket=[^&]*/, 'ticket=incorrect'),
         null,
         (msg) => msg.type === 'world_identity',
         2000
@@ -501,7 +506,7 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     assert.equal(made.data.user.role, 'member')
     assert.equal(made.data.user.agent_limit, 1, '普通账号只建一个公共 agent')
     assert.equal(made.setCookie, null)
-    const friend = `town_user=${made.data.user.id}`
+    let friend = await userSession(base, made.data.user.id, '1357')
     const seen = (await api('/users', undefined, friend)).data
     assert.equal(seen.current.name, '朋友')
     assert.equal(seen.admin, false)
@@ -551,9 +556,9 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     await assert.rejects(api('/users/select', { id: adminId }, friend), /要密码/)
     const switched = await api('/users/select', { id: adminId, pin: '2468' }, friend)
     assert.equal(switched.data.current.role, 'admin')
-    assert.equal(
+    assert.match(
       switched.setCookie,
-      `town_user=${adminId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
+      /^town_user=[a-f0-9]{64}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=2592000$/
     )
     await assert.rejects(api('/users/select', { id: 'u-nobody' }), /没有这个账号/)
     // 改密码要验原来的：不对就换不了
@@ -563,6 +568,7 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     )
     const pinned = await api('/users/pin', { current: '1357', pin: '4321' }, friend)
     assert.equal(pinned.data.current.locked, true)
+    friend = pinned.setCookie.split(';')[0]
     assert.equal(
       (await api('/users/select', { id: made.data.user.id, pin: '4321' })).data.current.role,
       'member'
@@ -580,6 +586,7 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     )
     const reset = await api('/users/reset', { id: made.data.user.id, pin: '9876' }, admin)
     assert.equal(reset.data.user.name, '朋友')
+    friend = await userSession(base, made.data.user.id, '9876')
     await assert.rejects(api('/users/select', { id: made.data.user.id, pin: '4321' }), /密码不对/)
     assert.equal(
       (await api('/users/select', { id: made.data.user.id, pin: '9876' })).data.current.name,

@@ -1,5 +1,5 @@
 // 首页「设定」的模型服务：读、存、连通测试。逻辑在 host::models，经 town-map 子进程调用；
-// 手机上的管理服务直接调同一份（crates/manager/src/routes.rs），两边路径和回答一样。
+// 纯浏览器版仅通过 Node Manager 暴露该接口。
 // 每个账号各用自己那份配置（密钥文件不同）：configOf(headers) 按请求里的 Cookie 算。
 import { worker } from './workers.mjs'
 

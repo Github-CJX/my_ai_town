@@ -1,6 +1,6 @@
 // 账号的跨天账本：世界的日计数换天就归零、请求台账只留最近若干条，
 // 所以管理服务把请求一行一行落进 SQLite（`usage.db`），过了今天也查得到、对得起来
-// （scripts/towns/ledger.mjs / crates/manager/src/ledger.rs 同一套表与规则）。
+// （纯浏览器版只有 scripts/towns/ledger.mjs 会写这份账本）。
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -189,37 +189,4 @@ test('旧日子连请求行一起清掉', async () => {
   } finally {
     await done()
   }
-})
-
-// 同一个 `usage.db` 两边都写：Rust 用 rusqlite、Node 用 node:sqlite，
-// 所以建表与写入语句必须逐字一样。这条用例把两份源码里的 SQL 抽出来对齐，
-// 谁悄悄改了列名或汇总口径，这里就红。
-test('Rust 与 Node 的建表、去重与汇总语句逐字一致', async () => {
-  const rust = await readFile(
-    path.join(import.meta.dirname, '..', '..', 'crates', 'manager', 'src', 'ledger.rs'),
-    'utf8'
-  )
-  const node = await readFile(path.join(import.meta.dirname, '..', 'towns', 'ledger.mjs'), 'utf8')
-  const norm = (text) =>
-    text
-      .replace(/\s+/g, ' ')
-      .replace(/\s*,\s*/g, ',')
-      .replace(/\?[0-9]+/g, '?')
-      .trim()
-  const pick = (text, pattern) => {
-    const found = text.match(pattern)
-    assert.ok(found, `没找到：${pattern}`)
-    return norm(found[0])
-  }
-  const taken = (text) => [
-    pick(text, /CREATE TABLE IF NOT EXISTS request\([\s\S]*?\);/),
-    pick(text, /CREATE INDEX IF NOT EXISTS request_by_day ON request\(day, agent\)/),
-    pick(text, /CREATE TABLE IF NOT EXISTS day\([\s\S]*?\);/),
-    pick(text, /INSERT OR IGNORE INTO request\([\s\S]*?VALUES \([^)]*\)/),
-    pick(text, /INSERT INTO day\([\s\S]*?unpriced = unpriced \+ excluded\.unpriced/),
-  ]
-  const a = taken(rust)
-  const b = taken(node)
-  for (const [index, sql] of a.entries())
-    assert.equal(b[index], sql, `第 ${index + 1} 条语句不一致`)
 })

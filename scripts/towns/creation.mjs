@@ -76,7 +76,7 @@ export class GenerationTasks {
 
 /**
  * 预览后改的名字：只换名字、重算摘要，布局不变，不用重新生成。手机上的管理服务
- * （crates/manager/src/creation.rs）按同样的规则改名，两边保存出的地图一致。
+ * ，在 Node 管理服务中保存地图。
  */
 export function renamed(document, name) {
   if (name === undefined || name === null) return document

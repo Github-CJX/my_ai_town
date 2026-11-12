@@ -43,6 +43,7 @@ export function createWalkTo(deps: WalkDeps) {
   let opening = false
   let last: [number, number] | null = null
   let still = 0
+  let lastDirection: [number, number] = [0, 0]
   const goal = () => route[route.length - 1]?.point
   function rest() {
     last = null
@@ -54,6 +55,7 @@ export function createWalkTo(deps: WalkDeps) {
     index = 0
     opening = false
     rest()
+    lastDirection = [0, 0]
     if (reason !== 'cancelled') deps.emit([0, 0])
     deps.end(reason)
   }
@@ -79,6 +81,10 @@ export function createWalkTo(deps: WalkDeps) {
     },
     clear() {
       if (route.length) finish('cancelled')
+    },
+    /** 只续方向输入，不重复作路径点/被卡判断；服务端 350ms 过期，客户端快照可能晚到。 */
+    keepAlive() {
+      if (route.length && !opening && deps.canWalk()) deps.emit(lastDirection)
     },
     /** 还没走到终点但已经够得着要找的人或东西：就当走到了 */
     arrive() {
@@ -130,7 +136,8 @@ export function createWalkTo(deps: WalkDeps) {
       last = [...here.position]
       // 剩下不足两拍时按比例缩短向量减速：后端取 n = hypot(方向).max(1)，短向量就是慢速，不会被放大回满速。
       const scale = Math.min(1, distance / (2 * step0))
-      deps.emit([(dx / distance) * scale, (dy / distance) * scale])
+      lastDirection = [(dx / distance) * scale, (dy / distance) * scale]
+      deps.emit(lastDirection)
     },
   }
 }

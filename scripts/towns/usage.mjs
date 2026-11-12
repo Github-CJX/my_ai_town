@@ -1,5 +1,5 @@
 // 账号自己的用量与额度：世界按居民记用量，管理服务把居民换回账号的 agent 再汇总
-// （crates/manager/src/usage.rs 的同一份规则）。额度住在账号目录的 budget.json 里，
+// （纯浏览器版仅 Node 管理服务写入）。额度住在账号目录的 budget.json 里，
 // 限定这个账号投出去的每位居民每天的调用数与 token 数，由世界按居民执行（set_resident_budget）。
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'

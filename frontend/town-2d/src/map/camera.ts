@@ -58,6 +58,7 @@ export class MapCamera {
   private readonly resize: ResizeObserver
   dispose() {
     this.stopZoomAnimation()
+    cancelAnimationFrame(this.panFrame)
     this.abort.abort()
     this.resize.disconnect()
     this.controls.remove()
@@ -330,7 +331,9 @@ export class MapCamera {
     }
     this.center = next
     this.fitted = false
-    this.applyViewBox()
+    // 跟随镜头按亚像素位置连续移动，避免设备像素取整造成一格格的顿挫。
+    // 瞬移仍按整像素对齐。
+    this.applyViewBox(how !== 'snap')
     return true
   }
 
@@ -339,6 +342,8 @@ export class MapCamera {
   zoomAnchor: (() => [number, number] | undefined) | null = null
   /** 玩家用手拖着平移了地图（过了点击容差）：跟随就此停下 */
   onDragPan: (() => void) | null = null
+  /** 有 WebGL 场景时通知它在下一次 draw() 前刷新 SVG 相机，避免 3D 比标签晚一帧。 */
+  onPanScheduled: (() => void) | null = null
 
   /** 缩放围着哪一点：跟随时是人，不然是给的点 */
   private anchorOr(cx: number, cy: number): [number, number] {
@@ -640,28 +645,72 @@ export class MapCamera {
     return [p.x, p.y]
   }
 
-  /** 视口宽高与容器的设备像素成整数比，左上角对齐到一个设备像素，地图像素就落在设备像素格上 */
-  private applyViewBox() {
+  /** 高频鼠标事件只记录最新相机中心，每个显示帧最多更新一次 SVG 和 Three.js。 */
+  private panFrame = 0
+  private schedulePanFrame() {
+    if (this.panFrame) return
+    this.panFrame = requestAnimationFrame(() => {
+      this.panFrame = 0
+      this.applyViewBox(true)
+    })
+    this.onPanScheduled?.()
+  }
+  /** 3D 场景在同一帧绘制前先提交地图平移，消除 SVG/Canvas 一帧错位。 */
+  flushPendingPan(): boolean {
+    if (!this.panFrame) return false
+    this.flushPan(true)
+    return true
+  }
+  /** 抬起指针时把最后一段位移提交，且静止后重新像素对齐。 */
+  private flushPan(continuous = false) {
+    if (this.panFrame) cancelAnimationFrame(this.panFrame)
+    this.panFrame = 0
+    this.applyViewBox(continuous)
+  }
+
+  private controlsZoom = NaN
+  private controlsFitted: boolean | null = null
+  private controlsStep = -1
+
+  /** 静止时按设备像素对齐保证像素美术锐利；拖动或跟随时保留亚像素，避免步进式抖动。 */
+  private applyViewBox(continuous = false) {
     const [w, h] = this.viewSize()
     const unit = PIXEL / this.scale
-    const snap = (v: number, u: number) => (this.scale >= 1 ? Math.round(v / u) * u : v)
-    this.vb = [
+    const snap = (v: number, u: number) =>
+      !continuous && this.scale >= 1 ? Math.round(v / u) * u : v
+    const next = [
       snap(this.center[0] - w / 2, unit),
       snap(this.center[1] - h / 2, unit / this.vScale),
       w,
       h,
     ]
-    this.svg.setAttribute('viewBox', this.vb.join(' '))
+    // 同一个视口不再触发 SVG MutationObserver 和 3D 场景重算。
+    if (next.some((value, i) => value !== this.vb[i])) {
+      this.vb = next
+      this.svg.setAttribute('viewBox', next.join(' '))
+      const z = this.zoom
+      const detail = z >= (this.detailVisible ? MapCamera.DETAIL_EXIT_ZOOM : MapCamera.DETAIL_ZOOM)
+      if (detail !== this.detailVisible) {
+        this.detailVisible = detail
+        this.svg.classList.toggle('zoom-detail', detail)
+      }
+      this.onZoom(z)
+    }
     const z = this.zoom
-    this.detailVisible =
-      z >= (this.detailVisible ? MapCamera.DETAIL_EXIT_ZOOM : MapCamera.DETAIL_ZOOM)
-    this.svg.classList.toggle('zoom-detail', this.detailVisible)
-    this.onZoom(z)
-    this.zoomValue.textContent = `${Math.round(z * 100)}%`
-    this.zoomReadout.classList.toggle('on', !this.fitted)
+    if (this.controlsZoom !== z) {
+      this.zoomValue.textContent = `${Math.round(z * 100)}%`
+      this.controlsZoom = z
+    }
+    if (this.controlsFitted !== this.fitted) {
+      this.zoomReadout.classList.toggle('on', !this.fitted)
+      this.controlsFitted = this.fitted
+    }
     const i = this.indexOf(this.scale)
-    this.zoomInBtn.disabled = i >= this.clampIndex(Infinity)
-    this.zoomOutBtn.disabled = i <= this.clampIndex(0)
+    if (i !== this.controlsStep) {
+      this.zoomInBtn.disabled = i >= this.clampIndex(Infinity)
+      this.zoomOutBtn.disabled = i <= this.clampIndex(0)
+      this.controlsStep = i
+    }
   }
 
   /** 右下角缩放钮：+ / 「整图」（点了回到整图）/ − 。按钮缩放以画面中心为不动点。
@@ -837,6 +886,13 @@ export class MapCamera {
     const signal = this.abort.signal
     const pointers = new Map<number, { x: number; y: number; touch: boolean }>()
     let drag: [number, number] | null = null
+    /** 拖动开始时缓存容器尺寸：pointermove 不再反复触发 getScreenCTM 与强制布局。 */
+    let dragSize: [number, number] = [1, 1]
+    let panMoved = false
+    const measureDrag = () => {
+      const r = this.container.getBoundingClientRect()
+      dragSize = [r.width || 1, r.height || 1]
+    }
     let down: {
       pos: [number, number]
       /** 点击容差：鼠标 5px，手指 10px */
@@ -903,14 +959,18 @@ export class MapCamera {
           // 指针已经抬起（极快的点按）时捕获会失败，照常处理
         }
         if (pointers.size === 2) {
-          // 第二根手指：不再算点击，改成双指手势
+          // 切换到双指之前先提交未绘制的拖动，保证捏合锚点对应最新位置。
+          if (panMoved) this.flushPan(true)
           down = null
           drag = null
+          panMoved = false
           startPair()
           return
         }
         if (pointers.size > 2) return
         drag = [ev.clientX, ev.clientY]
+        measureDrag()
+        panMoved = false
         panned = false
         panFrom = null
         down = {
@@ -977,15 +1037,16 @@ export class MapCamera {
           panned = true
           this.onDragPan?.()
         }
-        const m = this.svg.getScreenCTM() // a / d 即屏幕像素 ↔ 世界单位的比例
-        if (!m) return
+        // SVG 视口宽高本来就与容器宽高对应，无须每个鼠标事件调用
+        // getScreenCTM()：它可能强制浏览器同步排版，尤其是刚修改 viewBox 后。
         this.glide = null
         this.followVelocity = [0, 0]
-        this.center[0] -= (ev.clientX - drag[0]) / m.a
-        this.center[1] -= (ev.clientY - drag[1]) / m.d
+        this.center[0] -= ((ev.clientX - drag[0]) * this.vb[2]) / dragSize[0]
+        this.center[1] -= ((ev.clientY - drag[1]) * this.vb[3]) / dragSize[1]
         this.fitted = false
+        panMoved = true
         drag = [ev.clientX, ev.clientY]
-        this.applyViewBox()
+        this.schedulePanFrame()
       },
       { signal }
     )
@@ -999,6 +1060,8 @@ export class MapCamera {
           // 剩下的那根手指接着平移，不算点击
           const [rest] = pointers.values()
           drag = rest ? [rest.x, rest.y] : null
+          if (rest) measureDrag()
+          panMoved = false
           panFrom = rest ? [rest.x, rest.y] : null
           down = null
         }
@@ -1007,6 +1070,8 @@ export class MapCamera {
       }
       if (pointers.size) return
       drag = null
+      if (panMoved) this.flushPan()
+      panMoved = false
       mapEl.classList.remove('drag')
       const d = down
       down = null

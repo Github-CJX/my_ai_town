@@ -75,13 +75,11 @@ function entryDialog(
   backdrop.append(dialog)
   dialog.onsubmit = (e) => {
     e.preventDefault()
-    const send = (id: string | undefined) =>
-      execute(choice.command('enter', name.value, picker.value, id))
-    void send(avatarId).then((ok) => {
-      if (ok || avatarId === undefined) return
-      // 记着的编号已经不归我们（复制了标签页、或另一个页面正握着它）：别再卡着报同样的错
-      avatarId = undefined
-      void send(undefined)
+    if (enter.disabled) return
+    enter.disabled = true
+    // 网络超时并不意味着服务端未执行；不得自动以新身份再发送一次进入请求。
+    void execute(choice.command('enter', name.value, picker.value, avatarId)).finally(() => {
+      enter.disabled = false
     })
   }
   return {

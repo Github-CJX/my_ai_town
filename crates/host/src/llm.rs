@@ -7,6 +7,7 @@
 
 use crate::config::{Credentials, ProvidersFile};
 use agent::completion::{self, ModelError};
+use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::time::Duration;
 
@@ -83,6 +84,16 @@ pub fn post_completion(
     t: &LlmTarget,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, ModelError> {
+    post_completion_in_session(t, body, None)
+}
+
+/// OpenCode Go 要求每个对话都带稳定 session。Agent 按自己的会话 ID 复用，
+/// 连接测试、建镇等一次性请求使用随机 session，避免不同玩家的上下文共享。
+pub fn post_completion_in_session(
+    t: &LlmTarget,
+    body: &serde_json::Value,
+    session_id: Option<&str>,
+) -> Result<serde_json::Value, ModelError> {
     if t.provider == crate::builtin::PROVIDER {
         return crate::builtin::complete(body);
     }
@@ -95,6 +106,19 @@ pub fn post_completion(
         .set("Content-Type", "application/json");
     if let Some(k) = &t.api_key {
         req = req.set("Authorization", &format!("Bearer {k}"));
+    }
+    if t.provider == "opencode-go" {
+        // https://opencode.ai/docs/console/harnesses: Go requires x-opencode-session.
+        // 不将 ID 放在查询参数中，也不使用浏览器提供的 header。
+        let generated;
+        let session = match session_id {
+            Some(s) => s,
+            None => {
+                generated = format!("ses_{:032x}", rand::random::<u128>());
+                &generated
+            }
+        };
+        req = req.set("x-opencode-session", session);
     }
     let resp = match req.send_string(&body.to_string()) {
         Ok(r) => r,
@@ -120,4 +144,32 @@ pub fn post_completion(
         return Err(ModelError::Reply("模型响应超过 256 KiB 上限".into()));
     }
     serde_json::from_slice(&bytes).map_err(|e| ModelError::Reply(format!("响应不是 JSON：{e}")))
+}
+
+/// 只向 Go 服务发送不含实名/角色名的稳定会话标记；同一居民对话可复用缓存。
+/// request.session_id 在新对话时改变，actor_id 保证不同居民隔离。
+pub fn opencode_agent_session(actor_id: &str, session_id: u64) -> String {
+    let digest = Sha256::digest(format!("{actor_id}:{session_id}").as_bytes());
+    format!("ses_{digest:x}")
+}
+
+#[cfg(test)]
+mod go_tests {
+    use super::opencode_agent_session;
+
+    #[test]
+    fn sessions_are_stable_and_per_resident() {
+        assert_eq!(
+            opencode_agent_session("a", 5),
+            opencode_agent_session("a", 5)
+        );
+        assert_ne!(
+            opencode_agent_session("a", 5),
+            opencode_agent_session("b", 5)
+        );
+        assert_ne!(
+            opencode_agent_session("a", 5),
+            opencode_agent_session("a", 6)
+        );
+    }
 }

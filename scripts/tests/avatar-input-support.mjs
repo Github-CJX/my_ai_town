@@ -12,8 +12,10 @@ export function walkingHarness(emit, enabled = () => true, navigationDeps) {
   document.querySelector = () => null
   let frame,
     doors = 0
+  // 测试里把「输入模块的重发循环」当成一帧；它是第一个定时器。之后导航还会加
+  // 行走方向续租、摇杆重发这类定时器，不能把帧的位置顶掉。
   window.setInterval = (fn) => {
-    frame = fn
+    frame ??= fn
     return 1
   }
   class Element {

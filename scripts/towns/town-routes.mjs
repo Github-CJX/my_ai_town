@@ -1,5 +1,6 @@
 // 小镇列表、地图、开关世界、删除与道具摆放。同一个小镇的写操作按小镇串行。
 import { HttpError } from './http.mjs'
+import { publicUser } from './accounts.mjs'
 import { safeId } from './storage.mjs'
 import { positions } from './positions.mjs'
 import {
@@ -34,31 +35,17 @@ function hostName(host = '') {
 /**
  * 页面拿到的世界地址：主机换成本次请求用的那台，路径换成本服务的 `/ws/<镇>`，
  * 由管理服务把连接转给世界进程——放到服务器上只开一个端口就够，反代也只需要转这一个。
- * 只在本机看时不改，世界进程本来就在 127.0.0.1 上，直连更省一层。
+ * 即使在本机也统一走管理服务代理，世界进程只监听回环地址。
  * 套了 TLS（反代给 `x-forwarded-proto: https`）时给 wss。
- * `ticket` 是这次登录账号的入场票：世界凭票认人，地址上挂上它。
+ * `ticket` 是这次登录账号的入场票；签票 secret 由代理内部注入，绝不下发客户端。
  */
 export function publicEndpoint(headers, info, ticket, id) {
-  let page = info
-  const name = hostName(headers?.host)
-  if (info?.endpoint && name && !LOOPBACK.has(name)) {
-    try {
-      const url = new URL(info.endpoint)
-      const secure = `${headers['x-forwarded-proto'] ?? ''}`.toLowerCase() === 'https'
-      // 反代给的是公开域名（多半没端口）；直连 IP 时 Host 里带着页面所在的那个端口，得留着
-      const netloc = headers['x-forwarded-host'] || headers.host
-      const [, onlyPort] = /:(\d+)$/.exec(netloc) ?? []
-      url.protocol = secure ? 'wss:' : 'ws:'
-      url.hostname = hostName(netloc)
-      url.port = onlyPort ?? ''
-      if (id) url.pathname = `/ws/${id}`
-      page = { ...info, endpoint: url.toString() }
-    } catch {
-      page = info
-    }
-  }
-  if (!page?.endpoint || !ticket) return page
-  return { ...page, endpoint: withTicket(page.endpoint, ticket) }
+  if (!info?.endpoint || !ticket || !id) return { ...info, endpoint: null }
+  // 外部 URL 仅包含用户入场票。严禁把 info.endpoint 内的 session 直接返回给浏览器。
+  const forward = headers?.['x-forwarded-host'] || headers?.host || '127.0.0.1'
+  const secure = String(headers?.['x-forwarded-proto'] ?? '').toLowerCase() === 'https'
+  const url = new URL(`${secure ? 'wss' : 'ws'}://${forward}/ws/${encodeURIComponent(id)}`)
+  return { ...info, endpoint: withTicket(url.toString(), ticket) }
 }
 
 /** 让正在运行的世界按这个速度走（0 是暂停）：刚拉起来、管理员在首页改过速度之后都走这一下 */
@@ -270,7 +257,7 @@ export function createTownRoutes({
         version: 1,
         pid: process.pid,
         source,
-        user: current(headers),
+        user: current(headers) ? publicUser(current(headers)) : null,
       }),
     ],
     [
@@ -635,12 +622,13 @@ export function createTownRoutes({
     [
       'POST',
       /^\/api\/towns\/([a-z0-9-]+)\/close$/,
-      async ({ params: [id], body }) => {
+      async ({ params: [id], body, headers }) => {
+        mine(headers)
         // 常驻小镇不因为有人离开就停：它在后台跑，要它停得管理员先在首页取消常驻
         if (resident.town() === id) return { ok: true, closed: false, resident: true }
         // 带着打开凭证来关：之后又有页面打开过这个小镇（比如刷新），旧页面晚到的关闭不算数
         const closed = await inTown(id, async () => {
-          if (body?.lease && hosts.isRunning(id) && !hosts.holds(id, body.lease)) return false
+          if (!body?.lease || !hosts.holds(id, body.lease)) return false
           await hosts.close(id)
           return true
         })
@@ -736,8 +724,9 @@ export function createTownRoutes({
     [
       'POST',
       /^\/api\/towns\/([a-z0-9-]+)\/delete$/,
-      ({ params: [id] }) =>
+      ({ params: [id], headers }) =>
         inTown(id, async () => {
+          admin(headers)
           if (!storage.canDelete(id)) throw new HttpError(403, '内置地图不能删除')
           if (resident.town() === id) {
             await resident.set(null)
@@ -751,8 +740,9 @@ export function createTownRoutes({
     [
       'POST',
       /^\/api\/towns\/([a-z0-9-]+)\/reset$/,
-      ({ params: [id] }) =>
+      ({ params: [id], headers }) =>
         inTown(id, async () => {
+          admin(headers)
           if (!id.startsWith('prefab-')) throw new HttpError(403, '只有预制小镇能重新开始')
           await hosts.close(id)
           await storage.remove(id, true)

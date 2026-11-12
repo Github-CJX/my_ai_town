@@ -1,6 +1,6 @@
 //! 村民模型请求的并发池：建在 tasks::TaskPool 上，结果经通道交回主循环。
 //! 任务携带发出时的模型配置，工作线程不读取或修改世界。
-use crate::llm::{post_completion, LlmTarget};
+use crate::llm::{opencode_agent_session, post_completion_in_session, LlmTarget};
 use crate::tasks::TaskPool;
 use agent::{
     completion::{self, ModelError},
@@ -99,7 +99,10 @@ pub fn complete(target: &LlmTarget, request: &AgentRequest) -> Result<ModelReply
         // 结构化决策直接输出，再由 Agent 与世界验证；不依靠模型的思考文本执行动作。
         body["reasoning_effort"] = json!("none");
     }
-    let response = post_completion(target, &body)?;
+    // Go 每个村民的对话使用独立的稳定路由会话，不随每条输入变化。
+    let session = (target.provider == "opencode-go")
+        .then(|| opencode_agent_session(&request.actor_id, request.session_id));
+    let response = post_completion_in_session(target, &body, session.as_deref())?;
     if local_qwen {
         completion::parse_local_tool_reply(&response, request)
     } else {

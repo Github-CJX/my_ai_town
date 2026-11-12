@@ -115,7 +115,7 @@ test('built app creates and runs a map with a read-only resource tree and no pre
     assert.equal((await fs.readdir(path.join(bundle, 'data/maps'))).join(','), '2d-town')
     const actual = JSON.parse(await fs.readFile(path.join(data, 'towns', saved.id, 'map.json')))
     assert.deepEqual(actual, draft.document)
-    await api(`/${saved.id}/close`, {})
+    await api(`/${saved.id}/close`, { lease: opened.lease })
   } catch (error) {
     for (const id of await fs.readdir(path.join(data, 'towns')).catch(() => [])) {
       const log = await fs

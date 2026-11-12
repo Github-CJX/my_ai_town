@@ -51,7 +51,7 @@ export function dataRoot() {
 /**
  * 一句话建镇时的描述、世界观建议和推荐的居民，和小镇放在一起（creation.json）：换设备、换成 mac 版
  * 打开也还在。逐步设置的小镇没有这个文件。从预制小镇开的一局另记 prefab（预制小镇的编号，见
- * frontend/town-shared/src/prefabs），进镇时按它出开局设置。手机上的管理服务（crates/manager/src/storage.rs）规则相同。
+ * frontend/town-shared/src/prefabs），进镇时按它出开局设置。纯浏览器版仅由 Node 管理服务维护。
  */
 export function townCreation(value) {
   if (value === undefined || value === null) return null
@@ -147,7 +147,12 @@ export class Storage {
     const dir = this.town(id)
     const stat = await fs.lstat(dir)
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('小镇目录无效')
-    await fs.rm(dir, { recursive: true })
+    // 私人服防误删：先原子搬进同一数据盘的 .trash，保留 map/save/agent 数据。
+    // 不立即递归删除；管理员可先停服务后用 mv 恢复。定期人工清理旧回收项。
+    const trashDir = path.join(this.root, 'towns', '.trash')
+    await fs.mkdir(trashDir, { recursive: true })
+    const suffix = new Date().toISOString().replace(/[:.]/g, '-') + '-' + randomUUID()
+    await fs.rename(dir, path.join(trashDir, `${id}-${suffix}`))
   }
   async map(id) {
     const document = await readJson(path.join(this.town(id), 'map.json'))
@@ -178,7 +183,7 @@ export class Storage {
     }
   }
   // 小镇列表上的进度：玩到第几天、住了几个人。读存档 world.json，还没开始过的小镇是 null。
-  // 手机上的管理服务（crates/manager）按同样的规则算，两边的 /api/towns 保持一致。
+  // 纯浏览器版只保留 Node 管理服务。
   async progress(id) {
     try {
       const save = await readJson(path.join(this.root, 'towns', id, 'world.json'))
@@ -228,9 +233,7 @@ export class Storage {
       }
     }
     return result.sort(
-      (a, b) =>
-        builtinRank(b.id) - builtinRank(a.id) ||
-        a.name.localeCompare(b.name, 'zh-CN')
+      (a, b) => builtinRank(b.id) - builtinRank(a.id) || a.name.localeCompare(b.name, 'zh-CN')
     )
   }
 }

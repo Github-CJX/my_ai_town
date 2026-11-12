@@ -1,8 +1,8 @@
 // 这台电脑上的账号：第一次打开时由用户自己建的管理员、管理员给朋友建的普通账号。
 // 每个账号一份自己的模型密钥（普通账号从空开始，各填各的；管理员那份就是小镇的公共密钥）。
 // 每个账号有一个 4–8 位数字密码，挡住「同一个屏幕上顺手切过去」——不是抗离线爆破的保险箱。
-// 手机上的管理服务（crates/manager/src/accounts.rs）按同样的规则存同一个 accounts.json，
-// 密码摘要的算法两边必须一字不差。
+// 浏览器版账号会话：Cookie 必须不可伪造；不能使用公开账号 ID 作为授权凭据。
+// 管理端只持久化随机会话令牌的 SHA-256 摘要。
 import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -13,8 +13,10 @@ import { townName } from './usage.mjs'
 export const USER_COOKIE = 'town_user'
 export const MAX_USERS = 8
 const MAX_NAME = 16
-/** 密码存成「盐 + 迭代摘要」时迭代多少轮（与 crates/manager/src/accounts.rs 的 PIN_ROUNDS 一致） */
+/** 旧账号口令摘要算法与存档格式保持兼容 */
 const PIN_ROUNDS = 20_000
+const SESSION_SECONDS = 30 * 24 * 60 * 60
+const MAX_SESSIONS = 64
 const hex = (bytes) => randomBytes(bytes).toString('hex')
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 
@@ -60,7 +62,7 @@ export function publicUser(user) {
   }
 }
 
-/** 请求 Cookie 里的账号编号；没有或格式不对时为 null */
+/** 提取 Cookie 里的不透明会话令牌；不再接受公开账号编号作为认证 */
 export function cookieId(headers) {
   for (const part of String(headers?.cookie ?? '').split(';')) {
     const at = part.indexOf('=')
@@ -69,8 +71,11 @@ export function cookieId(headers) {
   return null
 }
 
-export function accountCookie(id) {
-  return `${USER_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
+export function accountCookie(token, secure = false) {
+  return `${USER_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_SECONDS}${secure ? '; Secure' : ''}`
+}
+function secureCookie(headers) {
+  return String(headers?.['x-forwarded-proto'] ?? '').toLowerCase() === 'https'
 }
 
 /** 还没建号/没选号的请求：页面先去首页设定里建一个账号 */
@@ -80,6 +85,8 @@ export function accountNeeded() {
 
 export class Accounts {
   #users = []
+  /** 内存里只保存令牌 SHA-256；JSON 文件也不包含原始 Session Token。 */
+  #sessions = []
   constructor(root) {
     this.root = root
   }
@@ -92,6 +99,18 @@ export class Accounts {
       const saved = await readJson(this.file())
       if (Array.isArray(saved?.users))
         this.#users = saved.users.filter((u) => u && typeof u.id === 'string')
+      if (Array.isArray(saved?.sessions))
+        this.#sessions = saved.sessions
+          .filter(
+            (s) =>
+              s &&
+              typeof s.hash === 'string' &&
+              /^[a-f0-9]{64}$/.test(s.hash) &&
+              typeof s.user === 'string' &&
+              Number.isSafeInteger(s.until) &&
+              s.until > Date.now()
+          )
+          .slice(-MAX_SESSIONS)
     } catch (e) {
       if (e.code !== 'ENOENT') throw e
     }
@@ -102,7 +121,7 @@ export class Accounts {
     return this
   }
   async save() {
-    await atomicJson(this.file(), { version: 1, users: this.#users })
+    await atomicJson(this.file(), { version: 2, users: this.#users, sessions: this.#sessions })
   }
   list() {
     return this.#users
@@ -117,9 +136,27 @@ export class Accounts {
   needsSetup() {
     return !this.admin()?.pin
   }
-  /** 这个 Cookie 对应的账号：只认带过来的 Cookie。还没建号/选号时谁也不算 */
-  current(id) {
-    return this.find(id)
+  /** 账号 ID 对外可见，绝不能用它做登录态。Cookie 只认随机令牌。 */
+  current(token) {
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return undefined
+    const hash = sha(token)
+    const session = this.#sessions.find((s) => s.hash === hash && s.until > Date.now())
+    return session ? this.find(session.user) : undefined
+  }
+  /** 新登录或修改密码后新建 Session；只持久化令牌摘要，不写明文。 */
+  async issue(userId) {
+    const user = this.find(userId)
+    if (!user) throw accountNeeded()
+    const token = hex(32)
+    const now = Date.now()
+    this.#sessions = this.#sessions.filter((s) => s.until > now)
+    this.#sessions.push({ hash: sha(token), user: userId, until: now + SESSION_SECONDS * 1000 })
+    this.#sessions = this.#sessions.slice(-MAX_SESSIONS)
+    await this.save()
+    return token
+  }
+  revoke(userId) {
+    this.#sessions = this.#sessions.filter((s) => s.user !== userId)
   }
   /** 第一次打开时由用户自己建管理员账号：名字 + 密码。已经建过就拒绝。 */
   async setup(name, pin) {
@@ -151,6 +188,7 @@ export class Accounts {
     if (user.pin && !pinMatches(user.pin, current)) throw new HttpError(403, '原来的密码不对')
     checkPin(pin)
     user.pin = sealPin(String(pin))
+    this.revoke(user.id)
     await this.save()
     return user
   }
@@ -160,6 +198,7 @@ export class Accounts {
     if (!user) throw new HttpError(400, '没有这个账号')
     checkPin(pin)
     user.pin = sealPin(String(pin))
+    this.revoke(user.id)
     await this.save()
     return user
   }
@@ -173,6 +212,7 @@ export class Accounts {
     if (this.#users[index].role === 'admin')
       throw new HttpError(409, '管理员账号删不掉：没有账号就没人能进这个管理服务了')
     const [user] = this.#users.splice(index, 1)
+    this.revoke(user.id)
     await fs.rm(path.join(this.root, 'users', user.id), { recursive: true, force: true })
     await this.save()
     return user
@@ -267,8 +307,7 @@ function makeUser(name, role, agent_limit) {
 }
 
 /**
- * 账号接口：第一次建管理员、当前是谁、管理员建号、切换档案、改密码。手机上的管理服务
- * （crates/manager/src/routes.rs 的 accounts_api）路径与回答一致。
+ * 浏览器账号接口；PIN 用于登录，Cookie 是服务端生成的随机 Session。
  */
 export function createAccountRoutes({ accounts, storage }) {
   const me = (headers) => accounts.current(cookieId(headers))
@@ -290,13 +329,14 @@ export function createAccountRoutes({ accounts, storage }) {
     [
       'POST',
       /^\/api\/towns\/users\/setup$/,
-      async ({ body }) => {
+      async ({ body, headers }) => {
         // 建完就是这个人：直接换到他的档案
         const user = await accounts.setup(body?.name, body?.pin)
+        const token = await accounts.issue(user.id)
         return new Raw(JSON.stringify({ ok: true, current: publicUser(user) }), {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-store',
-          'Set-Cookie': accountCookie(user.id),
+          'Set-Cookie': accountCookie(token, secureCookie(headers)),
         })
       },
     ],
@@ -312,12 +352,13 @@ export function createAccountRoutes({ accounts, storage }) {
     [
       'POST',
       /^\/api\/towns\/users\/select$/,
-      ({ body }) => {
+      async ({ body, headers }) => {
         const user = accounts.select(typeof body?.id === 'string' ? body.id : '', body?.pin)
+        const token = await accounts.issue(user.id)
         return new Raw(JSON.stringify({ ok: true, current: publicUser(user) }), {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-store',
-          'Set-Cookie': accountCookie(user.id),
+          'Set-Cookie': accountCookie(token, secureCookie(headers)),
         })
       },
     ],
@@ -328,7 +369,12 @@ export function createAccountRoutes({ accounts, storage }) {
         const current = me(headers)
         if (!current) throw accountNeeded()
         const user = await accounts.setPin(current.id, body?.current, body?.pin)
-        return { ok: true, current: publicUser(user) }
+        const token = await accounts.issue(user.id)
+        return new Raw(JSON.stringify({ ok: true, current: publicUser(user) }), {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Set-Cookie': accountCookie(token, secureCookie(headers)),
+        })
       },
     ],
     [

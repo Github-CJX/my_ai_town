@@ -1,4 +1,4 @@
-// 价目表：把 token 用量换算成钱（crates/manager/src/prices.rs 的同一份规则）。
+// 价目表：Node 私人服把 token 用量换算成钱。
 // 单位统一为人民币元 / 百万 token：输入（缓存未命中）、输入（缓存命中）、输出三档。
 // 账号目录里可以放 prices.json 覆盖或补充内置价；表里没有的模型记「没价」，不折算成 0。
 import path from 'node:path'

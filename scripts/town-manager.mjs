@@ -36,17 +36,16 @@ function hostName(host = '') {
 /**
  * 这个请求的 Host 能不能用：缺省只认本机；对外监听时再认 IP、监听地址和允许的域名。
  * 只认 IP 与显式允许的名字，是为了不让别人的域名解析到这台机器上就能用接口（DNS 重绑定）；
- * 反向代理转进来的请求另外认：`x-forwarded-*` 这些头页面上的脚本改不了，所以凭它们认反代。
+ * 反代的 forwarded 头不能单独作为信任依据，它们可能被远程请求伪造。
  */
 function hostAllowed(host, bind, allowHost, headers = {}) {
   const name = hostName(host)
   if (LOOPBACK.has(name)) return true
-  if (headers['x-forwarded-proto'] || headers['x-forwarded-host'] || headers['x-forwarded-for'])
-    return true
-  if (LOOPBACK.has(bind)) return false
+  // 只监听本机时，仅显式允许的反代域名能被转发；不能靠伪造 forwarded 头绕过。
+  if (LOOPBACK.has(bind)) return !!allowHost && name === allowHost
   return (
-    /^\d{1,3}(\.\d{1,3}){3}$/.test(name) ||
-    name.includes(':') ||
+    (/^\d{1,3}(\.\d{1,3}){3}$/.test(name) && name.split('.').every((n) => Number(n) <= 255)) ||
+    net.isIP(name) === 6 ||
     name === bind ||
     name === allowHost
   )
@@ -227,11 +226,15 @@ export async function createManager({
     const cut = url.indexOf('?')
     const id = /^\/ws\/([a-z0-9-]+)\/?$/.exec(cut < 0 ? url : url.slice(0, cut))?.[1]
     const port = id ? hosts.worldPort(id) : null
-    if (!port) return refuse(404, 'Not Found', '这个小镇没在运行')
-    const query = cut < 0 ? '' : url.slice(cut + 1)
+    const secret = id ? hosts.worldSecret(id) : null
+    if (!port || !secret) return refuse(404, 'Not Found', '这个小镇没在运行')
+    // 浏览器只带票，签票密钥保留在管理进程中；客户端伪造的 session 必须被移除。
+    const params = new URLSearchParams(cut < 0 ? '' : url.slice(cut + 1))
+    params.delete('session')
+    if (!params.has('ticket')) return refuse(403, 'Forbidden', '缺少入场票')
+    params.set('session', secret)
     const upstream = net.connect(port, '127.0.0.1', () => {
-      // 世界只认查询串里的 session/ticket，路径换回 `/`；其余头（含 Upgrade）照原样带过去
-      const lines = [`${req.method} /?${query} HTTP/1.1`]
+      const lines = [`${req.method} /?${params.toString()} HTTP/1.1`]
       for (const [key, value] of Object.entries(req.headers))
         if (value !== undefined)
           lines.push(`${key}: ${Array.isArray(value) ? value.join(', ') : value}`)

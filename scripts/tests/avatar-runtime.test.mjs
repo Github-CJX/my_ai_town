@@ -211,7 +211,7 @@ test('actual WASD input adapter drives a generated world and saves its stopped p
     assert.equal(leave.state.controlled, false)
     input.abort.abort()
     ws.close()
-    await api(`/${saved.id}/close`, {})
+    await api(`/${saved.id}/close`, { lease: town.lease })
     const disk = JSON.parse(await fs.readFile(path.join(root, 'towns', saved.id, 'world.json')))
     assert.equal(disk.world.actors.player_avatar.locus.at.kind, 'offstage')
     assert.deepEqual(disk.world.actors.player_avatar.avatar.last_locus.at.position, p)

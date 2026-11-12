@@ -1,5 +1,5 @@
 // 内置模型的状态、看有没有新版本、下载暂停删除。逻辑在 host::builtin_store，经 town-map 子进程调用；
-// 手机和 mac 上的管理服务直接调同一份（crates/manager/src/routes.rs），两边路径和回答一样。
+// 浏览器私人服的管理服务调用内置模型。
 // 下载是一个长时间运行的 town-map 子进程：下完、暂停或停在出错上自己退出，同一时间只起一个。
 import { spawn } from 'node:child_process'
 import path from 'node:path'

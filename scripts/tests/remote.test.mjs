@@ -82,7 +82,7 @@ test('对外的管理服务认 IP，世界地址也按访问用的地址拼', as
     // 世界连接也走管理服务这一个端口：主机换成页面访问用的地址，路径是 /ws/<镇>，不再带世界端口
     assert.match(
       opened.json.endpoint,
-      new RegExp(`^ws://192\\.0\\.2\\.10:${port}/ws/${town.id}\\?session=`)
+      new RegExp(`^ws://192\\.0\\.2\\.10:${port}/ws/${town.id}\\?ticket=`)
     )
     // 别人的域名解析到这台机器上也不行
     const stranger = await ask(port, 'town.example.com', '/api/towns', { cookie })
@@ -116,7 +116,7 @@ test('套反代只开一个端口：页面的世界连接也从这一个端口�
   let m
   try {
     // 反代在本机，管理服务只听得见 127.0.0.1；页面那边看到的是公开域名
-    m = await createManager({ root, port: 0, mockLlm: true })
+    m = await createManager({ root, port: 0, mockLlm: true, allowHost: 'town.example.com' })
     const port = m.server.address().port
     const cookie = await signIn(`http://127.0.0.1:${port}/api/towns`)
     const host = 'town.example.com'
@@ -137,7 +137,7 @@ test('套反代只开一个端口：页面的世界连接也从这一个端口�
     assert.equal(url.protocol, 'wss:')
     assert.equal(url.host, host)
     assert.equal(url.pathname, `/ws/${town.id}`)
-    assert.ok(url.searchParams.get('session'), '世界口令丢了')
+    assert.equal(url.searchParams.get('session'), null, '严禁把世界签票密钥给浏览器')
     assert.ok(url.searchParams.get('ticket'), '入场票丢了')
     // 沿着同一个端口连进去（这里用回环直连模拟反代）：管理服务把连接转给世界，
     // 先收到世界的自报家门，接着就不断有名册推过来

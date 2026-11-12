@@ -1,5 +1,5 @@
 // 常驻小镇：管理员在首页挑一个小镇一直开着（页面全关了也不停），别人只能进这个镇。
-// 记在数据目录的 resident.json 里；电脑版（crates/manager/src/resident.rs）读同一份。
+// 记在数据目录的 resident.json 里；Node 管理服务读取这份常驻配置。
 import fs from 'node:fs/promises'
 import path from 'node:path'
 

@@ -44,8 +44,8 @@ const options = {
   tickMs: 100,
   minutesPerTick: 0.1,
   maxStepMs: 1000,
-  delayMs: 200,
-  resyncMs: 600,
+  delayMs: 350,
+  resyncMs: 900,
   windowMs: 1000,
   minRate: 0.85,
   maxRate: 1.05,
@@ -148,7 +148,7 @@ test('世界停着的时候时间轴也停，不白走', async () => {
   near(clock.latest - at, 100, '恢复后没有接着往前走')
 })
 
-test('落后超过上限才跳到最新，跳完仍是两拍缓冲', async () => {
+test('落后超过上限才跳到最新，跳完仍保留 350ms 缓冲', async () => {
   const { PlaybackClock } = await load()
   const clock = new PlaybackClock(options)
   // 前 1 秒正常到货

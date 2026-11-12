@@ -34,9 +34,8 @@ export function resumeLease(
       const token = read()
       if (!token || attempted || controlled || !supported) return
       attempted = true
-      void execute({ kind: 'resume', token }).then((ok) => {
-        if (!ok) store()
-      })
+      // 8 秒等待超时不代表服务端拒绝；留住 token 供重新连接后再试。
+      void execute({ kind: 'resume', token })
     },
   }
 }

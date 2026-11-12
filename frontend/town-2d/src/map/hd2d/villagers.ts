@@ -49,9 +49,9 @@ const DRIFT_WINDOW_MS = 1000
 const DRIFT_MIN = 0.85
 const DRIFT_MAX = 1.05
 /** 刚来一份名册时立牌比它晚多久：两拍，下一份晚到一拍也还有路可走 */
-const DELAY_MS = 200
+const DELAY_MS = 350
 /** 落后超过这么久（切到后台回来、断线重连）就直接跳到最新，不快放 */
-const RESYNC_MS = 600
+const RESYNC_MS = 900
 /** 一帧最多走这么久的时间轴：卡一帧也照实走完，不掐时间（掐了就要靠后面一跳补回来） */
 const MAX_STEP_MS = 250
 /** 追赶缓冲时最多快慢一成：配合 drift 一起，播放速度始终在一倍上下 */

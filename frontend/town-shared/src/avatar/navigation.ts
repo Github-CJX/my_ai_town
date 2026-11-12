@@ -205,6 +205,10 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
     cycleTarget
   )
   running = input.running
+  // 服务器仅保存最近 350ms 的方向；状态广播遇到延迟时仍每 100ms 续租行走方向。
+  // 不能在这里调用 walk.tick()，否则慢网络时会被误判 6 拍没动而频繁重新选路。
+  const keepAlive = window.setInterval(() => walk.keepAlive(), 100)
+  signal.addEventListener('abort', () => clearInterval(keepAlive))
   // 触屏摇杆：按住时每 100 毫秒重发一次方向（后端的输入会过期），松手发零向量
   let stickDirection: [number, number] | null = null
   let stickTimer = 0

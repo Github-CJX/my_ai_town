@@ -118,11 +118,14 @@ export class TownMap {
     const readable = 12 / (54 * screenScale)
     this.svg.style.setProperty('--name-scale', String(scaled ? Math.max(scale, readable) : scale))
     this.residents.setBodyHeight(this.hd ? VILLAGER_HEIGHT : undefined)
+    const markerChanged = scale !== this.markerScale
     this.residents.setMarkerScale(scale)
     this.prompts.setScale(4 * scale)
     this.markerScale = scale
     this.anchorProps()
     this.placeDestination()
+    // setMarkerScale() 在倍率变化时已经重排过居民；避免调用方紧接着再重排一次。
+    return markerChanged
   }
   /** 人物取名册位置，门取出入口编号对应的门口，道具取图形中心。 */
   setAvatarPrompts(prompts: AvatarPrompt[]) {
@@ -291,7 +294,9 @@ export class TownMap {
   }
   /** 立体场景每次画之前：控制化身时镜头归化身管，不然跟着「跟随中」的村民 */
   private beforeFrame(t: number): boolean {
-    return this.frameHook ? this.frameHook(t) : this.followWatched(t)
+    // 鼠标事件比渲染帧密：把尚未提交的 pan 与 WebGL 镜头同步到同一帧。
+    const panned = this.camera.flushPendingPan()
+    return (this.frameHook ? this.frameHook(t) : this.followWatched(t)) || panned
   }
 
   /** 「跟随中」的村民（见 watch） */
@@ -505,13 +510,16 @@ export class TownMap {
       container,
       scene.initialView,
       (zoom) => {
-        // 平移也会走到这里；只有倍率变了才重新分组
+        // 平移在每帧触发，不能在这里反复测量 SVG CTM、重排全部标签和同步村民。
+        // 缩放改变时才更新字号、气泡与分组；移动只检查当前取景房间。
         const zoomed = zoom !== this.zoom
         this.zoom = zoom
-        this.bubbles.setZoom(zoom)
-        this.applyMarkerScale()
-        if (zoomed) this.residents.relayout()
-        this.refreshRooms()
+        if (zoomed) {
+          this.bubbles.setZoom(zoom)
+          // 标记大小变了时 setMarkerScale 已经重排；不变时仍须更新固定屏幕字号的分组。
+          if (!this.applyMarkerScale()) this.residents.relayout()
+        }
+        this.refreshRooms(false, true)
         this.checkPeek(true)
       },
       (id) => this.onVillagerClick?.(id),
@@ -537,6 +545,7 @@ export class TownMap {
     // 化身给的不动点优先；不然跟随中的村民就是缩放的不动点。拖动地图就不再跟随
     this.camera.zoomAnchor = () => this.externalAnchor?.() ?? this.watchAnchor()
     this.camera.onDragPan = () => this.stopWatching(true)
+    this.camera.onPanScheduled = () => this.hd?.requestDraw()
     // 控制化身时指针下附近都走不到就换成禁止的指针；每帧最多算一次
     let hover: { client: [number, number]; target: EventTarget | null } | null = null
     this.svg.addEventListener('pointermove', (e) => {
@@ -740,7 +749,7 @@ export class TownMap {
   private clock?: [number, string | undefined]
 
   /** 立体场景跟上房子的开合（见 RoomCovers）、村民和道具立牌；fresh 表示刚来了一份名册 */
-  private refreshRooms(fresh = false) {
+  private refreshRooms(fresh = false, viewOnly = false) {
     const hd = this.hd
     if (!hd) return
     const avatar = this.entries.find((e) => e.member.kind === 'avatar')
@@ -753,6 +762,9 @@ export class TownMap {
       ],
       [this.peek.peeked, this.peek.pinned]
     )
+    // 相机只挪了位置、没有跨越房间边界时，名册和遮挡没有变化：
+    // 避免每帧重建全部 VillagerPlacement，以及把整份居民列表发送给 WebGL 场景。
+    if (viewOnly && !changed) return
     const covered = this.rooms.covered
     this.residents.setCovered(covered)
     // 名册上的世界时钟交给立牌：一份名册代表世界走了几拍，卡顿被覆盖掉的几份也算在里头（D.47）

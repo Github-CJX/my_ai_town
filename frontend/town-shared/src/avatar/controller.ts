@@ -433,12 +433,19 @@ class AvatarController {
     this.stopMoving()
     // 没有控制权也没有要交还的东西：别的页面在玩不影响本页离开；附身的村民归他，本页照样能走。
     if (!this.state?.controlled) return true
+    // 断线后无法发离场回执；允许 UI 离开，后端断线后由租约过期接管。
+    if (!this.online) {
+      this.lease.store()
+      this.tab = null
+      return true
+    }
     const ok = await this.execute({ kind: 'leave' })
-    if (ok) {
+    // 回执超时但服务端状态已经显示交还，也视为成功。
+    if (ok || !this.state?.controlled) {
       this.lease.store()
       this.tab = null
     }
-    return ok
+    return ok || !this.state?.controlled
   }
 
   async release() {
@@ -566,15 +573,10 @@ class AvatarController {
       name: me.name,
       appearance: look,
     }).then((ok) => {
-      if (ok) return
-      this.identity.forget()
-      if (this.account.self()) {
-        this.openDialog()
-        return
-      }
-      void this.execute({ kind: 'enter', name: me.name, appearance: look }).then((fresh) => {
-        if (!fresh) this.openDialog()
-      })
+      if (ok || this.owned()) return
+      // 失败可能是超时/掉线但世界已经接管；不要自动创建第二个化身。
+      // 保留账号关联身份，让玩家检查连接后手动重试。
+      if (this.online) this.openDialog()
     })
   }
 

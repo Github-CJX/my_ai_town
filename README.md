@@ -8,7 +8,7 @@
 
 > **这个仓库继续开发了。** 当前 `main` 已换成 Rust 世界内核与 HD-2D 客户端，后续开发统一在这里进行。原 Godot 版保留在 Git 历史中，见[旧版最后快照](https://github.com/mewamew/my_ai_town/tree/e8a1ee3cdb29c8b3650f7801a801db2ef30e4828)。
 >
-> **Windows 尚未实机测试。** Windows 应用壳和交叉编译脚本已经加入，但启动、WebView2、内置模型、存档及中文路径仍需实机验证。
+> **浏览器精简版说明：** 此分支已移除 Android/macOS/Windows 原生应用壳以及 Rust Manager，保留 Node.js + Rust 世界内核供私人服务器浏览器访问。
 >
 > 新版目前提供源码和打包脚本。仓库既有的 Godot 版 Release 不对应本文截图和运行方式，请勿混用。
 
@@ -111,67 +111,23 @@ _以上三张为 2026-10-19 在 macOS 的 Chrome 中运行新版源码时截取�
 - **设置：** 在「设定」里调整模型和居民；「设定 → 显示」可以改画质、失焦模糊、地图俯角和文字大小。顶栏可查看模型消耗、切换天气。
 - **保存：** 返回「选择小镇」时保存并关闭当前小镇。个人地图、居民、记忆和日志保存在本机用户目录，不会写回仓库。
 
-### 从源码启动
+### 从源码启动（桌面浏览器 + 私人服务器）
 
-Windows 可运行 `node scripts/windows/build-local-launcher.mjs`，在根目录生成 `AI小镇启动.exe`。双击会启动本地 Ollama 和小镇服务，再打开浏览器。沿用 `.local/run-data` 中的存档；打开的是选镇页，进入小镇后再手动开始运行。重复双击会复用服务。启动器需要保留在项目根目录，依赖本机已安装的 Node.js、已编译的 Rust 内核和现有模型，不是可单独拷走的安装包；生成的 EXE 不随源码入库。配置方法见[Windows 本地启动器](docs/README.md#windows-本地启动器)。
-
-先安装 Node.js（见 `.nvmrc`，最低 22.18）、Corepack 和 Rust 工具链 1.88.0。在 macOS 上按以下步骤运行：
+安装 Node.js >= 22.18、Corepack/pnpm 与 Rust 1.88.0，然后运行：
 
 ```sh
-git clone https://github.com/mewamew/my_ai_town.git
-cd my_ai_town
 corepack pnpm install --frozen-lockfile
-cargo +1.88.0 build --locked -p host --bins
+cargo +1.88.0 build -p host --bins
 corepack pnpm build
-corepack pnpm preview
+AI_TOWN_HOME=/srv/ai-town-data TOWN_BIND=0.0.0.0 TOWN_ALWAYS_ON=1 \
+  node scripts/start-client.mjs preview --port 8788
 ```
 
-打开 `http://127.0.0.1:5174`。
+用桌面 Chrome、Edge 或 Firefox 访问 `http://服务器IP:8788`。推荐通过 Tailscale 等私人网络访问；Rust 世界服务只监听本机，浏览器 WebSocket 经管理服务转发，仅需开放管理服务一个端口。首次启动先设置管理员账号和常驻小镇，之后如需要可以再加 `TOWN_ONLY_RESIDENT=1`。
 
-源码仓库不包含内置模型的推理程序和权重。要在 Apple 芯片的 Mac 上使用本地模型，先准备 CMake 和 Xcode 命令行工具，再运行：
+**注意：** 精简 Rust workspace 后第一次运行 Cargo 会更新 `Cargo.lock`，首次编译不要加 `--locked`。原账号和存档继续使用，但旧的账号 Cookie 会失效，需重新登录。修改与安全审查见 [AUDIT_REPORT.md](AUDIT_REPORT.md)，完整说明见 [开发入口](docs/README.md)。
 
-```sh
-node scripts/builtin-model/build.mjs
-```
-
-这会下载固定版本的 llama.cpp 并编译推理程序。重启管理服务后，到「设定 → 内置模型」下载模型文件（约 529 MB）；下载完成后，村民决策可在本地运行。仅运行上面的前端与 Rust 构建，不会自动编译推理程序。
-
-也可以在游戏里配置自己的在线模型地址和 API 密钥。在线调用的费用由服务商收取；居民越多、运行越久，请求通常越多。请先从少量居民开始。
-
-开发模式、平台打包和检查命令见[开发入口](docs/README.md)。
-
-### 放到服务器上，只通过 IP 和端口访问
-
-缺省只在本机（`127.0.0.1`）提供服务。要放到一台服务器上给别的机器访问，启动时加三个设置：
-
-```sh
-TOWN_BIND=0.0.0.0 TOWN_MANAGER_PORT=8788 TOWN_HOST_PORT=8790 node scripts/start-client.mjs
-```
-
-- `TOWN_BIND`：管理服务的监听地址。设成 `0.0.0.0` 才会接受别的机器访问；页面和接口都从同一个端口（`TOWN_MANAGER_PORT`）出，所以别人打开 `http://服务器IP:8788` 就是选镇页。
-- `TOWN_HOST_PORT`：小镇世界自己的端口。不设是每次随机，放到服务器上请固定一个（缺省 `8790`），防火墙上只开这一个就够。
-- `TOWN_ALLOW_HOST`：用域名访问时填域名（例如 `town.example.com`），用 IP 访问不用填。没有列出来的域名拼进来的请求会被拒（「仅提供本机服务」）。
-
-防火墙要放行两个端口：管理服务的端口和世界的端口。页面会按你打开它用的那个 IP（或域名）去连世界，所以别人从外网进来也能连上。
-
-几点要说清楚：
-
-- **HTTP 明文。** 这套服务不带 TLS。放到公网请在前面套一层反向代理（Nginx、Caddy 等）做 HTTPS；代理转发时带上 `X-Forwarded-Proto: https`，页面就会用 `wss://` 连世界。
-- **账号在这台机器上。** 管理服务自己的数据目录里存着账号和模型密钥；管理员在首页「设定 → 账号」里给朋友建号，每人一个密码、各自一份模型密钥，彼此看不到。别把数据目录（`root`）放到公开可读的地方。
-- **同时只运行一个小镇。** 管理员可以让一个镇在后台一直跑，其他人只能进它。
-- **重启不丢。** 管理服务重启后会自己把常驻小镇拉起来；世界暂停着的时候页面上能直接开始/暂停和换天气。
-- **自己养的村民。** 每个账号可以建自己养的村民（agent）：起个名字、挑一个镇上现成的模板。定义跟着账号走，换一个小镇还能用；投进哪个小镇要自己点一下，投进去之后它就住在那儿，记忆也只留在那一份存档里。管理员不限个数，普通账号最多一个，各自的列表互相看不到。
-- **村民列表大家都能看，请人入住只有管理员能做。** 地图左上角头像条、村民页的名册谁都打开得了；「邀请」「新建村民」「从村民库挑选」只有管理员点得动。想请人入住的账号找管理员。
-
-## 平台状态
-
-| 平台             | 当前情况                                                                                                                                                   |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS / 浏览器   | 本次已在 Apple 芯片的 Mac 上完成源码编译、Chrome 启动和核心流程检查。                                                                                      |
-| macOS 应用       | 提供 Swift 应用壳与 DMG 打包脚本，目标为 macOS 13+、Apple 芯片；本次源码发布不附带新签名或公证的 DMG。                                                     |
-| Android          | 提供应用壳与 APK 打包脚本，目标为 Android 8.0+、arm64；内置模型还要求 CPU 支持 armv8.2-a、dotprod、fp16。本次未重新做手机实机验收。                        |
-| **Windows**      | **尚未实机测试。** 目标为 Windows 10/11 x64、WebView2；内置模型要求 AVX2 等指令集。Mac 上交叉编译成功也不能代替 Windows 实机验证；当前应按实验性支持看待。 |
-| Linux / 其他设备 | 未在本次发布中验证；不要将核心 CI 通过理解为所有平台都能正常运行。                                                                                         |
+内置模型仍可通过 `node scripts/builtin-model/build.mjs`（Linux/macOS）准备 `llama-server`，也可直接在游戏里配置在线 AI 服务。请备份 `AI_TOWN_HOME` 并在模型服务商处设消费限制。
 
 ## 数据、模型和旧版
 

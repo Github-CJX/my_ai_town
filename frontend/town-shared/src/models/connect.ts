@@ -18,7 +18,7 @@ export const QUICK = [
   'minimax',
   'alibaba-bailian',
   'xiaomi-mimo',
-  'opencode',
+  'opencode-go',
 ]
 const FIRST = 4
 /** 申请密钥的地方：只给到平台首页，路径变了也打得开 */
@@ -29,7 +29,7 @@ export const SIGN_UP: Record<string, string> = {
   minimax: 'https://platform.minimaxi.com',
   'alibaba-bailian': 'https://bailian.console.aliyun.com',
   'xiaomi-mimo': 'https://platform.xiaomimimo.com',
-  opencode: 'https://opencode.ai/auth',
+  'opencode-go': 'https://opencode.ai/console',
 }
 
 export interface ModelConfig {
@@ -84,7 +84,9 @@ export function keyHelp(preset: ProviderPreset): HTMLElement[] {
       'li',
       price
         ? `费用按用量从你在 ${preset.name} 的账户里扣：3 位村民玩一小时大约 ${hourRange(price)}（按公布的价格估算）`
-        : `费用按用量从你在 ${preset.name} 的账户里扣，价格看它的官网`
+        : preset.id === 'opencode-go'
+          ? '使用你的 OpenCode Go/Go Plus 套餐额度；请查看套餐使用限制，不按普通 API 单价估算'
+          : `费用按用量从你在 ${preset.name} 的账户里扣，价格看它的官网`
     )
   )
   const link = el('a', `打开 ${(SIGN_UP[preset.id] ?? '').replace(/^https?:\/\//, '')}`)

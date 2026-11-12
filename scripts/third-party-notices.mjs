@@ -30,10 +30,7 @@ function add(key, license, source, texts) {
 }
 for (const [manifest, target] of [
   ['Cargo.toml', 'aarch64-apple-darwin'],
-  ['Cargo.toml', 'aarch64-linux-android'],
-  ['Cargo.toml', 'x86_64-pc-windows-gnu'],
   ['Cargo.toml', 'x86_64-unknown-linux-gnu'],
-  ['windows/Cargo.toml', 'x86_64-pc-windows-gnu'],
 ]) {
   const meta = JSON.parse(
     execFileSync(

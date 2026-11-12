@@ -531,9 +531,14 @@ export class HdScene {
     this.finish = post.finish
     this.finish.uniforms.tLook.value = lookTexture(theme.light.look)
     this.gpu = new GpuTimer(this.renderer)
-    this.timePasses(import.meta.env.DEV && new URLSearchParams(location.search).has('hd-perf'))
+    // 私人服务器的正式预览也可通过 ?hd-perf 打开 GPU 分段计时，便于定位掉帧。
+    this.timePasses(new URLSearchParams(location.search).has('hd-perf'))
     this.measureFrom = performance.now()
-    const views = new MutationObserver(() => this.syncView())
+    // SVG 拖动、触控板缩放可能在一帧里更新多次；仅标记待绘制，
+    // 真正 readView() 在 draw() 同步，防止一帧内重复生成相机矩阵和视锥裁剪。
+    const views = new MutationObserver(() => {
+      if (this.svg.getAttribute('viewBox') !== this.viewBox) this.request()
+    })
     views.observe(svg, { attributes: true, attributeFilter: ['viewBox'] })
     const sizes = new ResizeObserver(() => this.resize())
     sizes.observe(container)
@@ -2080,7 +2085,7 @@ export class HdScene {
     })
   }
 
-  /** GPU 计时：开发版地址带 ?hd-perf 时按 pass 量、右上角显示；不然只在「自动」画质的测量期整帧量一次 */
+  /** GPU 计时：地址带 ?hd-perf 时按 pass 量、右上角显示；不然只在「自动」画质的测量期整帧量一次 */
   private timePasses(perPass: boolean) {
     const gpu = this.gpu
     if (!gpu.available) return
@@ -2249,6 +2254,9 @@ export class HdScene {
     if ((this.svg.getAttribute('viewBox') ?? '') !== this.viewBox) this.readView()
   }
 
+  /** 上次配置过的画面像素密度，平移不改变它。 */
+  private viewUnitPx = NaN
+
   private readView() {
     this.viewBox = this.svg.getAttribute('viewBox') ?? ''
     const vb = this.viewBox.split(/[ ,]+/).map(Number)
@@ -2267,10 +2275,17 @@ export class HdScene {
     const vx = x + w / 2,
       vy = y + h / 2
     const target = new THREE.Vector3(yawCos * vx + yawSin * vy, 0, -yawSin * vx + yawCos * vy)
+    const heightChanged = this.viewHeight !== screenH
     this.viewHeight = screenH
     const unitPx = this.renderer.domElement.width / w
-    this.dissolveCell.value = Math.max(1, unitPx * PIXEL)
-    this.motes.setScale(unitPx)
+    if (unitPx !== this.viewUnitPx) {
+      this.viewUnitPx = unitPx
+      this.dissolveCell.value = Math.max(1, unitPx * PIXEL)
+      this.motes.setScale(unitPx)
+      this.grass.setScale(unitPx)
+      this.fauna.setScale(unitPx)
+      this.villagers.setTexelPx(unitPx * PIXEL * VILLAGER_SCALE)
+    }
     this.weather.setView(target.x, target.z, w, h, screenH, unitPx, sin, cos, yawSin, yawCos)
     this.horizon.setView(target.x, target.z, w)
     // 日光路径从画面下沿（朝镜头那一侧的地面）出发
@@ -2288,16 +2303,14 @@ export class HdScene {
     cam.updateProjectionMatrix()
     this.volumetric.setView(cam)
     this.viewTarget.copy(target)
-    this.grass.setScale(unitPx)
-    this.fauna.setScale(unitPx)
-    this.villagers.setTexelPx(unitPx * PIXEL * VILLAGER_SCALE)
     // 看得见的地面范围（转过方位角时取外接框），外面留一圈：镜头外的人不重画贴图。
     // 村民位置是地图坐标，中心要用转回地图的 target；vx、vy 是转过方位角的视口坐标，转过角度后差得很远
     const reach = (Math.abs(yawCos) + Math.abs(yawSin)) * Math.max(w, h) * 0.5 + VILLAGER_HEIGHT * 2
     this.villagers.setView(target.x - reach, target.z - reach, target.x + reach, target.z + reach)
     this.reflection.uniforms.uReflStreak.value.set(-yawSin, -yawCos).multiplyScalar(6 * PIXEL)
     this.waterVisible = this.waterInView(target, w, h)
-    this.updateTiltShift()
+    // 视口只是平移时不必重设景深的所有 uniforms；焦点变化由 stepFocus 单独处理。
+    if (heightChanged) this.updateTiltShift()
     this.request()
   }
 

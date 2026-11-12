@@ -40,6 +40,16 @@ export async function signIn(base) {
   if (!r.ok) throw Error((await r.json()).error)
   return r.headers.get('set-cookie').split(';')[0]
 }
+/** 用正常 PIN 登录，拿到不透明的账号会话 Cookie。 */
+export async function userSession(base, id, pin) {
+  const r = await fetch(`${base}/users/select`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-town-client': '1' },
+    body: JSON.stringify({ id, pin }),
+  })
+  if (!r.ok) throw Error((await r.json()).error)
+  return r.headers.get('set-cookie').split(';')[0]
+}
 /** 以某个账号的身份请求管理服务：base 形如 http://127.0.0.1:PORT/api/towns */
 export function client(base, cookie) {
   return async (route, body) => {

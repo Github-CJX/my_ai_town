@@ -90,7 +90,7 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     assert.match(nothing.error, /人设/)
 
     // 投放：村民真的住进去了，记下镇上给的居民编号
-    const closed = await api('/default-town/close', {})
+    const closed = await api('/default-town/close', { lease: opened.lease })
     assert.equal(closed.closed, true)
     const asleep = await api('/default-town/deploy', { agent_id: agent.id })
     assert.equal(asleep.status, 409)
@@ -221,7 +221,13 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     // 普通账号：最多一个 agent，也能把这个自己养的村民投进正在运行的小镇
     const madeUser = await api('/users', { name: '朋友', pin: '1357' })
     assert.equal(madeUser.status, 200, JSON.stringify(madeUser))
-    const friend = call(base, `town_user=${madeUser.user.id}`)
+    const friendLogin = await fetch(`${base}/users/select`, {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ id: madeUser.user.id, pin: '1357' }),
+    })
+    assert.equal(friendLogin.status, 200)
+    const friend = call(base, friendLogin.headers.get('set-cookie').split(';')[0])
     assert.equal((await friend('/agents')).limit, 1)
     const one = await friend('/agents', {
       fields: { name: '朋友的小人', intro: '话不多' },
@@ -272,7 +278,11 @@ test('an account keeps its own agent definitions and drops one into a town by ha
     const notThere = await api('/default-town/withdraw', { agent_id: third.agent.id })
     assert.equal(notThere.status, 409)
     assert.match(notThere.error, /不在这个镇里/)
-    assert.equal((await api('/default-town/close', {})).closed, true)
+    assert.equal(
+      (await api('/default-town/close', { lease: (await api('/default-town/open', {})).lease }))
+        .closed,
+      true
+    )
     const away = await api('/default-town/withdraw', { agent_id: agent.id })
     assert.equal(away.status, 409)
     assert.match(away.error, /没在运行/)

@@ -43,14 +43,19 @@ export function createAvatarCommands({
       }, 8000)
       pending.set(request_id, { finish, timer, silent: command.kind === 'resume' })
     })
-    send({
-      type: 'avatar',
-      world_id: world,
-      request_id,
-      epoch: state?.epoch ?? '',
-      sequence: nextSequence(),
-      command,
-    })
+    try {
+      send({
+        type: 'avatar',
+        world_id: world,
+        request_id,
+        epoch: state?.epoch ?? '',
+        sequence: nextSequence(),
+        command,
+      })
+    } catch {
+      settle(request_id, false)
+      showToast('发送失败，请检查网络连接', true)
+    }
     const ok = await result
     if (mutation) pendingMutation = false
     return ok
@@ -71,6 +76,7 @@ export function createAvatarCommands({
       p.finish(false)
     }
     pending.clear()
+    pendingMutation = false
   }
   return {
     execute,

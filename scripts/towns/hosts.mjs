@@ -53,8 +53,8 @@ function terminate(child) {
 }
 export class Hosts {
   // mockLlm：host 用固定回复模型启动，供测试使用；maxRunning：同时运行的小镇上限；
-  // bind：管理服务的监听地址——只在本机用时世界听 127.0.0.1，放到服务器上时听 0.0.0.0；
-  // hostPort：世界自己的端口，0 是每次随机（放到服务器上时固定一个，防火墙只开这一个）。
+  // Rust 世界只监听 127.0.0.1；所有远端 WebSocket 连接统一经 Node 代理。
+  // hostPort：世界内部端口；0 表示随机分配，不需要在防火墙开放。
   constructor(
     source,
     storage,
@@ -66,7 +66,7 @@ export class Hosts {
     this.config = config
     this.mockLlm = mockLlm
     this.maxRunning = maxRunning
-    this.hostBind = LOOPBACK.has(bind) ? '127.0.0.1' : '0.0.0.0'
+    this.hostBind = '127.0.0.1'
     this.hostPort = hostPort
     this.running = new Map()
     this.opening = new Map()
@@ -93,6 +93,11 @@ export class Hosts {
     const record = this.running.get(id)
     if (!record || !alive(record.child) || !record.port) return null
     return record.port
+  }
+  /** 仅服务器端可取；绝不能放到 /open 的 JSON 或 WebSocket 公开 URL 中。 */
+  worldSecret(id) {
+    const record = this.running.get(id)
+    return record && alive(record.child) ? record.token : null
   }
   /** 同时运行的小镇已经跑满（正在启动的也算；常驻的那一个不算） */
   full() {
