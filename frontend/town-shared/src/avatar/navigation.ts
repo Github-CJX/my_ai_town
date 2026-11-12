@@ -108,17 +108,21 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
   const bagAction = () => {
     if (owned() && mapVisible()) toggleBag()
   }
-  /** 化身此刻的米制位置：地图在预测自己的小人时用它画的位置（服务端马上要走到的地方，比名册新），
-   *  不然用服务端给的自由位置；站在落脚点时退回地图上的坐标 */
-  const herePoint = (): WalkTarget | undefined => {
+  /** 世界确认的米制位置：选路线、选方向、判断走不动都只认这个，不认本地预测。
+   *  预测和服务端会因为输入到达时间、校正而差一点，用预测来选方向会自己转起来（抽动） */
+  const confirmedPoint = (): WalkTarget | undefined => {
     const state = getState()
     const a = state?.actor
     if (!a) return undefined
-    const predicted = map.avatarAt?.()
-    if (predicted) return predicted
     const at = a.locus.at
     if (at.kind === 'free') return { space: at.space, position: at.position }
     return map.walkTargetOf?.('person', a.id)
+  }
+  /** 化身此刻的米制位置：地图在预测自己的小人时用它画的位置（服务端马上要走到的地方，比名册新），
+   *  不然用服务端给的自由位置；站在落脚点时退回地图上的坐标 */
+  const herePoint = (): WalkTarget | undefined => {
+    const predicted = map.avatarAt?.()
+    return predicted ?? confirmedPoint()
   }
   // 走到目标后要做的那件事（提示编号）；只是走过去时为空
   let arriveAction: string | null = null
@@ -136,13 +140,13 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
   let autoPortal = false
   /** 选一条绕开障碍的路线；地图没有选路能力时退回直线 */
   function planRoute(to: WalkTarget): WalkStep[] | null {
-    const here = herePoint()
+    const here = confirmedPoint() ?? herePoint()
     if (!here) return null
     if (!map.walkRoute) return [{ point: to }]
     return map.walkRoute(here, to)
   }
   const walk = createWalkTo({
-    here: herePoint,
+    here: () => confirmedPoint() ?? herePoint(),
     step: stepMetres,
     canWalk,
     emit: emitDirection,

@@ -16,10 +16,14 @@ const CORNER_RADIUS = 0.3
 const PORTAL_RADIUS = 0.6
 /** 同一次点击最多重新选路的次数 */
 const REPLAN_LIMIT = 2
+/** 新方向按这个比例混进上一次的方向：世界确认的位置每隔一会校正一次，方向跟着它抖会让化身来回摆；
+ *  指数平滑把这种小摆动压平，拐弯靠连续几拍累积照样转得过去（换段时清空，拐角不当场打折） */
+const AIM_BLEND = 0.5
 
 type WalkEnd = 'arrived' | 'blocked' | 'cancelled'
 interface WalkDeps {
-  /** 化身此刻的米制位置 */
+  /** 世界确认的米制位置（不是本地预测）：选方向和判断走不动都只认它，
+   *  拿预测位置算会让「校正 → 转向 → 再校正」自己转起来 */
   here: () => WalkTarget | undefined
   /** 后端一拍走多少米（按现在的步速，奔跑时更多）；暂停时为 0 */
   step: () => number
@@ -44,10 +48,13 @@ export function createWalkTo(deps: WalkDeps) {
   let last: [number, number] | null = null
   let still = 0
   let lastDirection: [number, number] = [0, 0]
+  /** 上一次选定的方向（单位向量）：小幅校正不改它，换段时清空 */
+  let heading: [number, number] = [0, 0]
   const goal = () => route[route.length - 1]?.point
   function rest() {
     last = null
     still = 0
+    heading = [0, 0]
   }
   function finish(reason: WalkEnd) {
     if (!route.length) return
@@ -136,7 +143,21 @@ export function createWalkTo(deps: WalkDeps) {
       last = [...here.position]
       // 剩下不足两拍时按比例缩短向量减速：后端取 n = hypot(方向).max(1)，短向量就是慢速，不会被放大回满速。
       const scale = Math.min(1, distance / (2 * step0))
-      lastDirection = [(dx / distance) * scale, (dy / distance) * scale]
+      const aim: [number, number] = distance > 0 ? [dx / distance, dy / distance] : [0, 0]
+      // 位置被校正一点点时方向会跟着摆，平滑一下：只把新方向按 AIM_BLEND 混进旧方向，
+      // 免得化身在原地左右抽。换段时 rest() 已经把 heading 清空，拐角照旧当场转。
+      let direction = aim
+      if (distance > 0 && (heading[0] !== 0 || heading[1] !== 0)) {
+        const mix: [number, number] = [
+          heading[0] + (aim[0] - heading[0]) * AIM_BLEND,
+          heading[1] + (aim[1] - heading[1]) * AIM_BLEND,
+        ]
+        const length = Math.hypot(mix[0], mix[1])
+        // 新旧方向正好相反时混出来是零向量：那种情况直接朝新方向走
+        if (length > 0.001) direction = [mix[0] / length, mix[1] / length]
+      }
+      heading = direction
+      lastDirection = [direction[0] * scale, direction[1] * scale]
       deps.emit(lastDirection)
     },
   }
