@@ -73,6 +73,43 @@ export async function fetchGateway(token, { fetchImpl = fetch } = {}) {
   return url
 }
 
+/**
+ * 给一个 QQ 号发私聊。
+ *
+ * 被动回复必须带 `msg_id`（回的是收到的哪一条）与递增的 `msg_seq`（同一条最多 4 次）；
+ * 不带 `msg_id` 就是主动消息，那要对方先在 QQ 里允许主动发送。
+ */
+export async function sendC2C({
+  token,
+  openid,
+  content,
+  msgId = '',
+  msgSeq = 1,
+  fetchImpl = fetch,
+} = {}) {
+  const who = String(openid ?? '').trim()
+  if (!who) throw new Error('没有收信人的 openid')
+  const body = { content: String(content ?? ''), msg_type: 0 }
+  if (msgId) {
+    body.msg_id = String(msgId)
+    body.msg_seq = Math.max(1, Number(msgSeq) || 1)
+  }
+  const url = `https://api.sgroup.qq.com/v2/users/${encodeURIComponent(who)}/messages`
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers: { authorization: `QQBot ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const text = await response.text()
+  if (!response.ok) throw new Error(`发私聊失败 HTTP ${response.status}：${text.slice(0, 200)}`)
+  try {
+    const data = JSON.parse(text)
+    return { id: String(data.id ?? ''), timestamp: String(data.timestamp ?? '') }
+  } catch {
+    return { id: '', timestamp: '' }
+  }
+}
+
 /** 日志里只留 openid 尾号，别把整串写进文件。 */
 export function maskId(id) {
   const text = String(id ?? '')
@@ -86,6 +123,8 @@ export function maskId(id) {
  */
 export function createGateway({
   token,
+  // 长跑时票会过期（两小时）：给了 `getToken` 就每次重连现问一张，不给就沿用 `token`。
+  getToken = null,
   intents = INTENT_GROUP_AND_C2C,
   onEvent = () => {},
   onLog = () => {},
@@ -95,7 +134,16 @@ export function createGateway({
   sleep = defaultSleep,
 } = {}) {
   if (typeof WebSocketImpl !== 'function') throw new Error('这个 Node 没有 WebSocket')
-  if (!token) throw new Error('没有 access_token')
+  if (!getToken && !token) throw new Error('没有 access_token')
+
+  let current = token ?? ''
+  const freshToken = async () => {
+    if (!getToken) return current
+    const next = String((await getToken()) ?? '').trim()
+    if (!next) throw new Error('换票换回来一张空票')
+    current = next
+    return next
+  }
 
   let socket = null
   let heartbeat = null
@@ -148,10 +196,10 @@ export function createGateway({
   }
 
   const identify = () =>
-    send({ op: OP.IDENTIFY, d: { token: `QQBot ${token}`, intents, shard: [0, 1] } })
+    send({ op: OP.IDENTIFY, d: { token: `QQBot ${current}`, intents, shard: [0, 1] } })
 
   const resume = () =>
-    send({ op: OP.RESUME, d: { token: `QQBot ${token}`, session_id: sessionId, seq: sequence } })
+    send({ op: OP.RESUME, d: { token: `QQBot ${current}`, session_id: sessionId, seq: sequence } })
 
   function handle(payload) {
     const op = payload?.op
@@ -197,7 +245,8 @@ export function createGateway({
     if (stopped) return
     attempt += 1
     try {
-      const url = await fetchGateway(token, {})
+      await freshToken()
+      const url = await fetchGateway(current, {})
       if (stopped) return
       onLog(`连网关（第 ${attempt} 次）`)
       socket = new WebSocketImpl(url)

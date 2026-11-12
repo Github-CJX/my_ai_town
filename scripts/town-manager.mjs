@@ -20,6 +20,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Storage, readJson, atomicJson, dataRoot, setupConfig } from './towns/storage.mjs'
 import { Hosts } from './towns/hosts.mjs'
+import { withTicket } from './towns/ticket.mjs'
+import { createBridge } from './qq/bridge.mjs'
+import { createQqRoutes } from './qq/routes.mjs'
 const source = fileURLToPath(new URL('../', import.meta.url))
 /** 只给本机的地址：不对外监听，页面与接口只认它们 */
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
@@ -146,12 +149,37 @@ export async function createManager({
       serial,
     })
   const builtinModel = createBuiltinModelRoutes({ source, configOf })
+  // QQ 桥：绑了村民的 QQ 号私聊进来，桥用那个账号自己的票替他把话递进镇里。
+  // 世界重启后端口与口令都会变，所以地址每次现问；没有 config/qq.json 就整块不启用。
+  const qqConfig = path.join(root, 'config', 'qq.json')
+  const qqBindings = path.join(root, 'config', 'qq-bindings.json')
+  const bridge = createBridge({
+    root,
+    log: (message) => console.log(`[qq] ${message}`),
+    endpointFor: (town, account) => {
+      const port = hosts.worldPort(town)
+      const secret = hosts.worldSecret(town)
+      if (!port || !secret) return null
+      const ticket = hosts.ticket(town, account, false, false)
+      if (!ticket) return null
+      return withTicket(`ws://127.0.0.1:${port}/?session=${secret}`, ticket)
+    },
+  })
+  const qqEnabled = async () => {
+    try {
+      await fs.access(qqConfig)
+      return true
+    } catch {
+      return false
+    }
+  }
   const routes = [
     ...createAccountRoutes({ accounts, storage }),
     ...createModelRoutes({ source, configOf, serial }),
     ...builtinModel.routes,
     ...creation.routes,
     ...assets.routes,
+    ...createQqRoutes({ root, current, bridge, config: qqConfig, bindings: qqBindings }),
     ...createTownRoutes({
       source,
       root,
@@ -260,6 +288,8 @@ export async function createManager({
       `[town-manager] 已对外开放：别的机器用这台机器的 IP:${server.address().port} 访问（HTTP 明文；` +
         '公网建议套 TLS 反向代理，只转这一个端口就够，WebSocket 也走它）'
     )
+  // 有 config/qq.json 才连 QQ：没配、在跑测试（mock 模型）的机器完全不受影响。
+  if (!mockLlm && (await qqEnabled())) void bridge.start()
   /** 常驻小镇用管理员那份密钥跑；别人进镇时用自己那份，世界一旦跑起来沿用先打开的那份 */
   const residentConfig = async () => {
     const admin = accounts.admin()
@@ -331,6 +361,7 @@ export async function createManager({
     if (stopping) return
     stopping = true
     clearInterval(heartbeat)
+    bridge.stop()
     for (const c of active) c.abort()
     builtinModel.stop()
     try {
@@ -346,6 +377,7 @@ export async function createManager({
     storage,
     hosts,
     accounts,
+    bridge,
     accountConfig: (user) => accounts.config(config, user),
     stop,
   }
