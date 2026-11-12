@@ -232,9 +232,10 @@ export function createBridge({
     await onMessage(state, event)
   }
 
-  /** 连 QQ 网关。没有绑定也连：没绑的号码来找她，要在网页上留一行给人认领。 */
+  /** 连 QQ 网关。没有绑定也连：没绑的号码来找她，要在网页上留一行给人认领。
+   *  没有凭证就别连：空 AppID 拿去换代币只会一直报错，等配好了再连。 */
   function startGateway() {
-    if (gateway) return
+    if (gateway || !appId || !appSecret) return
     gateway = gatewayFactory({
       getToken: token,
       intents: INTENT_GROUP_AND_C2C,
@@ -286,10 +287,22 @@ export function createBridge({
       }
       states.clear()
       data = await readBindings(bindingsFile)
-      for (const binding of data.bindings) {
-        // 认领过的那一行就从待认领里划掉
-        claims.delete(claimToken(binding.openid))
-        attach(binding)
+      if (!appId || !appSecret) {
+        // 没配凭证（测试机、或者还没填 AppID）：绑定先落盘，等配好了下次启动再接。
+        try {
+          const credentials = await readCredentials(configFile)
+          appId = credentials.appId
+          appSecret = credentials.appSecret
+        } catch {
+          log('还没配 QQ 凭证：绑定先记下，等配好了再连网关')
+        }
+      }
+      if (appId && appSecret) {
+        for (const binding of data.bindings) {
+          // 认领过的那一行就从待认领里划掉
+          claims.delete(claimToken(binding.openid))
+          attach(binding)
+        }
       }
       startGateway()
     },
