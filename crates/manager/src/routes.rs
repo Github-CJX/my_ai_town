@@ -458,6 +458,24 @@ fn accounts_api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Respo
                 &json!({ "ok": true, "current": user.public() }),
             ))
         }
+        (false, "/users/possess") => {
+            // 附身村民：只有管理员能放开/收回，权限按账号记，世界按票上的标记放行（D.46）
+            let me = me.ok_or_else(account_needed)?;
+            if me.role != Role::Admin {
+                return Err(ApiError::new(403, "只有管理员可以放开附身权限"));
+            }
+            let request = body(req)?;
+            let id = request["id"].as_str().unwrap_or_default();
+            let user = app
+                .accounts
+                .lock()
+                .unwrap()
+                .set_possess(id, request["allowed"].as_bool().unwrap_or(false))?;
+            Ok(Response::json(
+                200,
+                &json!({ "ok": true, "user": user.public() }),
+            ))
+        }
         (false, "/users/avatar") => {
             let me = me.ok_or_else(account_needed)?;
             // 页面记下自己认下的那个化身（「一个账号一个固定化身」）：传 null 就解开
@@ -684,6 +702,7 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 Some(&me.id),
                 me.role == Role::Admin,
                 &public_endpoint(req, info["endpoint"].as_str().unwrap_or_default()),
+                me.possess,
             );
             info["endpoint"] = Value::from(endpoint);
             ok(info)
@@ -742,6 +761,7 @@ fn api(app: &App, req: &Request, rest: &str, get: bool) -> Result<Response, ApiE
                 Some(&me.id),
                 me.role == Role::Admin,
                 &public_endpoint(req, info["endpoint"].as_str().unwrap_or_default()),
+                me.possess,
             );
             info["endpoint"] = Value::from(endpoint);
             ok(info)

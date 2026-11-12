@@ -15,20 +15,31 @@ const EXPIRES: u64 = 4_000_000_000;
 fn admin_ticket() -> String {
     sign(
         SECRET,
-        &Ticket::user("u-admin", true, "town-ticket", EXPIRES),
+        &Ticket::user("u-admin", true, true, "town-ticket", EXPIRES),
     )
 }
 
 fn plain_ticket() -> String {
     sign(
         SECRET,
-        &Ticket::user("u-plain", false, "town-ticket", EXPIRES),
+        &Ticket::user("u-plain", false, false, "town-ticket", EXPIRES),
+    )
+}
+
+/// 管理员放开了「附身村民」的普通账号。
+fn possess_ticket() -> String {
+    sign(
+        SECRET,
+        &Ticket::user("u-possess", false, true, "town-ticket", EXPIRES),
     )
 }
 
 /// 指定账号的票：世界只拿它认化身归属。
 fn user_ticket(id: &str) -> String {
-    sign(SECRET, &Ticket::user(id, false, "town-ticket", EXPIRES))
+    sign(
+        SECRET,
+        &Ticket::user(id, false, false, "town-ticket", EXPIRES),
+    )
 }
 
 /// 开了口令的小镇：连接地址上必须带 `session` 和 `ticket`。用二维地图，化身才走得动。
@@ -132,8 +143,49 @@ fn a_plain_ticket_cannot_possess_a_resident() {
         m["type"] == "avatar_result" || m["type"] == "error"
     });
     let text = refused.to_string();
-    assert!(text.contains("只有管理员可以附身村民"), "{text}");
+    assert!(
+        text.contains("只有管理员或获准的账号可以附身村民"),
+        "{text}"
+    );
     assert_eq!(refused["ok"], false, "{text}");
+
+    town.kill();
+}
+
+/// 管理员在账号页放开的账号可以附身：世界只认票上的标记，不看页面藏不藏按钮。
+#[test]
+fn a_permitted_plain_ticket_may_possess_a_resident() {
+    let mut town = town_with_token();
+    town.query = Some(format!("session={SECRET}&ticket={}", admin_ticket()));
+    let mut admin = town.start();
+    until(&mut admin, |m| m["type"] == "roster");
+    let resident = join_id(&mut admin, "tpl_a");
+
+    let mut friend = plain_socket(
+        &town,
+        &format!("session={SECRET}&ticket={}", possess_ticket()),
+    )
+    .expect("获准账号的票应该能连上");
+    until(&mut friend, |m| m["type"] == "roster");
+    let population = reply(&mut friend, json!({"type": "get_population"}), "population");
+    send(
+        &mut friend,
+        json!({
+            "type": "avatar",
+            "world_id": population["population"]["world_id"],
+            "request_id": "possess-2",
+            "command": {"kind": "possess", "resident": resident},
+        }),
+    );
+    let taken = until(&mut friend, |m| {
+        m["type"] == "avatar_result" || m["type"] == "error"
+    });
+    assert_eq!(taken["ok"], true, "{taken}");
+    assert_eq!(
+        taken["state"]["actor"]["id"].as_str().unwrap_or_default(),
+        resident,
+        "{taken}"
+    );
 
     town.kill();
 }

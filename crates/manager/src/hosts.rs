@@ -298,13 +298,20 @@ impl Hosts {
 
     /// 管理服务自己用的地址：在世界口令签的服务票上，找世界问事、请人入住都靠它。
     fn signed_endpoint(&self, id: &str) -> Option<String> {
-        let ticket = self.ticket(id, None, true)?;
+        let ticket = self.ticket(id, None, true, true)?;
         self.endpoint(id)
             .map(|endpoint| with_ticket(&endpoint, &ticket))
     }
 
-    /// 签一张票：`user` 是登录账号、`admin` 是它在小镇里的角色；服务票不带账号。
-    pub fn ticket(&self, id: &str, user: Option<&str>, admin: bool) -> Option<String> {
+    /// 签一张票：`user` 是登录账号、`admin` 是它在小镇里的角色、`possess` 是管理员放开的附身权限；
+    /// 服务票不带账号。
+    pub fn ticket(
+        &self,
+        id: &str,
+        user: Option<&str>,
+        admin: bool,
+        possess: bool,
+    ) -> Option<String> {
         let token = self
             .running
             .lock()
@@ -314,15 +321,22 @@ impl Hosts {
         // 按整点给到期时刻：同一小时内反复进镇拿到的是同一张票（页面上不跳动，也好比对）
         let expires = ((now_secs() / 3600) + 1) * 3600 + host::ticket::TTL;
         let ticket = match user {
-            Some(user) => host::ticket::Ticket::user(user, admin, id, expires),
+            Some(user) => host::ticket::Ticket::user(user, admin, possess, id, expires),
             None => host::ticket::Ticket::service(id, expires),
         };
         Some(host::ticket::sign(&token, &ticket))
     }
 
     /// 页面连世界用的地址：换成这个账号自己的票（管理服务自己那部分不带账号）。
-    pub fn page_endpoint(&self, id: &str, user: Option<&str>, admin: bool, base: &str) -> String {
-        match self.ticket(id, user, admin) {
+    pub fn page_endpoint(
+        &self,
+        id: &str,
+        user: Option<&str>,
+        admin: bool,
+        base: &str,
+        possess: bool,
+    ) -> String {
+        match self.ticket(id, user, admin, possess) {
             Some(ticket) => with_ticket(base, &ticket),
             None => base.to_owned(),
         }

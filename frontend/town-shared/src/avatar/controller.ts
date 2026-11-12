@@ -103,8 +103,10 @@ export function createAvatar(deps: AvatarDeps) {
     /** 菜单等覆盖层打开或关闭时停止移动输入 */
     overlay: (open: boolean) => avatar.overlay(open),
     possess: (resident: string) => avatar.possess(resident),
-    /** 这个账号是不是管理员：附身村民、给这台电脑加账号都只给管理员 */
+    /** 这个账号是不是管理员：给这台电脑加账号、改世界设置都只给管理员 */
     isAdmin: () => avatar.isAdmin(),
+    /** 能不能附身村民：管理员，或管理员在账号页放开的账号（D.46） */
+    canPossess: () => avatar.canPossess(),
     /** 这个账号的编号：设定页拿它认「我的村民」；还不知道时 null */
     accountId: () => avatar.accountId(),
     /** 账号档案问回来了没有：按角色分栏之前等它 */
@@ -518,6 +520,11 @@ class AvatarController {
     return this.account.admin()
   }
 
+  /** 能不能附身村民：管理员，或管理员在账号页放开的账号（D.46） */
+  canPossess(): boolean {
+    return this.account.possess()
+  }
+
   /** 这个账号的编号：设定页拿它认「我的村民」；还不知道时 null */
   accountId(): string | null {
     return this.account.id()
@@ -588,9 +595,9 @@ class AvatarController {
 
   async possess(resident: string) {
     const { ui, state } = this
-    // 附身是管理员开镇、调世界用的：普通账号只玩自己那个化身
-    if (!this.account.admin()) {
-      ui.showToast('只有管理员可以附身村民', true)
+    // 附身村民＝替他做决定：管理员可以，管理员在账号页放开的账号也可以（D.46）
+    if (!this.account.possess()) {
+      ui.showToast('只有管理员或获准的账号可以附身村民', true)
       return false
     }
     if (!this.map.avatarSupported) {

@@ -42,6 +42,8 @@ pub(crate) struct Peer {
     inputs: Vec<(Instant, ClientMsg)>,
     /// 这条连接是不是管理员：握手时验票得出的，之后按连接查，不看消息里自称什么。
     admin: bool,
+    /// 能不能附身村民：票上写着「管理员放开的附身权限」，管理员自己也算（见 ticket.rs 的 `may_possess`）。
+    possess: bool,
     /// 票面里的账号编号（不透明）：世界只拿它认化身归属，不认账号本身。
     user: Option<String>,
     /// 这条连接此刻操控的演员编号（自己的化身或附身的村民）：世界日志按它当时所在的处所分发。
@@ -72,7 +74,7 @@ impl Peer {
 
 pub(crate) type Clients = Arc<Mutex<BTreeMap<u64, Peer>>>;
 
-/// 这条连接是不是管理员（能改世界设置、请村民入住、附身）。
+/// 这条连接是不是管理员（能改世界设置、请村民入住）。
 /// 没有口令的世界（本机自己开的、测试夹具）不验票，所有连接都是管理员。
 pub(crate) fn allows_admin(clients: &Clients, connection: u64) -> bool {
     clients
@@ -80,6 +82,14 @@ pub(crate) fn allows_admin(clients: &Clients, connection: u64) -> bool {
         .unwrap()
         .get(&connection)
         .is_some_and(|peer| peer.admin)
+}
+/// 这条连接能不能附身村民：管理员，或管理员在账号页放开的账号（票上带 `p`）。
+pub(crate) fn may_possess(clients: &Clients, connection: u64) -> bool {
+    clients
+        .lock()
+        .unwrap()
+        .get(&connection)
+        .is_some_and(|peer| peer.possess)
 }
 /// 这条连接是谁（票面里的账号编号）。没有口令的世界或服务票没有账号，返回 None。
 pub(crate) fn account_of(clients: &Clients, connection: u64) -> Option<String> {
@@ -153,7 +163,7 @@ pub(crate) fn listen(
             let Ok(socket) = stream.try_clone() else {
                 continue;
             };
-            let Some((ws, admin, user)) = handshake(
+            let Some((ws, admin, possess, user)) = handshake(
                 stream,
                 token.as_deref(),
                 town.as_deref(),
@@ -172,6 +182,7 @@ pub(crate) fn listen(
                     socket,
                     inputs: Vec::new(),
                     admin,
+                    possess,
                     user,
                     resident: None,
                 },
@@ -191,23 +202,25 @@ pub(crate) fn listen(
 }
 
 /// 握手：校验会话口令与入场票，成功后先发世界身份。任何一步失败都丢弃这条连接。
-/// 返回 ws、「这条连接是不是管理员」与票面里的账号编号。
+/// 返回 ws、「这条连接是不是管理员」「能不能附身村民」与票面里的账号编号。
 fn handshake(
     stream: TcpStream,
     token: Option<&str>,
     town: Option<&str>,
     greeting: Option<&str>,
-) -> Option<(WebSocket<TcpStream>, bool, Option<String>)> {
+) -> Option<(WebSocket<TcpStream>, bool, bool, Option<String>)> {
     stream.set_nodelay(true).ok();
     stream.set_read_timeout(Some(READ_WAIT)).ok();
     stream.set_write_timeout(Some(WRITE_TIMEOUT)).ok();
     let expected = token.map(|t| format!("session={t}"));
     let mut admin = false;
+    let mut possess = false;
     let mut user = None;
     let accepted = tungstenite::accept_hdr(stream, |request: &Request, response: Response| {
         let Some(expected) = &expected else {
             // 没有口令的世界不验票（本机自己开的小镇、测试夹具）：整条连接算管理员
             admin = true;
+            possess = true;
             return Ok(response);
         };
         let query = request.uri().query().unwrap_or_default();
@@ -221,6 +234,7 @@ fn handshake(
             (false, _) => "世界连接已失效，请从小镇列表重新进入",
             (true, Some(Ok(ticket))) => {
                 admin = ticket.admin();
+                possess = ticket.may_possess();
                 // 服务票没有账号（管理服务自己来查）；用户票才有。
                 user = Some(ticket.u).filter(|who| !who.is_empty());
                 return Ok(response);
@@ -236,7 +250,7 @@ fn handshake(
             return None;
         }
     }
-    Some((ws, admin, user))
+    Some((ws, admin, possess, user))
 }
 
 /// `session=<口令>` 里的口令就是签票用的密钥。

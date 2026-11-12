@@ -599,6 +599,27 @@ test('each account keeps its own model keys: the admin creates friends, a friend
     await assert.rejects(api('/users/avatar', { id: '有 空格' }, friend), /化身编号不合法/)
     await assert.rejects(api('/users/avatar', { id: 'a'.repeat(65) }, friend), /化身编号不合法/)
     assert.equal((await api('/users/avatar', { id: null }, friend)).data.current.avatar_id, null)
+    // 附身权限按账号记：普通账号默认没有，只有管理员能放开/收回；管理员本来就有
+    assert.equal(
+      (await api('/users', undefined, friend)).data.current.possess,
+      false,
+      '普通账号默认不能附身'
+    )
+    await assert.rejects(
+      api('/users/possess', { id: made.data.user.id, allowed: true }, friend),
+      /只有管理员/,
+      '普通账号不能自己放开附身'
+    )
+    const permitted = await api('/users/possess', { id: made.data.user.id, allowed: true }, admin)
+    assert.equal(permitted.data.user.possess, true)
+    assert.equal((await api('/users', undefined, friend)).data.current.possess, true)
+    const revoked = await api('/users/possess', { id: made.data.user.id, allowed: false }, admin)
+    assert.equal(revoked.data.user.possess, false)
+    assert.equal(
+      (await api('/users', undefined, admin)).data.current.possess,
+      true,
+      '管理员本来就能附身'
+    )
     // 还有 agent 在小镇里投放着：先撤回再删，不然小镇里会留下一个没有主的居民
     const folder = path.join(root, 'users', made.data.user.id, 'agents')
     await fs.mkdir(folder, { recursive: true })

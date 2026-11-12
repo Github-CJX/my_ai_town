@@ -231,16 +231,18 @@ export class Hosts {
     return withTicket(record.endpoint, ticket)
   }
   /** 签一张票：没给账号就是服务票（管理服务自己用），给了就是那个账号的票 */
-  ticket(id, userId, admin) {
+  ticket(id, userId, admin, possess) {
     const record = this.running.get(id)
     if (!record?.token) return null
     const expires = ticketExpiry()
-    const body = userId ? userTicket(userId, admin, id, expires) : serviceTicket(id, expires)
+    const body = userId
+      ? userTicket(userId, admin, id, expires, possess)
+      : serviceTicket(id, expires)
     return signTicket(record.token, body)
   }
   /** 页面连世界用的地址：换成这个账号自己的票（世界凭票认人，不再只认「连得上」） */
-  pageEndpoint(id, userId, admin, base) {
-    const ticket = this.ticket(id, userId, admin)
+  pageEndpoint(id, userId, admin, base, possess) {
+    const ticket = this.ticket(id, userId, admin, possess)
     return ticket ? withTicket(base, ticket) : base
   }
   async verify(r, id, doc) {

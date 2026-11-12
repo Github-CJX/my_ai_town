@@ -624,7 +624,12 @@ export function createTownRoutes({
         // 世界是新的，内存里没有密钥：把投在这个镇里的 agent 再送一遍
         if (hosts.isRunning(id)) await sendOwnerKeys({ root, hosts, accounts, accountConfig }, id)
         const me = current(headers)
-        return publicEndpoint(headers, info, hosts.ticket(id, me?.id, me?.role === 'admin'), id)
+        return publicEndpoint(
+          headers,
+          info,
+          hosts.ticket(id, me?.id, me?.role === 'admin', me?.possess),
+          id
+        )
       },
     ],
     [
@@ -669,10 +674,11 @@ export function createTownRoutes({
             console.error('[town-manager] 常驻小镇的速度没设上：', e.message)
           }
         }
+        const who = current(headers)
         return publicEndpoint(
           headers,
           { ...info, resident: id, ready: Boolean(state?.ready) },
-          hosts.ticket(id, current(headers)?.id, current(headers)?.role === 'admin'),
+          hosts.ticket(id, who?.id, who?.role === 'admin', who?.possess),
           id
         )
       },

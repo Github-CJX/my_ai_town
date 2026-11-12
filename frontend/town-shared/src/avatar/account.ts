@@ -30,8 +30,11 @@ export function createAvatarAccount() {
     /** 这个账号的编号（人口登记里的投放人用它比对）；还不知道时 null */
     id: () => who?.id ?? null,
 
-    /** 能不能附身村民：管理员可以（开镇、调世界用），普通账号只能玩自己的化身 */
+    /** 能不能附身村民：管理员可以（开镇、调世界用），普通账号要管理员在账号页放开（D.46） */
     admin: () => legacy || who?.role === 'admin',
+
+    /** 能不能附身村民：管理员本来就可以；普通账号看管理员开没开这一位 */
+    possess: () => legacy || who?.role === 'admin' || !!who?.possess,
 
     /** 这个账号的名字：第一次进镇时化身名字的默认值 */
     name: () => who?.name ?? '',

@@ -11,9 +11,19 @@ export function serviceTicket(town, expires) {
   return { u: '', a: false, s: true, t: town, e: expires }
 }
 
-/** 一个登录账号的票：`admin` 是他在这个小镇里的角色。 */
-export function userTicket(id, admin, town, expires) {
-  return { u: id, a: Boolean(admin), s: false, t: town, e: expires }
+/**
+ * 一个登录账号的票：`admin` 是他在这个小镇里的角色，`possess` 是管理员放开的附身权限
+ * （票面字段 `p`；管理员本来就算有，见 crates/host/src/ticket.rs 的 `may_possess`）。
+ */
+export function userTicket(id, admin, town, expires, possess = false) {
+  return {
+    u: id,
+    a: Boolean(admin),
+    p: Boolean(possess),
+    s: false,
+    t: town,
+    e: expires,
+  }
 }
 
 export function signTicket(secret, ticket) {

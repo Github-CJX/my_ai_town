@@ -124,6 +124,7 @@ impl Runtime {
             connection,
             &request,
             crate::network::allows_admin(clients, connection),
+            crate::network::may_possess(clients, connection),
             crate::network::account_of(clients, connection).as_deref(),
         ) {
             Ok(note) => (true, AvatarResultCode::Ok, note),
@@ -154,12 +155,14 @@ impl Runtime {
     }
 
     /// 世界、就绪、控制代次与去重检查都过了，才进事务。成功时返回给玩家看的说明（多数为空）。
-    /// `admin` 是这条连接握手时验过的票：附身村民要管理员；`account` 是票面的账号编号，用来认化身归属。
+    /// `admin` 是这条连接握手时验过的票：管理员能改世界；`possess` 是「能否附身村民」
+    /// （管理员本来就有，普通账号由管理员在账号页放开，见 D.46）；`account` 是票面的账号编号，用来认化身归属。
     fn run_avatar_command(
         &mut self,
         connection: u64,
         request: &AvatarRequest,
         admin: bool,
+        possess: bool,
         account: Option<&str>,
     ) -> Result<String, Rejection> {
         let AvatarRequest {
@@ -190,9 +193,11 @@ impl Runtime {
         if !self.world_settings.ready() {
             return Err(AvatarFailure::NotReady.into());
         }
-        // 附身村民＝替他做决定：只有管理员可以（普通人只能当自己那个化身）。
-        if matches!(command, Command::Possess { .. }) && !admin {
-            return Err(AvatarFailure::Rejected("只有管理员可以附身村民".into()).into());
+        // 附身村民＝替他做决定：管理员可以，管理员在账号页放开的账号也可以（普通人只能当自己那个化身）。
+        if matches!(command, Command::Possess { .. }) && !possess {
+            return Err(
+                AvatarFailure::Rejected("只有管理员或获准的账号可以附身村民".into()).into(),
+            );
         }
         let lifecycle = matches!(
             command,

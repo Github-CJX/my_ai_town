@@ -23,6 +23,9 @@ pub struct Ticket {
     /// 是管理员
     #[serde(default)]
     pub a: bool,
+    /// 管理员放开的「附身村民」权限（管理员本来就有，见 `may_possess`）
+    #[serde(default)]
+    pub p: bool,
     /// 管理服务自己用的服务票：内部问世界、请村民入住，等同于管理员
     #[serde(default)]
     pub s: bool,
@@ -40,26 +43,33 @@ impl Ticket {
         Self {
             u: String::new(),
             a: true,
+            p: true,
             s: true,
             t: town.to_owned(),
             e: expires,
         }
     }
 
-    /// 签给某个登录账号的票。`admin` 是这个账号在小镇里的角色。
-    pub fn user(id: &str, admin: bool, town: &str, expires: u64) -> Self {
+    /// 签给某个登录账号的票。`admin` 是这个账号在小镇里的角色，`possess` 是管理员放开的附身权限。
+    pub fn user(id: &str, admin: bool, possess: bool, town: &str, expires: u64) -> Self {
         Self {
             u: id.to_owned(),
             a: admin,
+            p: possess,
             s: false,
             t: town.to_owned(),
             e: expires,
         }
     }
 
-    /// 能改世界设置、请村民入住、附身：管理员和服务票都算。
+    /// 能改世界设置、请村民入住：管理员和服务票都算。
     pub fn admin(&self) -> bool {
         self.s || self.a
+    }
+
+    /// 能附身村民：管理员本来就可以，普通账号要管理员在账号页放开。
+    pub fn may_possess(&self) -> bool {
+        self.admin() || self.p
     }
 }
 
@@ -158,7 +168,7 @@ mod tests {
     #[test]
     fn a_ticket_only_counts_in_its_own_town_and_time() {
         let secret = "世界口令";
-        let ticket = Ticket::user("u1", false, "town-a", 1_000);
+        let ticket = Ticket::user("u1", false, false, "town-a", 1_000);
         let raw = sign(secret, &ticket);
         let now = 999;
         assert_eq!(verify(secret, Some("town-a"), &raw, now).unwrap(), ticket);
@@ -185,9 +195,22 @@ mod tests {
     /// 管理员的票能改世界，普通账号的票不能；服务票等同于管理员
     #[test]
     fn only_an_admin_ticket_may_change_the_world() {
-        assert!(Ticket::user("u1", true, "t", 9).admin());
-        assert!(!Ticket::user("u2", false, "t", 9).admin());
+        assert!(Ticket::user("u1", true, false, "t", 9).admin());
+        assert!(!Ticket::user("u2", false, false, "t", 9).admin());
         assert!(Ticket::service("t", 9).admin());
         assert!(Ticket::service("t", 9).s);
+    }
+
+    /// 附身：管理员本来就有，普通账号要票上带 p；旧票（没有 p 字段）读成 false
+    #[test]
+    fn only_a_permitted_ticket_may_possess() {
+        assert!(Ticket::user("u1", true, false, "t", 9).may_possess());
+        assert!(!Ticket::user("u2", false, false, "t", 9).may_possess());
+        assert!(Ticket::user("u3", false, true, "t", 9).may_possess());
+        assert!(Ticket::service("t", 9).may_possess());
+        let legacy: Ticket =
+            serde_json::from_str(r#"{"u":"u4","a":false,"s":false,"t":"t","e":9}"#)
+                .expect("旧票读不出来");
+        assert!(!legacy.may_possess());
     }
 }

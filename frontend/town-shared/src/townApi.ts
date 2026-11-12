@@ -28,6 +28,8 @@ export type HomeAccount = {
   agent_limit: number | null
   /** 有密码：切换到这个账号要输一次 */
   locked?: boolean
+  /** 能不能附身村民：管理员本来就可以，普通账号由管理员在账号页放开（D.46） */
+  possess?: boolean
 }
 
 export type HomeAccounts = {
@@ -89,6 +91,11 @@ export function selectAccount(id: string, pin?: string): Promise<unknown> {
 /** 换自己的密码：要验原来的密码 */
 export function changePin(current: string, pin: string): Promise<unknown> {
   return users('/pin', { current, pin })
+}
+
+/** 管理员放开/收回某个账号的「附身村民」：世界按票上的标记放行（D.46） */
+export function setPossess(id: string, allowed: boolean): Promise<unknown> {
+  return users('/possess', { id, allowed })
 }
 
 /** 记下这个账号的固定化身（传 null 解开）：下次进镇还当同一个人 */

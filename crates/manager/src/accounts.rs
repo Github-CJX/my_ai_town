@@ -45,6 +45,9 @@ pub struct User {
     /// 还能自己建几个公共 Agent：管理员不限（None），普通账号 1 个
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_limit: Option<u32>,
+    /// 管理员放开的「附身村民」权限（D.46）：世界按票上的标记放行，管理员本来就有
+    #[serde(default)]
+    pub possess: bool,
     /// 建号时间（毫秒）
     pub created_at: u64,
     /// 密码的「盐:摘要」（见 seal_pin）：有这个字段才叫「锁着」，切换时要输密码
@@ -63,6 +66,8 @@ impl User {
             "avatar_name": self.avatar_name,
             "agent_limit": self.agent_limit,
             "locked": self.pin.is_some(),
+            // 能不能附身村民：管理员本来就可以，普通账号要管理员在账号页放开
+            "possess": self.role == Role::Admin || self.possess,
         })
     }
 }
@@ -213,6 +218,8 @@ impl Accounts {
             agent_limit,
             created_at: now(),
             pin: None,
+            // 附身村民：默认只给管理员，普通账号要管理员逐个放开（与 scripts/towns/accounts.mjs 一致）
+            possess: role == Role::Admin,
         }
     }
 
@@ -368,6 +375,19 @@ impl Accounts {
             .ok_or_else(|| ApiError::bad("没有这个账号"))?;
         user.avatar_id = avatar.as_ref().map(|(id, _)| id.clone());
         user.avatar_name = avatar.map(|(_, name)| name);
+        let user = user.clone();
+        self.save()?;
+        Ok(user)
+    }
+
+    /// 放开/收回这个账号的「附身村民」。管理员本来就能附身，这一位对他没有意义（存成 true）。
+    pub fn set_possess(&mut self, id: &str, allowed: bool) -> Result<User, ApiError> {
+        let user = self
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+            .ok_or_else(|| ApiError::new(404, "没有这个账号"))?;
+        user.possess = user.role == Role::Admin || allowed;
         let user = user.clone();
         self.save()?;
         Ok(user)

@@ -55,6 +55,8 @@ export function publicUser(user) {
     agent_limit: user.agent_limit ?? null,
     created_at: user.created_at,
     locked: !!user.pin,
+    // 能不能附身村民：管理员本来就可以，普通账号要管理员在这里放开（D.46）
+    possess: user.role === 'admin' || !!user.possess,
   }
 }
 
@@ -206,6 +208,17 @@ export class Accounts {
     return user
   }
   /**
+   * 放开/收回这个账号的「附身村民」：世界按票上的标记放行，不只是页面上藏个按钮。
+   * 管理员本来就能附身，这一位对他没有意义（存成 true，页面上也不再摆开关）。
+   */
+  async setPossess(id, allowed) {
+    const user = this.find(id)
+    if (!user) throw new HttpError(404, '没有这个账号')
+    user.possess = user.role === 'admin' ? true : Boolean(allowed)
+    await this.save()
+    return user
+  }
+  /**
    * 这个账号要用的应用配置：管理员直接用小镇公共那份；普通账号各有一份，只把
    * providers_path / credentials_path 换到自己目录下（密钥从空开始，模板等仍然共享）。
    */
@@ -248,6 +261,8 @@ function makeUser(name, role, agent_limit) {
     agent_limit,
     created_at: Math.floor(Date.now() / 1000),
     pin: null,
+    // 附身村民：默认只给管理员（见 publicUser），普通账号要管理员逐个放开
+    possess: role === 'admin',
   }
 }
 
@@ -347,6 +362,16 @@ export function createAccountRoutes({ accounts, storage }) {
           )
         }
         return { ok: true, removed: publicUser(await accounts.remove(id)) }
+      },
+    ],
+    [
+      'POST',
+      /^\/api\/towns\/users\/possess$/,
+      async ({ body, headers }) => {
+        if (me(headers)?.role !== 'admin') throw new HttpError(403, '只有管理员可以放开附身权限')
+        const id = typeof body?.id === 'string' ? body.id : ''
+        const user = await accounts.setPossess(id, body?.allowed === true)
+        return { ok: true, user: publicUser(user) }
       },
     ],
     [

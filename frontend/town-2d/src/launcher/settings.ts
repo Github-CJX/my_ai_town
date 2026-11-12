@@ -381,16 +381,28 @@ export function installHomeSettings(deps: {
         // 一个账号一个固定化身：页面记回来之后这里就写着他进镇用的那个名字
         const avatar = user.avatar_name ? `化身：${user.avatar_name}` : ''
         const locked = user.locked ? '要密码' : ''
+        // 能不能附身村民：管理员本来就可以，普通账号由管理员在这一行放开（D.46）
+        const possess = user.role !== 'admin' && user.possess ? '可以附身' : ''
         const sub = current
           ? avatar
             ? `正在用这个档案 · ${avatar}`
             : '正在用这个档案 · 还没进化身'
-          : [avatar, locked].filter(Boolean).join(' · ') ||
+          : [avatar, locked, possess].filter(Boolean).join(' · ') ||
             (user.role === 'admin' ? '可以给这台电脑加账号' : '还没进化身')
         // 右边的按钮：自己的档案只标「当前」；管理员还能替别人重置密码、删账号
         const actions = el('div', '', 'account-actions')
         if (current) actions.append(chip('当前'))
         else actions.append(button('切换', () => askSwitch(user)))
+        if (who!.admin && user.role !== 'admin') {
+          // 附身权限按账号记：留着这一行就有，点了收回；世界那边按票上的标记真校验
+          actions.append(
+            button(
+              user.possess ? '收回附身' : '允许附身',
+              () => void swapPossess(user),
+              user.possess ? 'account-drop' : ''
+            )
+          )
+        }
         if (who!.admin && user.role !== 'admin' && !current) {
           actions.append(
             button('重置密码', () => askReset(user)),
@@ -468,6 +480,23 @@ export function installHomeSettings(deps: {
       hideReset()
       await renderAccounts()
       accountNote.textContent = `已把「${name}」的密码换掉：告诉他新密码，让他登进来自己再改一次。`
+    } catch (error) {
+      accountNote.textContent = errorText(error)
+    }
+  }
+
+  /**
+   * 放开/收回这个账号的「附身村民」：权限按账号记（跨小镇通用），世界按票上的标记放行。
+   * 票是进镇时签的，正在镇里的人要重新进一次才生效。
+   */
+  async function swapPossess(user: HomeAccount) {
+    const allowed = !user.possess
+    try {
+      await api('/users/possess', { id: user.id, allowed })
+      await renderAccounts()
+      accountNote.textContent = allowed
+        ? `已放开「${user.name}」的附身：他进镇后能在村民详情里接管村民（正在镇里的要重新进一次）。`
+        : `已收回「${user.name}」的附身权限。`
     } catch (error) {
       accountNote.textContent = errorText(error)
     }
