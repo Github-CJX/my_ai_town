@@ -9,6 +9,7 @@ use agent::{
     budget::Limits,
     completion::ModelError,
     runtime::{AgentRequest, ResidentRuntime},
+    session::PendingTool,
 };
 use host::{
     agent_worker::{AgentSave, Work, WorkerPool},
@@ -27,6 +28,36 @@ use std::{
     io::{BufWriter, Write},
     time::Duration,
 };
+
+/// 旧存档迁移（D.50）：`world_groups` 是后来才加的登记。当年由世界自己安排的动作组（带路那种）
+/// 没人作证，恢复校验会把它当成「会话丢了记录」而拒绝启动整个小镇。判据是「正在跑、不是玩家命令、
+/// 也没有会话待完成记录」——这种组只可能是世界发起的，补记一次，下次存盘就写进存档。
+/// 只补登记，不放宽校验：真丢了记录的组仍然过不去。
+fn adopt_legacy_world_groups(world: &mut World, saved: &AgentSave) {
+    let mut adopted = Vec::new();
+    for (actor_id, session) in &saved.runtime.sessions {
+        let pending: Vec<String> = session
+            .pending
+            .iter()
+            .filter_map(|p| match p {
+                PendingTool::Actions { group_id, .. } => Some(group_id.clone()),
+                _ => None,
+            })
+            .collect();
+        for id in world.unregistered_running_groups(actor_id, &pending) {
+            if world.adopt_world_group(actor_id, &id) {
+                adopted.push(format!("{actor_id} {id}"));
+            }
+        }
+    }
+    if !adopted.is_empty() {
+        println!(
+            "[host] 旧存档里有 {} 个世界安排的动作组没登记过，按世界自带补上：{}",
+            adopted.len(),
+            adopted.join("、")
+        );
+    }
+}
 
 pub(crate) struct ResidentDriver {
     pub runtime: ResidentRuntime,
@@ -71,7 +102,10 @@ impl ResidentDriver {
         saved: Option<AgentSave>,
     ) -> Result<Self, HostError> {
         let mut runtime = match saved {
-            Some(saved) => ResidentRuntime::restore(saved.runtime, world)?,
+            Some(saved) => {
+                adopt_legacy_world_groups(world, &saved);
+                ResidentRuntime::restore(saved.runtime, world)?
+            }
             None => ResidentRuntime::new(Limits::default())?,
         };
         for resident in population.residents.values() {

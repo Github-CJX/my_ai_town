@@ -123,6 +123,40 @@ impl World {
             .unwrap_or_else(|| panic!("村民 {id} 不存在"))
     }
 
+    /// 旧存档迁移用（D.50）：这个人正在跑、却没有任何作证的动作组——既不在玩家命令里，
+    /// 也不在世界自带的登记里，`session_groups`（会话里待完成的动作组）也没有记录它。
+    pub fn unregistered_running_groups(
+        &self,
+        actor: &str,
+        session_groups: &[String],
+    ) -> Vec<String> {
+        let Some(actor) = self.actors.get(actor) else {
+            return Vec::new();
+        };
+        actor
+            .actions
+            .groups
+            .values()
+            .filter(|g| g.status == protocol::GroupStatus::Running)
+            .map(|g| g.id.clone())
+            .filter(|id| {
+                !actor.actions.player_groups.contains(id)
+                    && !actor.actions.world_groups.contains(id)
+                    && !session_groups.contains(id)
+            })
+            .collect()
+    }
+
+    /// 旧存档迁移（D.50）：`world_groups` 这个登记是后来才有的，之前由世界自己安排的动作组
+    /// （带路那种）没人作证，恢复时会被当成丢了记录。调用方判断出「这一组没有会话待完成记录、
+    /// 也不是玩家命令」之后，用它补记一次；返回是否真的补上了。
+    pub fn adopt_world_group(&mut self, actor: &str, group: &str) -> bool {
+        match self.actors.get_mut(actor) {
+            Some(a) => a.actions.world_groups.insert(group.to_string()),
+            None => false,
+        }
+    }
+
     /// 显著通知：进收件箱，也作为世界事件留给 Agent 按游标读取。
     pub(crate) fn notify(&mut self, actor_id: &str, text: String) {
         let now = self.minutes;

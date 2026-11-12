@@ -238,6 +238,12 @@ fn validate_pending(world: &World, resident: &Actor, session: &Session) -> Resul
             return Err("玩家互动来源指向不存在的互动".into());
         }
     }
+    for id in &resident.actions.world_groups {
+        if world.action_group(actor, id).is_none() {
+            return Err("世界自带的动作来源指向不存在的动作".into());
+        }
+        tracked.insert(id.as_str());
+    }
 
     for pending in &session.pending {
         match pending {

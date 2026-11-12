@@ -262,6 +262,16 @@ fn resident_leader_sets_off_and_a_saved_walk_resumes_until_both_arrive() {
             message: "行，我跟着你。".into(),
         },
     );
+    // 这一组是同行自己安排的，没有会话待完成记录：要登记成世界自带，恢复时才不会被当成丢了记录。
+    let led = "lead/lead";
+    assert!(
+        w.actor("b").unwrap().actions.world_groups.contains(led),
+        "带路这一组要登记成世界自带"
+    );
+    assert_eq!(
+        w.action_group("b", led).unwrap().status,
+        protocol::GroupStatus::Running
+    );
     // 说好了目的地，带路的人直接动身
     w.step(0.01);
     assert!(matches!(
@@ -272,6 +282,10 @@ fn resident_leader_sets_off_and_a_saved_walk_resumes_until_both_arrive() {
     w.step(0.5);
     let mut fresh = world(&[("a", "阿树", "loc_a"), ("b", "何青", "loc_a")]);
     fresh = common::restore(&w, fresh);
+    assert!(
+        fresh.actor("b").unwrap().actions.world_groups.contains(led),
+        "读档后仍要知道这一组是世界自带的"
+    );
     assert_eq!(fresh.following("a"), Some("b"), "读档后还在跟着");
     for _ in 0..200 {
         fresh.step(0.05);
@@ -284,6 +298,59 @@ fn resident_leader_sets_off_and_a_saved_walk_resumes_until_both_arrive() {
         assert_eq!(fresh.actor(id).unwrap().locus.locale, "loc_b");
     }
     assert!(fresh.actor("a").unwrap().waiting_for_plan());
+}
+
+#[test]
+fn a_legacy_save_with_an_unregistered_world_group_is_adopted() {
+    // 旧档（`world_groups` 这个登记还没有的年代）：带路那一组在跑，却没有任何一处作证。
+    // 迁移只认「正在跑、不是玩家命令、也没有会话待完成记录」的组，把它们补登成世界自带（D.50）。
+    let mut w = world(&[("a", "阿树", "loc_a"), ("b", "何青", "loc_a")]);
+    act(
+        &mut w,
+        "b",
+        "lead",
+        Cmd::Offer {
+            partner_id: "a".into(),
+            interaction: InteractionKind::Walk {
+                leader: "b".into(),
+                locale: Some("loc_b".into()),
+            },
+            message: "跟我去乙地看看。".into(),
+        },
+    );
+    act(
+        &mut w,
+        "a",
+        "lead-yes",
+        Cmd::Reply {
+            interaction_id: "lead".into(),
+            accept: true,
+            message: "行，我跟着你。".into(),
+        },
+    );
+    let led = "lead/lead".to_string();
+    assert!(w.actor("b").unwrap().actions.world_groups.contains(&led));
+    // 把登记抹掉，装回一份「当年写下的存档」
+    let mut value = serde_json::to_value(w.snapshot()).unwrap();
+    value["actors"]["b"]["actions"]["world_groups"] = serde_json::json!([]);
+    let mut legacy = world(&[("a", "阿树", "loc_a"), ("b", "何青", "loc_a")]);
+    legacy
+        .restore_snapshot(serde_json::from_value(value).unwrap())
+        .unwrap();
+    assert!(legacy.actor("b").unwrap().actions.world_groups.is_empty());
+    assert_eq!(
+        legacy.unregistered_running_groups("b", &[]),
+        vec![led.clone()]
+    );
+    assert!(
+        legacy
+            .unregistered_running_groups("b", &[led.clone()])
+            .is_empty(),
+        "会话记着的组不算没登记"
+    );
+    assert!(legacy.adopt_world_group("b", &led));
+    assert!(legacy.unregistered_running_groups("b", &[]).is_empty());
+    assert!(!legacy.adopt_world_group("b", &led), "补过的不再算新登记");
 }
 
 #[test]

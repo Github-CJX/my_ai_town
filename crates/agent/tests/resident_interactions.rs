@@ -940,3 +940,56 @@ fn a_planned_stay_ends_when_someone_from_the_goals_shows_up() {
     let group = w.action_group("r1", "s1-r1-stay").unwrap();
     assert_eq!(group.status, protocol::GroupStatus::Interrupted);
 }
+
+/// 带路这一组是世界替带路人安排的，会话里没有待完成记录：恢复时不能被当成丢了记录。
+#[test]
+fn a_walk_the_world_started_does_not_block_restore() {
+    let mut w = two_rooms();
+    let mut r = runtime(&mut w, Limits::default());
+    w.spawn("r2", "何青", "loc_a").unwrap();
+    w.enable_agent("r2").unwrap();
+    command(
+        &mut w,
+        "r2",
+        "walk",
+        Command::Offer {
+            partner_id: "r1".into(),
+            interaction: InteractionKind::Walk {
+                leader: "r1".into(),
+                locale: Some("loc_b".into()),
+            },
+            message: "带我去乙地看看。".into(),
+        },
+    );
+    let q = life_request(&mut r, &mut w);
+    reply(
+        &mut r,
+        &mut w,
+        &q,
+        "reply_invitation",
+        json!({"interaction_id":"walk","accept":true,"message":"走吧。"}),
+    );
+    let led = w
+        .actor("r1")
+        .unwrap()
+        .actions
+        .world_groups
+        .iter()
+        .next()
+        .cloned()
+        .expect("带路这一组要登记成世界自带");
+    assert_eq!(led, "walk/lead");
+    assert_eq!(
+        w.action_group("r1", &led).unwrap().status,
+        protocol::GroupStatus::Running
+    );
+    assert!(
+        !r.session("r1")
+            .unwrap()
+            .pending
+            .iter()
+            .any(|p| matches!(p, agent::session::PendingTool::Actions { .. })),
+        "带路不是会话里的工具调用"
+    );
+    ResidentRuntime::restore(r.state().clone(), &w).unwrap();
+}

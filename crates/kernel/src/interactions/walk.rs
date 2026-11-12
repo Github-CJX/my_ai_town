@@ -187,13 +187,15 @@ impl World {
             recipient: None,
             writing: None,
         };
-        if let Err(error) =
-            self.run_actions_from(leader, &format!("{id}/lead"), revision, &[draft], false)
-        {
+        let lead = format!("{id}/lead");
+        if let Err(error) = self.run_actions_from(leader, &lead, revision, &[draft], false) {
             let a = &self.actors[leader];
             let line = format!("{} 没能出发带路：{error}", a.name);
             let info = a.event_info().in_place(&a.locus.locale);
             self.log(info, line);
+        } else {
+            // 这一组是同行自己安排的，会话里没有待完成记录：登记成世界自带，恢复时才不会被当成丢了记录。
+            self.actor_mut(leader).actions.world_groups.insert(lead);
         }
     }
 

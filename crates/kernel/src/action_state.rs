@@ -75,6 +75,9 @@ pub struct ActionState {
     pub player_groups: std::collections::BTreeSet<String>,
     #[serde(default)]
     pub player_interactions: std::collections::BTreeSet<String>,
+    /// 世界自己发起的动作组（如带路的 `…/lead`）：没有会话待完成记录，恢复时照样算已登记。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub world_groups: std::collections::BTreeSet<String>,
     #[serde(default)]
     pub cancel_after_current: bool,
     pub agent_controlled: bool,
