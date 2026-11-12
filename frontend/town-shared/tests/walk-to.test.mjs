@@ -55,13 +55,14 @@ const TARGET = { space: 'outdoor', position: [10, 0] }
 
 /** 搭一个走到 TARGET 的 walkTo：位置由调用方给，方便模拟「校正」与「走不动」。
  *  时钟自己走（每拍 BEAT 毫秒）：卡住判定按真实时间算，不按收到几份位置 */
-function walker({ here, replan = () => null, stop = 0.5 }) {
+function walker({ here, near, replan = () => null, stop = 0.5 }) {
   const emitted = []
   const ends = []
   const replans = []
   let clock = 0
   const walk = createWalkTo({
     here,
+    near,
     step: () => STEP,
     canWalk: () => true,
     emit: (direction) => emitted.push([...direction]),
@@ -130,4 +131,37 @@ test('位置小幅校正不改方向、也不重新选路，到了就停', async
     assert.ok(Math.abs(y) < 0.25 * x, `旁边的抖动不该让方向偏出去：${x.toFixed(3)},${y.toFixed(3)}`)
   }
   assert.deepEqual(emitted.at(-1), [0, 0], '到了要停下')
+})
+
+test('画面上的小人先到目标点就停住，不再绕着目标点打圈', async () => {
+  createWalkTo ??= (await load()).createWalkTo
+  // 世界确认的位置慢半拍：还差 0.3 米，画面上已经站在目标上（越过一点点）
+  const confirmed = { space: 'outdoor', position: [9.7, 0] }
+  const drawn = { space: 'outdoor', position: [10.02, 0] }
+  const { walk, emitted, ends } = walker({
+    here: () => confirmed,
+    near: () => drawn,
+    stop: 0.5,
+  })
+  walk.tick()
+  assert.deepEqual(ends, ['arrived'], '画面上进圈就算到了，不要等慢半拍的确认位置')
+  assert.deepEqual(emitted.at(-1), [0, 0], '到了要停下')
+  assert.equal(emitted.length, 1, '不该再发一次掉头的方向')
+})
+
+test('要掉头时不平滑：旧方向掺进去会绕着目标点转一圈', async () => {
+  createWalkTo ??= (await load()).createWalkTo
+  // 先朝东走，随后人越过了目标点（目标在背后）：方向必须马上掉头，而不是慢慢拐
+  let at = [0, 0]
+  const { walk, beat, emitted } = walker({
+    here: () => ({ space: 'outdoor', position: at }),
+    stop: 0.2,
+  })
+  beat()
+  assert.ok(emitted.at(-1)[0] > 0.5, `第一拍应当朝东，实际 ${emitted.at(-1)}`)
+  at = [10.5, 0]
+  beat()
+  const [x, y] = emitted.at(-1)
+  assert.ok(x < -0.5, `越过目标点之后应当马上朝西走回来，实际 ${x.toFixed(3)},${y.toFixed(3)}`)
+  assert.ok(Math.abs(y) < 0.2, `掉头不该往旁边拐，实际 ${x.toFixed(3)},${y.toFixed(3)}`)
 })

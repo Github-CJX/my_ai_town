@@ -149,6 +149,8 @@ export function createAvatarNavigation(deps: AvatarNavigationDeps) {
   }
   const walk = createWalkTo({
     here: herePoint,
+    // 只用来认「到点了」和提前减速：世界确认的位置慢半拍，只看它会绕着目标点打圈
+    near: () => map.avatarAt?.(),
     step: stepMetres,
     canWalk,
     emit: emitDirection,
