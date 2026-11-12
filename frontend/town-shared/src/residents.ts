@@ -66,7 +66,7 @@ export function initResidentsPage(deps: ResidentsDeps) {
   const state = createResidentsState()
   // 一次请几位时逐个等预览和加入结果；消息照常交给页面，这里只旁听
   const waiters: Waiter[] = []
-  function waitFor<T>(match: (m: ServerMsg) => T | undefined, ms = 15000) {
+  function waitFor<T>(match: (m: ServerMsg) => T | undefined, what: string, ms = 15000) {
     return new Promise<T>((resolve, reject) => {
       const waiter: Waiter = { match, resolve: resolve as (v: unknown) => void }
       waiters.push(waiter)
@@ -74,7 +74,8 @@ export function initResidentsPage(deps: ResidentsDeps) {
         const i = waiters.indexOf(waiter)
         if (i < 0) return
         waiters.splice(i, 1)
-        reject(Error('小镇没有及时回应，请检查连接后重试'))
+        // 卡在哪一步就说哪一步：托盘一直停在「正在请…」而不说原因，玩家只会觉得按钮没反应
+        reject(Error(`${what}没有回应，请检查连接后重试`))
       }, ms)
     })
   }
@@ -89,17 +90,17 @@ export function initResidentsPage(deps: ResidentsDeps) {
   }
   async function invite(ids: string[]) {
     if (state.inviting || !ids.length) return
-    state.inviting = true
-    render()
     const model = joinModel()
     const joined: JoinOutcome[] = []
     const failed: string[] = []
     /** 请成了的人从勾选里去掉，没请成的留着可以再试 */
     const done = new Set<string>()
     try {
+      state.inviting = true
+      render()
       if (!state.population) {
         deps.send({ type: 'get_population' })
-        await waitFor((m) => (m.type === 'population' ? m.population : undefined))
+        await waitFor((m) => (m.type === 'population' ? m.population : undefined), '小镇的居民登记')
       }
       const population = state.population as PopulationView | null
       if (!population) throw Error('还没读到小镇的居民登记')
@@ -107,8 +108,11 @@ export function initResidentsPage(deps: ResidentsDeps) {
         const name = state.cards.find((c) => c.template_id === id)?.name ?? id
         try {
           deps.send({ type: 'preview_resident_join', template_id: id })
-          const preview: JoinPreview = await waitFor((m) =>
-            m.type === 'join_preview' && m.preview.template_id === id ? m.preview : undefined
+          const preview: JoinPreview = await waitFor(
+            (m) =>
+              m.type === 'join_preview' && m.preview.template_id === id ? m.preview : undefined,
+            `${name}的加入预览`,
+            6000
           )
           if (!preview.ok) throw Error(preview.problems.join('；') || '现在不能加入')
           const op_id = newId()
@@ -122,12 +126,14 @@ export function initResidentsPage(deps: ResidentsDeps) {
             home: preview.home,
             ...(model ? { model: { provider: model.provider, model: model.model } } : {}),
           })
-          const outcome: JoinOutcome = await waitFor((m) =>
-            m.type === 'resident_joined' && m.outcome.op_id === op_id
-              ? m.outcome
-              : m.type === 'join_result' && m.op_id === op_id
-                ? (m.outcome ?? undefined)
-                : undefined
+          const outcome: JoinOutcome = await waitFor(
+            (m) =>
+              m.type === 'resident_joined' && m.outcome.op_id === op_id
+                ? m.outcome
+                : m.type === 'join_result' && m.op_id === op_id
+                  ? (m.outcome ?? undefined)
+                  : undefined,
+            `${name}的入住结果`
           )
           if (!outcome.ok) throw Error(outcome.message)
           joined.push(outcome)
@@ -138,9 +144,13 @@ export function initResidentsPage(deps: ResidentsDeps) {
       }
     } catch (error) {
       failed.push(error instanceof Error ? error.message : String(error))
+    } finally {
+      // 无论哪一步抛错都要放下这个标记：卡住不放，之后再点就真的毫无反应了
+      state.inviting = false
     }
-    state.inviting = false
     state.picks = state.picks.filter((id) => !done.has(id))
+    // 没请成的原因同时写在村民页顶上：只塞进事件栏的话，关卡收起来就看不见
+    if (failed.length) state.notice = { text: `没请成：${failed.join('；')}`, warning: true }
     render()
     deps.onJoined(joined, failed, model)
   }
