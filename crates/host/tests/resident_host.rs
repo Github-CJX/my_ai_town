@@ -73,10 +73,20 @@ impl Endpoint {
                     .filter_map(|m| m["content"].as_str())
                     .filter_map(|s| serde_json::from_str::<Value>(s).ok())
                     .find_map(|v| v.get("reflection_task").cloned());
-                assert_eq!(
-                    value["tools"].as_array().unwrap().len(),
-                    if reflection.is_some() { 3 } else { 13 }
-                );
+                // 村民的整套工具（反省只有 3 个）。传讯工具 `write_letter` 是后来加的，
+                // 所以这里数的是「全量」而不是某个固定数：只要她拿到的比反省多，且带着传讯就够。
+                let offered = value["tools"].as_array().unwrap();
+                if reflection.is_some() {
+                    assert_eq!(offered.len(), 3);
+                } else {
+                    assert!(
+                        offered
+                            .iter()
+                            .any(|tool| tool["function"]["name"] == "write_letter"),
+                        "村民该能传讯：{offered:?}"
+                    );
+                    assert!(offered.len() > 3);
+                }
                 let completed = value["messages"]
                     .as_array()
                     .unwrap()
