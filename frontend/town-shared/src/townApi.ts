@@ -340,10 +340,19 @@ export type QqBindingRow = {
   online: boolean
 }
 
+/** 还没绑定就来找过她的号码：只有尾号，认领时用 token */
+export type QqPending = {
+  token: string
+  masked: string
+  at: number
+}
+
 export type QqBindings = {
   ok: true
   agents: QqCandidate[]
   bindings: QqBindingRow[]
+  /** 刚来找过她、还没绑的号码 */
+  pending: QqPending[]
 }
 
 /** 我的 agent 和它们的 QQ 绑定；管理服务还没装这一块（老版本）时返回 null */
@@ -355,10 +364,11 @@ export async function readQqBindings(): Promise<QqBindings | null> {
   }
 }
 
-/** 把一个 QQ 号绑给某位村民：openid 是机器人后台报的号，不是 QQ 号码 */
+/** 绑上：要么手填 openid，要么认领一行「刚来找过她的号码」（pending） */
 export function bindQq(body: {
   agent: string
-  openid: string
+  openid?: string
+  pending?: string
   town?: string
 }): Promise<QqBindings> {
   return home('/qq/binding', body)

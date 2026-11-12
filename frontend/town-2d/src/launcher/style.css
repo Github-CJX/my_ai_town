@@ -636,6 +636,24 @@ body:has(.map-launcher) {
   font-size: 12px;
   line-height: 1.6;
 }
+/* 刚来找过她、还没绑的号码：一行认领 */
+.qq-pending {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+.qq-take {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--ui-accent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ui-accent);
+  font-size: 12px;
+}
+.qq-take:hover:not(:disabled) {
+  background: var(--ui-accent-fill);
+  color: var(--ui-accent-ink);
+}
 .enter-game {
   display: flex;
   min-height: 52px;

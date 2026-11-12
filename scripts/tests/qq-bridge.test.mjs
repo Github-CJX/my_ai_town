@@ -233,6 +233,16 @@ test('桥：没绑村民的号码不理，世界没连上就回一句实话', as
     })
     await settle()
     assert.equal(said.length, 0) // 陌生号码不回：回一句就等于替主人认了人
+    // 但留下一行待认领：网页上只看到尾号，完整 openid 只在内存里按 token 换
+    const pending = bridge.claims()
+    assert.equal(pending.length, 1)
+    assert.ok(pending[0].masked)
+    assert.notEqual(pending[0].masked, 'OTHER') // 网页上永远看不到完整 openid
+    assert.equal(pending[0].token, bridge.claims()[0].token) // 同一个号码两次消息只留一行
+    assert.equal(bridge.openidOf(pending[0].token), 'OTHER')
+    assert.equal(bridge.openidOf('nonsense'), '')
+    bridge.forget(pending[0].token)
+    assert.equal(bridge.claims().length, 0)
     await gatewaySpec.onEvent({
       name: 'C2C_MESSAGE_CREATE',
       data: { id: 'msg-3', content: '在吗', author: { user_openid: 'A1B2C3' } },

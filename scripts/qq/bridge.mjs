@@ -11,6 +11,7 @@
 //! 官方被动回复窗口 60 分钟、同一条最多 4 句，见 `./letters.mjs`。
 
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   createGateway,
   fetchToken,
@@ -27,6 +28,9 @@ import { createWorldLink } from './world.mjs'
 const POLL_MS = 2000
 /** 票还有多久过期就去换新的：桥是长跑，不能等它过期再换。 */
 const REFRESH_MS = 5 * 60 * 1000
+/** 没绑定的号码来找她，最多留这么多条待认领，也只留这么久（认领要在网页上点）。 */
+const CLAIM_MAX = 20
+const CLAIM_MS = 30 * 60 * 1000
 
 export function createBridge({
   root,
@@ -43,6 +47,9 @@ export function createBridge({
   const configFile = path.join(root, 'config', 'qq.json')
   const bindingsFile = path.join(root, 'config', 'qq-bindings.json')
   const states = new Map()
+  /** 还没绑定就来找她的号码：{token → {openid, at, text}}。完整 openid 只留在内存里，
+   *  网页那边看到的是尾号；认领时按 token 换回 openid，人不用手打一长串。 */
+  const claims = new Map()
   let data = { version: 1, bindings: [] }
   let gateway = null
   let ticket = null
@@ -160,20 +167,43 @@ export function createBridge({
     }
   }
 
+  /** 认领用的短号：同一个 openid 每次都一样，重发消息不会多出一行。 */
+  function claimToken(openid) {
+    return `q${createHash('sha256').update(openid).digest('hex').slice(0, 10)}`
+  }
+
+  function prune() {
+    const edge = now() - CLAIM_MS
+    for (const [token, item] of claims) if (item.at < edge) claims.delete(token)
+    while (claims.size > CLAIM_MAX) {
+      const oldest = [...claims.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+      if (!oldest) break
+      claims.delete(oldest[0])
+    }
+  }
+
+  /** 没绑定的号码来找她：留一行待认领，不递信、不进世界、不花模型钱。 */
+  function remember(openid, text) {
+    claims.set(claimToken(openid), { openid, at: now(), text: String(text ?? '').slice(0, 40) })
+    prune()
+  }
+
   async function onEvent({ name, data: event }) {
     if (name !== 'C2C_MESSAGE_CREATE') return
     const openid = String(event?.author?.user_openid ?? '').trim()
+    if (!openid) return
     const state = states.get(openid)
     if (!state) {
-      log(`收到 ${maskId(openid)} 的私聊，但没绑村民，不理`)
+      remember(openid, event?.content)
+      log(`收到 ${maskId(openid)} 的私聊：还没绑村民，留在网页上等人认领`)
       return
     }
     await onMessage(state, event)
   }
 
-  /** 连 QQ 网关。没有绑定就先不连：同一个 bot 上多一条连接会把探针那边的事件抢过来。 */
+  /** 连 QQ 网关。没有绑定也连：没绑的号码来找她，要在网页上留一行给人认领。 */
   function startGateway() {
-    if (gateway || !data.bindings.length) return
+    if (gateway) return
     gateway = gatewayFactory({
       getToken: token,
       intents: INTENT_GROUP_AND_C2C,
@@ -195,10 +225,7 @@ export function createBridge({
       log(`桥没起来：${text(error)}`)
       return
     }
-    if (!data.bindings.length) {
-      log('还没有绑定：先给一个 QQ 号绑上村民，再来信')
-      return
-    }
+    if (!data.bindings.length) log('还没有绑定：谁来找她都先记下，等网页上认领')
     for (const binding of data.bindings) attach(binding)
     startGateway()
   }
@@ -227,8 +254,28 @@ export function createBridge({
       }
       states.clear()
       data = await readBindings(bindingsFile)
-      for (const binding of data.bindings) attach(binding)
+      for (const binding of data.bindings) {
+        // 认领过的那一行就从待认领里划掉
+        claims.delete(claimToken(binding.openid))
+        attach(binding)
+      }
       startGateway()
+    },
+    /** 还没绑定就来找她的号码：只给尾号，认领时用 token。 */
+    claims() {
+      prune()
+      return [...claims.entries()]
+        .map(([token, item]) => ({ token, masked: maskId(item.openid), at: item.at }))
+        .sort((a, b) => b.at - a.at)
+    },
+    /** 认领：把 token 换回完整 openid（只在内存里，不进日志、不进网页）。 */
+    openidOf(token) {
+      prune()
+      return claims.get(String(token ?? ''))?.openid ?? ''
+    },
+    /** 绑上了：这一行不用再摆着。 */
+    forget(token) {
+      claims.delete(String(token ?? ''))
     },
     stop() {
       stopped = true

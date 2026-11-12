@@ -580,6 +580,14 @@ function qqSay(text: string) {
   qqTip.hidden = !text
 }
 
+/** 「刚刚 / 3 分钟前」：认领那一行要让人知道是不是刚发的 */
+function ago(at: number) {
+  const minutes = Math.floor((Date.now() - at) / 60000)
+  if (!Number.isFinite(minutes) || minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  return `${Math.floor(minutes / 60)} 小时前`
+}
+
 function renderQq(data: QqBindings) {
   qqPick.replaceChildren()
   for (const item of data.agents) {
@@ -591,15 +599,21 @@ function renderQq(data: QqBindings) {
   }
   qqForm.hidden = !data.agents.length
   qqList.replaceChildren()
-  if (!data.bindings.length) {
-    const empty = document.createElement('p')
-    empty.className = 'qq-empty'
-    empty.textContent = data.agents.length
-      ? '还没有绑：选一位村民，填上她的 openid。'
-      : '还没有能绑的村民：先把一个 agent 投放到小镇里。'
-    qqList.append(empty)
-    return
+
+  // 先摆「刚来找过她、还没绑」的号码：认领不用手打一长串 openid
+  for (const item of data.pending ?? []) {
+    const row = document.createElement('div')
+    row.className = 'qq-row qq-pending'
+    const who = document.createElement('span')
+    who.className = 'qq-who'
+    who.textContent = `有个 QQ 来找她（${item.masked}）· ${ago(item.at)}`
+    const take = button('就是这位', () => void claimQq(item.token), 'qq-take')
+    take.disabled = qqBusy || !data.agents.length
+    take.title = data.agents.length ? '把这个号绑给上面选中的村民' : '先把一个 agent 投放到小镇里'
+    row.append(who, take)
+    qqList.append(row)
   }
+
   for (const item of data.bindings) {
     const row = document.createElement('div')
     row.className = 'qq-row'
@@ -618,6 +632,15 @@ function renderQq(data: QqBindings) {
     state.textContent = item.online ? '在听' : '没连上'
     row.append(who, id, state, drop)
     qqList.append(row)
+  }
+
+  if (!qqList.childElementCount) {
+    const empty = document.createElement('p')
+    empty.className = 'qq-empty'
+    empty.textContent = data.agents.length
+      ? '还没有绑：让那个 QQ 私聊机器人一句，这里就会出现一行「就是这位」；也可以直接填 openid。'
+      : '还没有能绑的村民：先把一个 agent 投放到小镇里。'
+    qqList.append(empty)
   }
 }
 
@@ -656,6 +679,23 @@ async function bindSelected() {
     renderQq(data)
     qqOpenid.value = ''
     qqSay('绑上了：那个 QQ 现在私聊机器人，话就递到她手上。')
+  } catch (error) {
+    qqSay(errorText(error))
+  } finally {
+    qqBusy = false
+  }
+}
+
+/** 认领：把这个号绑给上面选中的村民（完整 openid 不进网页，管理服务按 token 换） */
+async function claimQq(token: string) {
+  if (qqBusy) return
+  const { agent, town } = qqPickOf()
+  if (!agent) return qqSay('先选一位村民。')
+  qqBusy = true
+  try {
+    const data = await bindQq({ agent, pending: token, town })
+    renderQq(data)
+    qqSay('认领好了：这个 QQ 私聊机器人，话就递到她手上。')
   } catch (error) {
     qqSay(errorText(error))
   } finally {

@@ -54,6 +54,8 @@ export function createQqRoutes({ root, current, bridge, config, bindings }) {
           since: item.since,
           online: Boolean(status.get(item.resident)?.connected),
         })),
+      // 没绑定的号码来找过她：只给尾号，认领时按 token 换回完整的（完整号不落网页、不落日志）
+      pending: bridge?.claims?.() ?? [],
     }
   }
 
@@ -86,9 +88,16 @@ export function createQqRoutes({ root, current, bridge, config, bindings }) {
       /^\/api\/qq\/binding$/,
       async ({ body, headers }) => {
         const me = mine(headers)
-        const openid = String(body.openid ?? '').trim()
-        if (!OPENID.test(openid))
-          throw new HttpError(400, 'QQ 号看起来不对：用 AppID 后台报的 openid，不是 QQ 号码')
+        // 两种来源：网页上认领（pending token，号码刚来找过）或手填 openid（管理员/脚本）
+        const pending = String(body.pending ?? '').trim()
+        let openid = pending ? String(bridge?.openidOf?.(pending) ?? '') : ''
+        if (pending && !openid)
+          throw new HttpError(409, '这个号码已经认领过了（或太久没来消息），刷新一下页面再试')
+        if (!pending) {
+          openid = String(body.openid ?? '').trim()
+          if (!OPENID.test(openid))
+            throw new HttpError(400, 'QQ 号看起来不对：用 AppID 后台报的 openid，不是 QQ 号码')
+        }
         const { town, resident, resident_name } = await target(me.id, body)
         const data = await readBindings(bindingsFile)
         let next
@@ -104,6 +113,7 @@ export function createQqRoutes({ root, current, bridge, config, bindings }) {
           throw new HttpError(409, error instanceof Error ? error.message : String(error))
         }
         await saveBindings(bindingsFile, next)
+        if (pending) bridge?.forget?.(pending)
         await bridge?.reload()
         return listing(me.id)
       },
