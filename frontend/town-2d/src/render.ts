@@ -755,11 +755,19 @@ export class TownMap {
     )
     const covered = this.rooms.covered
     this.residents.setCovered(covered)
-    hd.setVillagers(this.villagerPlacements(covered), fresh)
+    // 名册上的世界时钟交给立牌：一份名册代表世界走了几拍，卡顿被覆盖掉的几份也算在里头（D.47）
+    hd.setVillagers(this.villagerPlacements(covered), fresh, fresh ? this.rosterTick() : undefined)
     if (!changed) return
     this.rooms.apply(hd, this.camera.project)
     this.drawnProps = hd.setProps(this.coverProps(covered))
     this.anchorProps()
+  }
+
+  /** 最新一份名册上的世界时钟；还没收到名册时为 undefined（立牌按一拍算） */
+  private rosterTick() {
+    const roster = this.lastRoster
+    if (!roster) return undefined
+    return { minutes: roster.sim_minutes, pace: roster.pace }
   }
 
   /** 立体场景里道具名字不常驻：指到（或键盘聚焦）某个道具时才出现，选中的道具一直有 */

@@ -21,10 +21,11 @@ import {
 } from './villagerCues'
 import { CYCLE, SIGN_RANK, type Shown, type Sign } from './villagerSigns'
 import { poseOf } from './villagerPose'
+import { PlaybackClock, type PlaybackTick } from './playback'
 
 // 村民立牌：位置跟着名册走。名册每拍（100 毫秒）来一次，立牌比最新一份晚一到两拍，在相邻两份
-// 之间匀速走过去：每份名册记作比上一份晚一拍，播放按真实时间走；每来一份按缓冲多少把播放稍微调快
-// 或调慢，一份之内速度不变，名册早到晚到、主线程卡一下都不会让人忽快忽慢。
+// 之间匀速走过去：每份名册在时间轴上固定记作一拍，播放按真实时间走（见 playback.ts）；一份之内
+// 速度不变，名册早到晚到、主线程卡一下都不会让人忽快忽慢，更不会一次收好几份时窜一段。
 // 按这一段路的方向选朝向、按走过的距离换走路帧。每人一块小贴图，按此刻的姿势、呼吸、眨眼和
 // 风现画（见 villagerRig.ts、villagerActing.ts），画面变了才重画、上传。
 // 玩家正在操控的人不缓冲：位置由本地预测给出（见 ../avatarMotion.ts），每帧照着发出去的方向和步速走，
@@ -36,16 +37,24 @@ const STRIDE = 1.6 * PIXEL
 const STEP = 4 * STRIDE
 /** 相邻两份名册离得比这远就直接放过去（进出门、换地点），不走过场 */
 const JUMP = 400
-/** 服务端一拍（毫秒）的默认值：第一份名册还没有实测，先用它 */
+/** 服务端一拍在时间轴上的长度（毫秒） */
 const TICK_MS = 100
-/** 实测拍距的合理范围：一拍约 107 毫秒，快进时一份名册代表的模拟时间更长，卡一下也会变长 */
-const BEAT_MIN_MS = 40
-const BEAT_MAX_MS = 400
+/** 世界一拍推进多少模拟分钟：host 的 runtime.tick 走 world.step(0.1 * pace) */
+const MINUTES_PER_TICK = 0.1
+/** 一份名册最多在时间轴上占多久：再远就交给重对齐，不慢慢补 */
+const MAX_BEAT_MS = 1000
+/** 到货统计窗口：按窗口里时间轴走了多少调播放快慢，单个间隔的抖动不进时间轴 */
+const DRIFT_WINDOW_MS = 1000
+/** 播放快慢的合理范围：到得慢就放慢等缓冲，到得快绝不加速（一加速就是「窜一下」） */
+const DRIFT_MIN = 0.85
+const DRIFT_MAX = 1.05
 /** 刚来一份名册时立牌比它晚多久：两拍，下一份晚到一拍也还有路可走 */
 const DELAY_MS = 200
 /** 落后超过这么久（切到后台回来、断线重连）就直接跳到最新，不快放 */
 const RESYNC_MS = 600
-/** 追赶缓冲时最多快慢一成，看不出变速 */
+/** 一帧最多走这么久的时间轴：卡一帧也照实走完，不掐时间（掐了就要靠后面一跳补回来） */
+const MAX_STEP_MS = 250
+/** 追赶缓冲时最多快慢一成：配合 drift 一起，播放速度始终在一倍上下 */
 const MAX_DRIFT = 0.1
 /** 站着的人多久重新挑一次看谁（毫秒），各人错开 */
 const LOOK_MS = 500
@@ -201,19 +210,31 @@ export class Villagers {
   private sway: (x: number, z: number) => number = () => 0
   /** 天上有东西可看（晴夜的星星、飘下来的雪） */
   private sky = false
-  /** 最新一份名册在时间轴上的时刻（毫秒），每来一份加一拍 */
-  private latest = 0
-  /** 这一份名册到得比上一份晚多少毫秒（实测）：服务端一拍不是恰好 100 毫秒，
-   *  按常量加时间轴会越走越偏，缓冲一满就硬跳一下 */
-  private beat = TICK_MS
-  /** 上一份名册到达的时刻 */
-  private synced = 0
-  /** 播放到的时刻：立牌画的是这一刻的位置 */
-  private play = -DELAY_MS
-  /** 播放快慢：每来一份名册按缓冲调一次 */
-  private rate = 1
+  /** 名册的播放时钟：一份名册代表世界走了几拍，到货快慢只用来放慢（见 playback.ts 与 D.47） */
+  private readonly clock = new PlaybackClock({
+    tickMs: TICK_MS,
+    minutesPerTick: MINUTES_PER_TICK,
+    maxStepMs: MAX_BEAT_MS,
+    delayMs: DELAY_MS,
+    resyncMs: RESYNC_MS,
+    windowMs: DRIFT_WINDOW_MS,
+    minRate: DRIFT_MIN,
+    maxRate: DRIFT_MAX,
+    maxDrift: MAX_DRIFT,
+  })
   /** 上一次 step 的时刻 */
   private last = performance.now()
+  /** 时间轴上最新一份名册的时刻、以及此刻画的是哪一刻 */
+  private get latest() {
+    return this.clock.latest
+  }
+  private get play() {
+    return this.clock.play
+  }
+  /** 走的快慢（1 为正常，见 playback.ts） */
+  private get rate() {
+    return this.clock.rate
+  }
   /** 玩家正在操控的人的本地预测；没有在操控时为空 */
   private motion: LiveMotion | null = null
   setLiveMotion(motion: LiveMotion | null) {
@@ -238,23 +259,13 @@ export class Villagers {
     }
   }
 
-  /** 按名册同步；fresh 表示这是新来的一份名册，位置记进时间轴，其余（换选中、开合屋顶）只改最后一份。
+  /** 按名册同步；fresh 表示这是新来的一份名册，位置记进时间轴（tick 是名册上的世界时钟），
+   *  其余（换选中、开合屋顶）只改最后一份。
    *  有人进出、显隐、变色或瞬移时返回 true（走过去的由 step 报告） */
-  sync(placements: VillagerPlacement[], fresh = false) {
+  sync(placements: VillagerPlacement[], fresh = false, tick?: PlaybackTick) {
     if (fresh) {
-      // 一拍多长按名册实际到得多快算，而不是写死 100 毫秒：快进时世界跑得快，
-      // 名册里人一步跨得更远，时间轴上少加时间就会让立牌慢慢落后、缓冲撑满后一跳
-      const now = performance.now()
-      this.beat = this.synced
-        ? Math.min(BEAT_MAX_MS, Math.max(BEAT_MIN_MS, now - this.synced))
-        : TICK_MS
-      this.synced = now
-      this.latest += this.beat
-      const buffered = this.latest - this.play
-      if (buffered > RESYNC_MS) {
-        this.play = this.latest - DELAY_MS
-        this.rate = 1
-      } else this.rate = 1 + Math.max(-MAX_DRIFT, Math.min(MAX_DRIFT, (buffered - DELAY_MS) / 1000))
+      // 一份名册代表世界走了几拍（被覆盖掉的几份也算在里头），见 playback.ts 与 D.47
+      this.clock.arrive(performance.now(), tick)
     }
     const seen = new Set<string>()
     let changed = false
@@ -301,7 +312,7 @@ export class Villagers {
         this.moveTo(v, p.x, p.y)
       } else if (fresh) {
         // 站着不动时不记重复的点；刚起步时补上上一拍还站在原地，免得从很久以前的点一下滑过来
-        if (end.t < this.latest - this.beat) v.path.push({ ...end, t: this.latest - this.beat })
+        if (end.t < this.latest - TICK_MS) v.path.push({ ...end, t: this.latest - TICK_MS })
         v.path.push({ t: this.latest, x: p.x, y: p.y })
       } else v.path[v.path.length - 1] = { ...end, x: p.x, y: p.y }
     }
@@ -560,9 +571,11 @@ export class Villagers {
   /** 每帧画之前调用（now 是这一帧的时刻）：摆到播放时刻的位置，更新朝向，画好每人这一帧；
    *  有人走动时返回 true */
   step(now: number) {
-    const dt = Math.min(100, Math.max(0, now - this.last))
+    // 卡了一帧就照实走那一帧的时间（最多 250 毫秒）：掐掉了时间轴就落后，落后到头再一跳，
+    // 看上去正是「卡一下又窜一下」；再长的停顿（切到后台）交给 RESYNC 处理
+    const dt = Math.min(MAX_STEP_MS, Math.max(0, now - this.last))
     this.last = now
-    this.play = Math.min(this.latest, this.play + dt * this.rate)
+    this.clock.advance(dt)
     let changed = false
     for (const v of this.all.values()) {
       if (v.live) {

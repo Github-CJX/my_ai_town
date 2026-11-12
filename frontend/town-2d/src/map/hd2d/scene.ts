@@ -12,6 +12,7 @@ import { pier, PIER_DECK, pierLampCanvas } from './pier'
 import { fbm, hash, rng } from '../pixel/noise'
 import { Motes } from './motes'
 import { Villagers, type LiveMotion, type VillagerPlacement } from './villagers'
+import type { PlaybackTick } from './playback'
 import { villagerLight } from './villagerLight'
 import { VILLAGER_HALF, VILLAGER_HEIGHT, VILLAGER_SCALE } from './villagerSprite'
 import { Weather3D } from './weather'
@@ -1819,8 +1820,9 @@ export class HdScene {
   /** 立牌每帧挪过之后、以及新名册改了目标之后调用：SVG 里的名字和心声泡按 villagerLag 跟上立牌 */
   onVillagersMoved?: () => void
 
-  /** 村民位置；fresh 表示这是新来的一份名册。两份之间由场景自己匀速走过去（见 villagers.ts） */
-  setVillagers(placements: VillagerPlacement[], fresh = false) {
+  /** 村民位置；fresh 表示这是新来的一份名册，tick 是名册上的世界时钟。
+   *  两份之间由场景自己匀速走过去（见 villagers.ts、playback.ts） */
+  setVillagers(placements: VillagerPlacement[], fresh = false, tick?: PlaybackTick) {
     const changed = this.villagers.sync(
       placements.map((p) => {
         // 落脚点就在道具上时，人站到道具底边前面一点，不站进家具里
@@ -1835,7 +1837,8 @@ export class HdScene {
         )
         return { ...p, offset: [x - p.x, y - p.y] as [number, number] }
       }),
-      fresh
+      fresh,
+      tick
     )
     // 名字已经按名册摆到了新位置，立牌还在后面：马上按落后的距离挪回立牌头上
     this.onVillagersMoved?.()

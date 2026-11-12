@@ -135,4 +135,20 @@ mod tests {
             "缺少「描写不是事实」的说明"
         );
     }
+
+    /// 两个人一来一往互相确认同一件事是模型最容易犯的绕圈：这条规则删了，一场交谈就只剩
+    /// 「对得上」「成，你念我找」这样的复述（见手册 D.47）。
+    #[test]
+    fn the_chat_rules_forbid_confirming_the_same_thing_again() {
+        let rules = chat_system_prompt("阿岚，话少，爱看河");
+        assert!(rules.contains("一件事只说一遍"), "缺少「别重复确认」");
+        assert!(
+            rules.contains("别把一件小事拆成好几轮核对"),
+            "缺少「别拆成一问一答」"
+        );
+        assert!(
+            rules.contains("propose 动身或者 leave"),
+            "缺少「没新内容就动身或告辞」"
+        );
+    }
 }

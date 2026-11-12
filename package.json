@@ -13,7 +13,7 @@
     "preview": "node scripts/start-client.mjs preview",
     "format": "prettier --write frontend scripts",
     "format:check": "prettier --check frontend scripts",
-    "test": "node --test --test-concurrency=4 scripts/tests/*.test.mjs frontend/town-shared/tests/*.test.mjs"
+    "test": "node --test --test-concurrency=4 scripts/tests/*.test.mjs frontend/town-shared/tests/*.test.mjs frontend/town-2d/tests/*.test.mjs"
   },
   "devDependencies": {
     "prettier": "^3.9.6"
