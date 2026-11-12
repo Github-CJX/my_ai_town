@@ -20,7 +20,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Storage, readJson, atomicJson, dataRoot, setupConfig } from './towns/storage.mjs'
 import { Hosts } from './towns/hosts.mjs'
-import { withTicket } from './towns/ticket.mjs'
+import { createWorldEndpoint } from './qq/endpoint.mjs'
 import { createBridge } from './qq/bridge.mjs'
 import { createQqRoutes } from './qq/routes.mjs'
 const source = fileURLToPath(new URL('../', import.meta.url))
@@ -156,14 +156,7 @@ export async function createManager({
   const bridge = createBridge({
     root,
     log: (message) => console.log(`[qq] ${message}`),
-    endpointFor: (town, account) => {
-      const port = hosts.worldPort(town)
-      const secret = hosts.worldSecret(town)
-      if (!port || !secret) return null
-      const ticket = hosts.ticket(town, account, false, false)
-      if (!ticket) return null
-      return withTicket(`ws://127.0.0.1:${port}/?session=${secret}`, ticket)
-    },
+    endpointFor: createWorldEndpoint(hosts),
   })
   const qqEnabled = async () => {
     try {
