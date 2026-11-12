@@ -38,6 +38,8 @@ pub const WRITING_TEXT_CHARS: usize = 4000;
 pub const DURATION_MINUTES_MAX: f64 = 1440.0;
 
 pub const MESSAGE_CHARS: usize = 400;
+/// 传讯时写收信人的名字（镇里的人，或从外面递信来的人）。
+pub const LETTER_TO_CHARS: usize = 40;
 
 pub const WAIT_MINUTES: RangeInclusive<f64> = 1.0..=1440.0;
 /// 只填事件的等待到点也醒来重看：等的人一直不来，不至于空等一整天才被饥渴叫醒。

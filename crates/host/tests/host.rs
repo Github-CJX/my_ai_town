@@ -7,6 +7,7 @@ mod byok;
 mod commands;
 mod content;
 mod departure;
+mod letters;
 mod persistence;
 mod placement;
 mod population;

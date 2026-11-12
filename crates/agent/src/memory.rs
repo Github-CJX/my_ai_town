@@ -44,7 +44,7 @@ impl MemoryRecord {
         self.readable.is_some()
             || matches!(
                 self.fact_kind,
-                Some(FactKind::Notice | FactKind::Speech | FactKind::Readable)
+                Some(FactKind::Notice | FactKind::Speech | FactKind::Readable | FactKind::Letter)
             )
             || self.text.chars().count() >= 40
     }

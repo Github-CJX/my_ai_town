@@ -2,9 +2,9 @@
 //! 请求编号，前端按编号配对；名册、事件、想法和其他状态变化广播给所有连接。
 use crate::{
     ActiveModelChoice, AgentLimits, AgentUsage, ChatEntry, ChatSummary, DiaryDay, JoinOutcome,
-    JoinPreview, ModelChoice, NeedsTuning, NotebookDetail, NotebookView, PopulationView,
-    ProviderView, RequestView, ResidentTemplate, ResidentUsage, RosterLocale, TemplateCard,
-    TemplateFields, UsageSummary, WorldHold,
+    JoinPreview, LetterView, ModelChoice, NeedsTuning, NotebookDetail, NotebookView,
+    PopulationView, ProviderView, RequestView, ResidentTemplate, ResidentUsage, RosterLocale,
+    TemplateCard, TemplateFields, UsageSummary, WorldHold,
 };
 use serde::Serialize;
 
@@ -284,5 +284,20 @@ pub enum ServerMsg {
         request_id: String,
         ok: bool,
         message: String,
+    },
+    /// 传讯已写进世界：告诉她了，还是没送到（只回给发出命令的连接）
+    LetterSent {
+        request_id: String,
+        ok: bool,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        letter: Option<Box<LetterView>>,
+    },
+    /// 这位账号与自己村民的往来传讯，`cursor` 下次带上就是接着读
+    Letters {
+        request_id: String,
+        letters: Vec<LetterView>,
+        #[serde(default)]
+        cursor: u64,
     },
 }

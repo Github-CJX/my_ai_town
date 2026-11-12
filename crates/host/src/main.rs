@@ -13,6 +13,7 @@
 mod avatar;
 mod departure;
 mod join;
+mod letters;
 mod library_commands;
 mod network;
 mod owner_keys;

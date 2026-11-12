@@ -33,6 +33,7 @@ pub(crate) fn fact_kinds() -> Vec<FactKind> {
         Action,
         Speech,
         Interaction,
+        Letter,
         Presence
     })
 }
@@ -502,4 +503,15 @@ pub(super) fn offer_invitation() -> Value {
 pub(super) fn reply_invitation() -> Value {
     let (fields, required) = reply_fields();
     object(fields, &required)
+}
+
+/// 传讯：写给镇里某个人（名字取自 people_here 或记忆与往来传讯里出现的人）。
+pub(super) fn write_letter() -> Value {
+    object(
+        json!({
+            "to": string(LETTER_TO_CHARS),
+            "text": string(MESSAGE_CHARS)
+        }),
+        &["to", "text"],
+    )
 }

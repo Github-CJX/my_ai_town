@@ -276,6 +276,9 @@ pub struct TemplateFields {
     /// 开局处境：村民来到这里时真实身处的情况（比如醒来在荒岛上），按已经发生的事写给模型。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub situation: String,
+    /// 和镇外那个人的关系：投放她的人（主人、父亲、老朋友…），按已经发生的事写进 persona。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bond: String,
     #[serde(default)]
     pub drives: String,
     #[serde(default)]

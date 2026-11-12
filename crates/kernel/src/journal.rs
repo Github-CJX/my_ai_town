@@ -189,6 +189,29 @@ impl Journal {
             objects,
             action_id,
             readable,
+            letter: None,
+        });
+        event_id
+    }
+
+    /// 写一条传讯：另存一份字条本身（谁写给谁、原话、回的是哪一封），前端与 QQ 桥直接读。
+    pub(crate) fn letter_fact(
+        &mut self,
+        at: f64,
+        text: String,
+        objects: Vec<String>,
+        letter: protocol::LetterFact,
+    ) -> u64 {
+        let event_id = self.cursor() + 1;
+        self.events.push(protocol::WorldFact {
+            event_id,
+            at,
+            kind: protocol::FactKind::Letter,
+            text,
+            objects,
+            action_id: None,
+            readable: None,
+            letter: Some(letter),
         });
         event_id
     }

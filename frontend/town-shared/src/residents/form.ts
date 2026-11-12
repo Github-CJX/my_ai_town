@@ -16,6 +16,7 @@ export const EMPTY_FIELDS: TemplateFields = {
   speech: '',
   background: '',
   situation: '',
+  bond: '',
   drives: '',
   interests: '',
   occupation: '',
@@ -71,6 +72,15 @@ const TEXT_FIELDS: TextField[] = [
     placeholder:
       '可选。来到这里时真实身处的情况，比如“今早醒来躺在陌生的沙滩上，不知道怎么来的”；会作为已经发生的事告诉村民',
     rows: 3,
+    wide: true,
+  },
+  {
+    key: 'bond',
+    label: '是你什么人',
+    kind: 'textarea',
+    placeholder:
+      '可选。比如“老陈是你的主人，你是他从海边捡回来的”；会作为已经发生的事告诉村民，之后她会照这个关系认人',
+    rows: 2,
     wide: true,
   },
   {
@@ -148,6 +158,7 @@ const MODEL_NOTES = [
   '以上是来到小镇之前的自述设定，不是小镇里发生过的事。这是本人来到小镇的第一天，具体日期以入村记录为准。',
   '以上是来到小镇之前的自述设定，不是小镇里发生过的事。',
   '这是本人此刻真实的处境，已经发生，不是自述或想象。',
+  '这是已经发生的事实：镇外那个人和你就是这个关系，不要否认，也不用编出别的来历。',
   '这只是背景，不自动拥有资源、职位、收入或专属权限。',
 ]
 export function personaForPlayer(text: string) {
@@ -220,6 +231,7 @@ export function templateForm(initial: TemplateFields, onInput: () => void, place
     speech: read('speech'),
     background: read('background'),
     situation: read('situation'),
+    bond: read('bond'),
     drives: read('drives'),
     interests: read('interests'),
     occupation: read('occupation'),

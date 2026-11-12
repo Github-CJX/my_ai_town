@@ -199,7 +199,14 @@ export type RequestStatus =
 
 /** 世界事件的种类；旧存档里的 job 读入时按 observation */
 type FactKind =
-  'observation' | 'readable' | 'notice' | 'action' | 'speech' | 'interaction' | 'presence'
+  | 'observation'
+  | 'readable'
+  | 'notice'
+  | 'action'
+  | 'speech'
+  | 'interaction'
+  | 'letter'
+  | 'presence'
 /** 村民经历过的一条世界事件 */
 interface WorldFact {
   event_id: number
@@ -215,6 +222,26 @@ interface WorldFact {
     previously_read: boolean
     previous_version: string | null
   }
+  /** 传讯的原话；只有传讯事件有 */
+  letter?: {
+    from: string
+    to: string
+    text: string
+    reply_to: number | null
+  }
+}
+/** 一封信在收信人那边的样子：原话另存一份，前端与 QQ 桥直接读，不用从中文正文里拆 */
+export interface LetterView {
+  event_id: number
+  at: number
+  from: string
+  from_name: string
+  to: string
+  to_name: string
+  text: string
+  reply_to: number | null
+  /** 收信人是不是自己 */
+  incoming: boolean
 }
 /** 名册里每拍都发的那一份：只放会变的小字段 */
 export interface ResidentAgentView {
@@ -427,6 +454,8 @@ export interface TemplateFields {
   background: string
   /** 开局处境：来到这里时真实身处的情况，按已经发生的事写给模型；旧模板没有 */
   situation?: string
+  /** 和镇外那个人（投放她的人）的关系，也按已经发生的事告诉模型；旧模板没有 */
+  bond?: string
   drives: string
   interests: string
   occupation: string
@@ -819,6 +848,14 @@ export type ServerMsg =
   | { type: 'resident_removed'; request_id: string; ok: boolean; message: string }
   | { type: 'resident_key_saved'; request_id: string; ok: boolean; message: string }
   | { type: 'resident_budget_saved'; request_id: string; ok: boolean; message: string }
+  | {
+      type: 'letter_sent'
+      request_id: string
+      ok: boolean
+      message: string
+      letter?: LetterView
+    }
+  | { type: 'letters'; request_id: string; letters: LetterView[]; cursor: number }
 
 /** 意图的结束谓词；线上取值就是中文 */
 type UntilPredicate = '天亮' | '天黑'
@@ -1018,6 +1055,8 @@ export type ClientMsg =
       max_concurrent?: number
       per_minute?: number
     }
+  | { type: 'send_letter'; request_id: string; world_id: string; to: string; text: string }
+  | { type: 'get_letters'; request_id: string; world_id: string; after: number }
 
 type Life = 'alive' | 'dead'
 /** 生命历史里一条记录的来源 */

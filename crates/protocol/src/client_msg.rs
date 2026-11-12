@@ -342,6 +342,22 @@ pub enum ClientMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         per_minute: Option<u32>,
     },
+    /// 给名下一位村民传讯（回 LetterSent）：不要求两人同处，也不占身体。
+    /// 只有投放她的账号（或管理员）能发；世界写一条 `FactKind::Letter` 给她。
+    SendLetter {
+        request_id: String,
+        world_id: String,
+        /// 收信的村民编号
+        to: String,
+        text: String,
+    },
+    /// 读自己名下村民的往来传讯（回 Letters）：`after` 是上次读到的最大事件编号，从 0 开始。
+    GetLetters {
+        request_id: String,
+        world_id: String,
+        #[serde(default)]
+        after: u64,
+    },
 }
 
 impl ClientMsg {
@@ -380,6 +396,8 @@ impl ClientMsg {
             | GetPlaceGrid { request_id, .. }
             | SetAgentLimits { request_id, .. }
             | SetResidentBudget { request_id, .. }
+            | SendLetter { request_id, .. }
+            | GetLetters { request_id, .. }
             | RemoveResident { request_id, .. } => Some(request_id),
             JoinResident { op_id, .. } | GetResidentJoinResult { op_id, .. } => Some(op_id),
             AvatarInput { .. }

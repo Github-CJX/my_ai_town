@@ -78,6 +78,8 @@ pub enum FactKind {
     /// 明确记录是谁说的；说法内容不因此成为经世界验证的事实。
     Speech,
     Interaction,
+    /// 传讯：隔着地点递到对方手上的字条。和交谈一样，写下的内容不因此成为世界已验证的事实。
+    Letter,
     /// 人来人往：同一地点里有人来了、有人往哪儿去了。
     Presence,
 }
@@ -90,6 +92,7 @@ impl FactKind {
             Self::Action => "行动经历",
             Self::Speech => "交谈",
             Self::Interaction => "共同活动",
+            Self::Letter => "传讯",
             Self::Presence => "人来人往",
         }
     }
@@ -106,6 +109,38 @@ pub struct WorldFact {
     pub action_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readable: Option<ReadableFact>,
+    /// 传讯：谁写给谁、原话、回的是哪一封。只有 `FactKind::Letter` 的事件带这一项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter: Option<LetterFact>,
+}
+
+/// 一封传讯：字条本身。原话单独存，不靠中文正文再拆一次。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LetterFact {
+    /// 写信人的化身编号
+    pub from: String,
+    /// 收信人的化身编号
+    pub to: String,
+    pub text: String,
+    /// 这是回信时，指向原传讯的事件编号
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<u64>,
+}
+
+/// 给前端与 QQ 桥看的一条传讯：带上名字与回信线索，`incoming` 由发这条消息的一方算好。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LetterView {
+    pub event_id: u64,
+    pub at: f64,
+    pub from: String,
+    pub from_name: String,
+    pub to: String,
+    pub to_name: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<u64>,
+    /// 自己是不是收信人：收到的为真，自己递出去的为假。
+    pub incoming: bool,
 }
 
 /// 只记录本次阅读实际取得的内容身份，不把公告的说法当成已验证的世界事实。

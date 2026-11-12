@@ -403,6 +403,12 @@ pub fn render_persona(f: &TemplateFields) -> String {
             out.push_str(&format!("兴趣与生活偏好：{}\n", f.interests.trim()));
         }
     }
+    if !f.bond.trim().is_empty() {
+        out.push_str(&format!(
+            "\n## 与你的关系\n{}\n\n这是已经发生的事实：镇外那个人和你就是这个关系，不要否认，也不用编出别的来历。\n",
+            f.bond.trim()
+        ));
+    }
     if !f.occupation.trim().is_empty() {
         out.push_str(&format!(
             "\n## 职业背景\n{}\n这只是背景，不自动拥有资源、职位、收入或专属权限。\n",
@@ -458,6 +464,7 @@ pub fn mock_generated(brief: &str, taken_names: &[String]) -> Result<TemplateFie
         speech: "平和。".into(),
         background: "离线生成的占位背景，没有连接模型。".into(),
         situation: String::new(),
+        bond: String::new(),
         drives: "过好每一天。".into(),
         interests: brief.to_string(),
         occupation: String::new(),
@@ -475,5 +482,36 @@ fn appearance_for(name: &str) -> Appearance {
         color: COLORS[(hash / 7) % COLORS.len()].into(),
         profile: None,
         look: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 「是你什么人」写进人设，让村民一开口就认得那个人；没填就不出现这一段，
+    /// 旧模板生成的人设一个字都不变。
+    #[test]
+    fn a_bond_becomes_a_fact_in_the_persona_and_an_empty_one_stays_out() {
+        let mut fields = TemplateFields {
+            name: "大肥鱼".into(),
+            ..TemplateFields::default()
+        };
+        let plain = render_persona(&fields);
+        assert!(
+            !plain.contains("与你的关系"),
+            "没填关系时不该多出一段：{plain}"
+        );
+
+        fields.bond = "老陈是你的主人，你是他从海边捡回来的".into();
+        let bound = render_persona(&fields);
+        assert!(
+            bound.contains("## 与你的关系\n老陈是你的主人，你是他从海边捡回来的"),
+            "关系要原话写进人设：{bound}"
+        );
+        assert!(
+            bound.contains("这是已经发生的事实"),
+            "要说明这是事实，不是自述设定：{bound}"
+        );
     }
 }

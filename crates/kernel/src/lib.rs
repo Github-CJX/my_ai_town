@@ -42,6 +42,7 @@ pub mod intent;
 pub mod interactions;
 pub mod inventory;
 pub mod journal;
+pub mod letters;
 mod miracle;
 pub mod navigation;
 pub mod needs;

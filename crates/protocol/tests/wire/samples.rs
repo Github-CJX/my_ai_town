@@ -112,6 +112,7 @@ fn detail_view() -> ResidentDetailView {
                     previously_read: false,
                     previous_version: None,
                 }),
+                letter: None,
             }],
         }],
         body_history: vec![BodyEvent {
@@ -275,6 +276,7 @@ fn template() -> ResidentTemplate {
             speech: "话少".into(),
             background: "在镇上长大".into(),
             situation: String::new(),
+            bond: "镇长是他舅舅，他是在镇上长大的".into(),
             drives: "把手艺做好".into(),
             interests: "读书".into(),
             occupation: "木工".into(),
@@ -922,7 +924,32 @@ pub fn server_samples() -> Vec<ServerMsg> {
             ok: true,
             message: "「小禾」自己的每日额度已记下，马上生效".into(),
         },
+        ServerMsg::LetterSent {
+            request_id: "l1".into(),
+            ok: true,
+            message: "信递到「大肥鱼」手上了".into(),
+            letter: Some(Box::new(letter_view(true))),
+        },
+        ServerMsg::Letters {
+            request_id: "l2".into(),
+            letters: vec![letter_view(false), letter_view(true)],
+            cursor: 42,
+        },
     ]
+}
+
+fn letter_view(incoming: bool) -> LetterView {
+    LetterView {
+        event_id: 41,
+        at: 725.0,
+        from: "player_avatar".into(),
+        from_name: "镇长".into(),
+        to: "resident_bigfish".into(),
+        to_name: "大肥鱼".into(),
+        text: "今天海边风大，记得带件外套。".into(),
+        reply_to: None,
+        incoming,
+    }
 }
 
 fn prop_action() -> PropActionView {
@@ -1675,6 +1702,17 @@ pub fn client_samples() -> Vec<ClientMsg> {
             group: None,
             max_concurrent: None,
             per_minute: None,
+        },
+        ClientMsg::SendLetter {
+            request_id: "l1".into(),
+            world_id: "w1".into(),
+            to: "resident_bigfish".into(),
+            text: "今天海边风大，记得带件外套。".into(),
+        },
+        ClientMsg::GetLetters {
+            request_id: "l2".into(),
+            world_id: "w1".into(),
+            after: 40,
         },
     ]
 }

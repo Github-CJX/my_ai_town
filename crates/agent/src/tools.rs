@@ -17,6 +17,7 @@ use std::str::FromStr;
 mod action_arguments;
 mod goals;
 mod invitations;
+mod letters;
 pub mod limits;
 pub(crate) mod schema;
 pub(crate) use goals::completion_evidence;
@@ -37,6 +38,7 @@ pub enum ToolName {
     Interact,
     OfferInvitation,
     ReplyInvitation,
+    WriteLetter,
     WaitFor,
 }
 
@@ -63,6 +65,7 @@ impl ToolName {
             Self::Interact => "interact",
             Self::OfferInvitation => "offer_invitation",
             Self::ReplyInvitation => "reply_invitation",
+            Self::WriteLetter => "write_letter",
             Self::WaitFor => "wait_for",
         }
     }
@@ -78,7 +81,11 @@ impl ToolName {
     pub fn changes_world(self) -> bool {
         matches!(
             self,
-            Self::RunActions | Self::Interact | Self::OfferInvitation | Self::ReplyInvitation
+            Self::RunActions
+                | Self::Interact
+                | Self::OfferInvitation
+                | Self::ReplyInvitation
+                | Self::WriteLetter
         )
     }
     /// 查看或记目标：不动身体、不对人说话，也不是等待。
@@ -208,7 +215,7 @@ impl ToolSpec {
     }
 }
 
-pub const TOOLS: [ToolSpec; 14] = [
+pub const TOOLS: [ToolSpec; 15] = [
     ToolSpec {
         name: ToolName::ContextRead,
         description: || {
@@ -311,6 +318,14 @@ pub const TOOLS: [ToolSpec; 14] = [
         },
         parameters: schema::interact,
         exec: interact,
+    },
+    ToolSpec {
+        name: ToolName::WriteLetter,
+        description: || {
+            "给镇里的某个人写一封传讯（to 填名字，text 填原话）：不占身体、不要求两人在一处，睡着或忙着也能写。给从外面递信来的主人回信时也用它。".into()
+        },
+        parameters: schema::write_letter,
+        exec: letters::write,
     },
     ToolSpec {
         name: ToolName::WaitFor,

@@ -78,6 +78,8 @@ fn server_variants() -> Vec<String> {
         ResidentRemoved,
         ResidentKeySaved,
         ResidentBudgetSaved,
+        LetterSent,
+        Letters,
     })
 }
 
@@ -130,6 +132,8 @@ fn client_variants() -> Vec<String> {
         GetAgentLimits,
         SetAgentLimits,
         SetResidentBudget,
+        SendLetter,
+        GetLetters,
     })
 }
 

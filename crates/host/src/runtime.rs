@@ -210,6 +210,19 @@ impl Runtime {
                 ok: false,
                 message,
             },
+            ClientMsg::SendLetter { request_id, .. } => ServerMsg::LetterSent {
+                request_id: request_id.clone(),
+                ok: false,
+                message,
+                letter: None,
+            },
+            ClientMsg::GetLetters {
+                request_id, after, ..
+            } => ServerMsg::Letters {
+                request_id: request_id.clone(),
+                letters: Vec::new(),
+                cursor: *after,
+            },
             // 没有专用回执：门槛只可能拦下其中的 SetSpeed。
             ClientMsg::Avatar { .. }
             | ClientMsg::AvatarInput { .. }
@@ -493,6 +506,15 @@ impl Runtime {
                 max_concurrent,
                 per_minute,
             ),
+            SendLetter {
+                request_id,
+                to,
+                text,
+                ..
+            } => self.send_letter(request_id, to, text, connection, clients),
+            GetLetters {
+                request_id, after, ..
+            } => self.letters(request_id, after, connection, clients),
         }
     }
 
@@ -879,6 +901,8 @@ fn owner_action(msg: &ClientMsg) -> Option<(&'static str, &String)> {
     match msg {
         ClientMsg::SetResidentModel { resident, .. } => Some(("改村民用的模型", resident)),
         ClientMsg::SetResidentKey { resident, .. } => Some(("换村民的密钥", resident)),
+        ClientMsg::SendLetter { to, .. } => Some(("给她传讯", to)),
+        ClientMsg::GetLetters { .. } => None,
         ClientMsg::SetPersona { resident, .. } => Some(("改人设", resident)),
         ClientMsg::SetResidentAppearance { resident_id, .. } => Some(("改村民的样子", resident_id)),
         ClientMsg::SetResidentBody { resident_id, .. } => Some(("改村民的身体", resident_id)),
@@ -942,6 +966,8 @@ fn admin_action(msg: &ClientMsg) -> Option<&'static str> {
         | ClientMsg::GetNotebook { .. }
         | ClientMsg::GetNotebookDetail { .. }
         // 自己的村民自己管：这几条按登记表里的投放人判，见 owner_action。
+        | ClientMsg::SendLetter { .. }
+        | ClientMsg::GetLetters { .. }
         | ClientMsg::SetResidentModel { .. }
         | ClientMsg::SetResidentKey { .. }
         | ClientMsg::SetPersona { .. }
@@ -964,7 +990,9 @@ fn world_id_of(msg: &ClientMsg) -> Option<&str> {
         | ClientMsg::PlaceProp { world_id, .. }
         | ClientMsg::JoinResident { world_id, .. }
         | ClientMsg::SetResidentAppearance { world_id, .. }
-        | ClientMsg::SetResidentBody { world_id, .. } => Some(world_id),
+        | ClientMsg::SetResidentBody { world_id, .. }
+        | ClientMsg::SendLetter { world_id, .. }
+        | ClientMsg::GetLetters { world_id, .. } => Some(world_id),
         // 化身命令自己核对世界，查加入结果按世界编号查不到就返回空。
         ClientMsg::Avatar { .. }
         | ClientMsg::AvatarInput { .. }
@@ -1012,7 +1040,8 @@ fn requires_ready(msg: &ClientMsg) -> bool {
         | ClientMsg::PlaceProp { .. }
         | ClientMsg::JoinResident { .. }
         | ClientMsg::SetResidentAppearance { .. }
-        | ClientMsg::SetResidentBody { .. } => true,
+        | ClientMsg::SetResidentBody { .. }
+        | ClientMsg::SendLetter { .. } => true,
         ClientMsg::SetSpeed { speed, .. } => *speed > 0.0,
         ClientMsg::Content { command, .. } => !matches!(command, ContentCommand::Detail { .. }),
         ClientMsg::Avatar { .. }
@@ -1053,6 +1082,7 @@ fn requires_ready(msg: &ClientMsg) -> bool {
         | ClientMsg::SetAgentLimits { .. }
         | ClientMsg::RemoveResident { .. }
         | ClientMsg::SetResidentKey { .. }
-        | ClientMsg::SetResidentBudget { .. } => false,
+        | ClientMsg::SetResidentBudget { .. }
+        | ClientMsg::GetLetters { .. } => false,
     }
 }

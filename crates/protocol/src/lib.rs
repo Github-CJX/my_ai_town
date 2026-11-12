@@ -35,7 +35,7 @@ mod spatial;
 
 pub use actions::{
     ActionDraft, ActionGroup, ActionResult, ActionStatus, FactKind, GroupStatus, InventoryAction,
-    ReadableFact, WorldFact, WritingDraft,
+    LetterFact, LetterView, ReadableFact, WorldFact, WritingDraft,
 };
 pub use avatar::{
     ApproachPerson, AvatarActor, AvatarChatItem, AvatarCommand, AvatarGoal, AvatarInteraction,

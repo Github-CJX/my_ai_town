@@ -300,6 +300,8 @@ pub fn parse_template(text: &str) -> Result<TemplateFields, ModelError> {
         speech: string("speech"),
         background: string("background"),
         situation: String::new(),
+        // 他是她的什么人由投放的人自己填，不是模型编的
+        bond: String::new(),
         drives: string("drives"),
         interests: string("interests"),
         occupation: string("occupation"),
