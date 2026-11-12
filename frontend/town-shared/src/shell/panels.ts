@@ -271,6 +271,12 @@ export function createPanels(input: ShellInputs) {
     chooseModel: pages.residents.setJoinModel,
     connectModel: () => modelWait.connect(),
   })
+  // 账号档案是另一次请求，常常比名册晚回来：回来那一刻按新角色重画一次按角色收放的东西，
+  // 否则「邀请」这一格要等下一次名册变化才露面，空镇子的「请村民」也一直停在「等管理员」（见 D.48）
+  void avatar.accountReady().then(() => {
+    strip.refresh()
+    emptyTown.sync()
+  })
   worldSettings.subscribe(emptyTown.sync)
   models.subscribe(emptyTown.refresh)
   installBackToMaps(selectedMap, events, () => avatar.release())

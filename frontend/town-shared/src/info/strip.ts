@@ -234,13 +234,6 @@ export function createResidentStrip(deps: StripDeps) {
     const summary = `${rostered}/${order.length}/${attention}`
     if (summary !== counted) {
       counted = summary
-      // 没有「邀请」这一格时，空镇子整条没什么可看：连条一起收起来
-      add.hidden = !deps.canInvite()
-      root.hidden = !rostered || (!order.length && add.hidden)
-      // 空镇子没什么可收的：收起钮不出，收起过也照样露出「邀请」
-      fold.hidden = !order.length
-      root.classList.toggle('folded', folded && order.length > 0)
-      root.classList.toggle('many', order.length > MANY)
       count.textContent = `村民 ${order.length}`
       alerts.hidden = !attention
       alerts.textContent = String(attention)
@@ -249,9 +242,22 @@ export function createResidentStrip(deps: StripDeps) {
         `展开头像条：村民 ${order.length} 人${attention ? `，${attention} 人要留意` : ''}`
       )
     }
+    // 「邀请」和整条收不收看角色，跟上面的 summary 无关：账号档案是另一次请求，可能比名册晚回来，
+    // 只跟着 summary 变的话，它回来那一刻没人重画，「邀请」就时有时无（见 D.48）
+    syncAccess()
     mark()
     if (peekId) renderPeek()
     scheduleLayout()
+  }
+
+  /** 按角色收放「邀请」和整条：没有「邀请」这一格时，空镇子整条没什么可看，连条一起收起来；
+   *  空镇子没什么可收的，收起钮不出，收起过也照样露出「邀请」。幂等，每次重画都算一遍 */
+  function syncAccess() {
+    add.hidden = !deps.canInvite()
+    root.hidden = !rostered || (!order.length && add.hidden)
+    fold.hidden = !order.length
+    root.classList.toggle('folded', folded && order.length > 0)
+    root.classList.toggle('many', order.length > MANY)
   }
 
   /** 选中的人高亮：地图上点人、角色卡换人、提示卡「查看」都会改 */
@@ -465,6 +471,8 @@ export function createResidentStrip(deps: StripDeps) {
     },
     /** 选中的人变了：头像条跟着高亮 */
     select: mark,
+    /** 账号档案回来了：角色可能刚确定，重画一遍「邀请」和整条的显隐 */
+    refresh: render,
     dispose() {
       listeners.abort()
       watcher.disconnect()
@@ -475,5 +483,5 @@ export function createResidentStrip(deps: StripDeps) {
       root.remove()
       peek.remove()
     },
-  } satisfies ShellPanel & { select(): void }
+  } satisfies ShellPanel & { select(): void; refresh(): void }
 }
