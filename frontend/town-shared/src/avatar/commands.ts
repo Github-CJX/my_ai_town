@@ -1,5 +1,6 @@
 import type { ClientMsg } from '../protocol'
 import type { AvatarCommand, AvatarState } from './types'
+import { newId } from '../ids'
 /** One connection owns request receipts, timeout and mutation admission. */
 export function createAvatarCommands({
   context,
@@ -32,7 +33,8 @@ export function createAvatarCommands({
       stopMoving()
       pendingMutation = true
     }
-    const request_id = crypto.randomUUID()
+    // 非安全上下文（http://ip:port）没有 crypto.randomUUID，统一走 newId
+    const request_id = newId()
     const result = new Promise<boolean>((finish) => {
       const timer = window.setTimeout(() => {
         pending.delete(request_id)

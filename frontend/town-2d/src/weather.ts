@@ -1,6 +1,7 @@
 import type { Atlas } from 'town-shared/mapDocument'
 import type { ServerMsg } from 'town-shared/protocol'
 import { el } from 'town-shared/svg'
+import { newId } from 'town-shared/ids'
 import { OUTDOOR_SPACE, roomRect } from './map/grid'
 import { WEATHER_LEVELS } from './map/weatherLevels'
 import {
@@ -45,7 +46,8 @@ export class WeatherLayer {
   ) {
     const W = atlas.canvas.width,
       H = atlas.canvas.height
-    const id = `weather-mask-${crypto.randomUUID()}`
+    // 非安全上下文（http://ip:port）没有 crypto.randomUUID，统一走 newId
+    const id = `weather-mask-${newId()}`
     const mask = el('mask', {
       id,
       maskUnits: 'userSpaceOnUse',

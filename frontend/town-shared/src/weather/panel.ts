@@ -11,6 +11,7 @@ import {
 import { $, query } from '../dom'
 import './panel.css'
 import { iconLabel } from '../game/icons'
+import { newId } from '../ids'
 
 /** 控件只提交草案；显示的天气始终来自服务器回执或名册。 */
 export function createWeatherPanel(
@@ -116,7 +117,7 @@ export function createWeatherPanel(
     pending = {
       type: 'set_weather',
       world_id: view.world_id,
-      request_id: crypto.randomUUID(),
+      request_id: newId(),
       expected_revision: view.revision,
       mode,
       ...(mode === 'fixed' && isWeatherKind(kind.value) ? { kind: kind.value } : {}),
