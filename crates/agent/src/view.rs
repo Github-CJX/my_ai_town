@@ -243,6 +243,8 @@ impl ResidentRuntime {
                 .map(|i| interaction::summary(world, i))
                 .collect(),
             memories: memory_views(s, a),
+            // 身体与生命记录在世界那边，host 发这条消息时补上。
+            body_history: Vec::new(),
         })
     }
 }

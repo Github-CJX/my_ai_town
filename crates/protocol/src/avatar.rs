@@ -128,7 +128,8 @@ pub struct AvatarActor {
     pub activity: String,
     #[serde(serialize_with = "crate::sorted")]
     pub appearance: Appearance,
-    #[serde(serialize_with = "crate::sorted")]
+    /// 身体状态里会变的那部分；只增不改的生命记录不跟着每拍走，见 `crate::body_now`。
+    #[serde(serialize_with = "crate::body_now")]
     pub body: Option<BodyView>,
     pub busy: bool,
     pub id: String,

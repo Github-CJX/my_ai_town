@@ -259,3 +259,32 @@ fn need_rules_validate_tuning() {
     bad.labor_rate = 11.0;
     assert!(bad.validate(&rules).is_err());
 }
+
+/// 每拍都发的身体状态不带只增不改的生命记录（`protocol::body_now`）：第 4 天的小镇，
+/// 一位村民的记录已有四五 KB，跟着 10 Hz 的名册走就是每位旁观者几十 KB/s，慢的客户端追不上，
+/// 村民看起来会卡一下再窜。记录本身随 `resident_detail` 变了才发。
+#[test]
+fn the_life_history_ships_with_the_details_not_every_tick() {
+    let mut trimmed = 0;
+    let mut over_the_wire = 0;
+    for msg in server_samples() {
+        let json = serde_json::to_string(&msg).unwrap();
+        let per_tick =
+            json.contains("\"type\":\"roster\"") || json.contains("\"type\":\"avatar_state\"");
+        if per_tick && json.contains("\"history\":[{") {
+            trimmed += 1;
+            panic!("每拍都发的 {json:.120} 里带着生命记录");
+        }
+        if json.contains("\"type\":\"roster\"") && json.contains("\"history\":[]") {
+            trimmed += 1;
+        }
+        if json.contains("\"type\":\"resident_detail\"") && json.contains("\"body_history\":[{") {
+            over_the_wire += 1;
+        }
+    }
+    assert!(trimmed > 0, "样本里没有身体状态，测不到");
+    assert!(
+        over_the_wire > 0,
+        "细节里要带着生命记录，否则前端就没有记录了"
+    );
+}

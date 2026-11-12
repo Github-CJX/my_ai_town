@@ -78,7 +78,12 @@ pub struct RosterMember {
     /// 身体需求实时值（观察仪表用；无需求的个体为空）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<NeedState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// 身体状态里会变的那部分；只增不改的生命记录不跟着每拍走，见 `crate::body_now`。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::body_now"
+    )]
     pub body: Option<BodyView>,
     /// 当前活动与后续计划的只读清单（观察仪表用）
     pub plan: PlanView,

@@ -1,5 +1,5 @@
 //! 观察仪的 Agent 投影与调用额度、用量、请求台账。只读，不作为村民观察输入。
-use crate::{ActionResult, InteractionStatus, VerbKind, WorldFact};
+use crate::{ActionResult, BodyEvent, InteractionStatus, VerbKind, WorldFact};
 use serde::{Deserialize, Serialize};
 
 /// 会话停止的原因类别。前三种让全镇暂停：停下的村民不再做决定，世界却照走的话，
@@ -201,7 +201,7 @@ pub struct ResidentAgentView {
     pub stale_replies: u64,
 }
 
-/// 村民那边的慢变量：持续目标、最近的动作结果、进行中的互动和记着的事。
+/// 村民那边的慢变量：持续目标、最近的动作结果、进行中的互动、记着的事，以及身体与生命记录。
 /// 体积大、变得慢：不跟着每拍的名册走，变了才单独发一次（见 `ServerMsg::ResidentDetail`）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResidentDetailView {
@@ -213,6 +213,9 @@ pub struct ResidentDetailView {
     pub interactions: Vec<ResidentInteractionView>,
     #[serde(default)]
     pub memories: Vec<ResidentMemoryView>,
+    /// 身体与生命记录（受伤、生病、失能、复活……）：只增不改的日志，名册每拍只发会变的那部分。
+    #[serde(default)]
+    pub body_history: Vec<BodyEvent>,
 }
 
 /// 观察仪里的一条动作结果：动作结果本身加上动作种类。

@@ -109,3 +109,19 @@ pub fn sorted<T: serde::Serialize, S: serde::Serializer>(
         .map_err(serde::ser::Error::custom)?
         .serialize(serializer)
 }
+
+/// 每拍都发的身体状态：把只增不改的生命记录换成空数组，记录本身由
+/// [`ResidentDetailView::body_history`](crate::ResidentDetailView) 变了才发。
+///
+/// 3 位村民、第 4 天的小镇，每人的记录已有四五 KB；跟着 10 Hz 的名册走，一份名册就是 20 KB，
+/// 慢的客户端追不上，村民看起来会卡一下再窜。
+pub fn body_now<S: serde::Serializer>(
+    body: &Option<crate::BodyView>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let trimmed = body.as_ref().map(|body| crate::BodyView {
+        history: Vec::new(),
+        ..body.clone()
+    });
+    sorted(&trimmed, serializer)
+}

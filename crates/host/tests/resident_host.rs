@@ -417,8 +417,8 @@ fn residents_without_a_model_wait_until_one_is_chosen() {
     );
 }
 
-/// 名册每拍都发，只带这一拍会变的状态；目标、动作结果、互动和记忆体积大、变得慢，
-/// 单独发 resident_detail，变了才发，新连接补发一次。
+/// 名册每拍都发，只带这一拍会变的状态；目标、动作结果、互动、记忆和身体与生命记录体积大、
+/// 变得慢，单独发 resident_detail，变了才发，新连接补发一次。
 #[test]
 fn the_roster_sends_only_what_changes_and_details_go_separately() {
     let mut town = Town::new();
@@ -429,7 +429,13 @@ fn the_roster_sends_only_what_changes_and_details_go_separately() {
     let detail = until(&mut ws, |m| {
         m["type"] == "resident_detail" && m["resident"] == id
     });
-    for field in ["goals", "results", "interactions", "memories"] {
+    for field in [
+        "goals",
+        "results",
+        "interactions",
+        "memories",
+        "body_history",
+    ] {
         assert!(
             detail["detail"][field].is_array(),
             "细节要单独送来：{field} {detail}"
@@ -447,6 +453,14 @@ fn the_roster_sends_only_what_changes_and_details_go_separately() {
         assert!(
             member["resident_agent"].get(field).is_none(),
             "名册不该每拍重发 {field}：{member}"
+        );
+    }
+    // 身体里只增不改的生命记录也不跟着每拍走：第 4 天一位村民就有四五 KB。
+    if member["body"].is_object() {
+        assert_eq!(
+            member["body"]["history"],
+            serde_json::json!([]),
+            "名册里的身体记录要留空：{member}"
         );
     }
     let size = serde_json::to_string(&member).unwrap().len();

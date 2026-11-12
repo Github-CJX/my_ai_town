@@ -1,6 +1,6 @@
-// 村民的目标、动作结果、互动和记忆体积大、变得慢：名册每拍只带状态，这些变了才单独发一次
+// 村民的目标、动作结果、互动、记忆和身体记录体积大、变得慢：名册每拍只带状态，这些变了才单独发一次
 // （resident_detail）。这里按村民编号记下最新的一份，合并回每拍的名册帧，面板照旧读
-// member.resident_agent，不用关心它是分几路送来的。
+// member.resident_agent / member.body，不用关心它是分几路送来的。
 import type {
   ResidentAgentFull,
   ResidentAgentView,
@@ -14,7 +14,10 @@ export type DetailedMember = Omit<RosterMember, 'resident_agent'> & {
   resident_agent?: ResidentAgentFull
 }
 
-const EMPTY: ResidentDetailView = {
+/** 细节里并进 resident_agent 的那几项；身体记录并回 member.body.history */
+type AgentDetail = Omit<ResidentDetailView, 'body_history'>
+
+const EMPTY: AgentDetail = {
   goals: [],
   results: [],
   interactions: [],
@@ -35,9 +38,16 @@ export function forgetDetails() {
 
 /** 把单独发来的细节并进这位成员；还没收到细节时给空列表，面板不用判空 */
 export function withDetail(member: RosterMember): DetailedMember {
+  const saved = details.get(member.id)
+  const detail: AgentDetail = saved ?? EMPTY
+  const body =
+    member.body && saved?.body_history.length
+      ? { ...member.body, history: saved.body_history }
+      : member.body
   const agent: ResidentAgentView | undefined = member.resident_agent
-  // 没有会话的成员本来就不带 resident_agent，类型上已经是 DetailedMember
-  if (!agent) return member as DetailedMember
-  const detail = details.get(member.id) ?? EMPTY
-  return { ...member, resident_agent: { ...agent, ...detail } }
+  return {
+    ...member,
+    body,
+    resident_agent: agent ? { ...agent, ...detail } : agent,
+  }
 }

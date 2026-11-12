@@ -263,10 +263,12 @@ export interface ResidentDetailView {
     replaces: number[]
     events: WorldFact[]
   }[]
+  /** 身体与生命记录：只增不改的日志，名册每拍只发会变的那部分，这里变了才发 */
+  body_history: BodyView['history']
 }
 
 /** 面板读的那一份：名册里的状态加上单独发来的细节；细节还没到时是空列表 */
-export type ResidentAgentFull = ResidentAgentView & ResidentDetailView
+export type ResidentAgentFull = ResidentAgentView & Omit<ResidentDetailView, 'body_history'>
 
 /** 小镇当前使用的服务商与模型 */
 export interface ActiveModelChoice {

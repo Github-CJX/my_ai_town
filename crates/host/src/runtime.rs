@@ -623,19 +623,35 @@ impl Runtime {
         self.avatar_publish(clients);
     }
 
-    /// 村民的慢变量（目标、动作结果、互动、记忆）：每 10 拍（约 1 秒）算一次，变了才发。
+    /// 村民的慢变量（目标、动作结果、互动、记忆、身体与生命记录）：每 10 拍（约 1 秒）算一次，变了才发。
     /// 名册每拍都发，放不下这些大字段——3 位村民时一份名册 36 KB，10 Hz 就是每位旁观者 360 KB/s。
     fn publish_details(&mut self, clients: &Clients) {
         self.ticks = self.ticks.wrapping_add(1);
         if self.ticks % DETAIL_REFRESH_TICKS != 0 {
             return;
         }
-        let details = self.driver.details(&self.world);
-        let live: std::collections::BTreeSet<&str> =
-            details.iter().map(|(id, _)| id.as_str()).collect();
+        // 有会话的村民有目标、记忆这些；没会话的（还没选模型的）也照样有身体，记录一样要跟上。
+        let mut details = self.driver.details(&self.world);
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (id, _) in &details {
+            seen.insert(id.clone());
+        }
+        for registration in self.population.ordered() {
+            if seen.insert(registration.id.clone()) {
+                details.push((
+                    registration.id.clone(),
+                    protocol::ResidentDetailView::default(),
+                ));
+            }
+        }
         // 已经不在小镇里的村民：把上次发的记下来那条删掉，免得下次同名的人被当成「没变」。
-        self.details_sent.retain(|id, _| live.contains(id.as_str()));
-        for (resident, detail) in details {
+        self.details_sent.retain(|id, _| seen.contains(id.as_str()));
+        for (resident, mut detail) in details {
+            detail.body_history = self
+                .world
+                .body_view(&resident)
+                .map(|body| body.history)
+                .unwrap_or_default();
             let text = serde_json::to_string(&detail).unwrap_or_default();
             if self
                 .details_sent

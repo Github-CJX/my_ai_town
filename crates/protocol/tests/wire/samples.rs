@@ -114,6 +114,12 @@ fn detail_view() -> ResidentDetailView {
                 }),
             }],
         }],
+        body_history: vec![BodyEvent {
+            at: 400.0,
+            kind: BodyEventKind::Condition,
+            source: "摔了一跤".into(),
+            text: "出现受伤".into(),
+        }],
     }
 }
 
