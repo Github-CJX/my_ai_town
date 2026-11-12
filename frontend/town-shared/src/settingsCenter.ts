@@ -82,6 +82,12 @@ export function initSettingsCenter(deps: CenterDeps) {
   let residents: ResidentContext[] = []
   /** 村民 → 投放他的账号：普通账号只编辑自己的村民 */
   const owners = new Map<string, string>()
+  /** 最近一次收到的人口登记（连别人的村民一起）：角色明确后要按新角色再筛一遍 */
+  let registered: { id: string; name: string; owner?: string }[] = []
+  /** 角色要等账号档案回来才知道。这一层是在化身之前建好的（`admin` 闭包指着后面的 `const avatar`），
+   *  创建时绝不能问角色，先按管理员算（本机单人时的老行为）；`applyRole()` 一叫才算数。 */
+  let roleReady = false
+  const asAdmin = () => !roleReady || deps.admin()
   /** 村民组正在编辑的村民 */
   let current: ResidentContext | null = null
   /** 村民 → 使用的模型；还没读到的不在表里 */
@@ -147,19 +153,22 @@ export function initSettingsCenter(deps: CenterDeps) {
 
   /** 普通账号看得到的页：村民子页和游戏设置；小镇、模型服务、限额、重置只有管理员有 */
   const memberGroups = new Set<SettingsPage['group']>(['town', 'model', 'danger'])
-  const reachable = (p: SettingsPage) => deps.admin() || !memberGroups.has(p.group)
+  const reachable = (p: SettingsPage) => asAdmin() || !memberGroups.has(p.group)
   const firstReachable = () => pages.find(reachable) ?? pages[0]
   /** 人多时村民组里只留自己的那几位（管理员看全部） */
   const mine = (r: { id: string }) => {
-    if (deps.admin()) return true
+    if (asAdmin()) return true
     const me = deps.me()
     return !!me && owners.get(r.id) === me
   }
   /** 按角色收放目录：账号档案回来才能定，所以进设定和人口变化时各算一次 */
   function applyRole() {
+    roleReady = true
     const admin = deps.admin()
     nav?.setGroups({ town: admin, model: admin, game: true, danger: admin })
     nav?.setEmptyText(admin ? '还没有村民' : '你还没有村民在镇上')
+    // 人口登记可能先到（那时还按管理员收着全部），角色一明确就按新的筛一遍
+    if (registered.length) fillResidents(registered)
     const page = pageOf(currentId)
     if (page && !reachable(page)) showPage(firstReachable().id)
   }
@@ -202,6 +211,37 @@ export function initSettingsCenter(deps: CenterDeps) {
       if (!bindings.has(r.id)) deps.send({ type: 'get_agent_config', resident: r.id })
   }
 
+  /** 把一份人口登记装进中心：按角色留下自己的村民，别人的子页一并删掉 */
+  function fillResidents(list: { id: string; name: string; owner?: string }[]) {
+    owners.clear()
+    for (const r of list) if (r.owner) owners.set(r.id, r.owner)
+    // 普通账号只编辑自己投放的村民：别人的村民在目录里不出现，也进不去
+    residents = list.filter(mine).map((r) => ({ id: r.id, name: r.name }))
+    const present = new Set(residents.map((r) => r.id))
+    let removedCurrent = false
+    for (const [id, group] of residentPages) {
+      if (present.has(id)) continue
+      residentPages.delete(id)
+      bindings.delete(id)
+      for (const page of group) {
+        page.el.remove()
+        const index = pages.indexOf(page)
+        if (index >= 0) pages.splice(index, 1)
+        if (page.id === currentId) removedCurrent = true
+      }
+    }
+    if (current && !present.has(current.id)) current = null
+    if (!current) {
+      const selected = deps.selectedResident()
+      current = residents.find((r) => r.id === selected?.id) ?? residents[0] ?? null
+    }
+    syncResidentNav()
+    providers.render()
+    if (visible()) requestBindings()
+    if (removedCurrent) showPage(firstReachable().id)
+    else refreshDirty()
+  }
+
   function pickResident(id: string) {
     const r = residents.find((item) => item.id === id)
     if (!r) return
@@ -214,7 +254,7 @@ export function initSettingsCenter(deps: CenterDeps) {
 
   function showPage(id: string) {
     // 普通账号点不到小镇、模型服务、限额和重置：从别处（警告条上的「去配置」）进来的也换成看得到的页
-    if (!deps.admin() && memberGroups.has(pageOf(id)?.group ?? 'town')) id = firstReachable().id
+    if (!asAdmin() && memberGroups.has(pageOf(id)?.group ?? 'town')) id = firstReachable().id
     // 别的页上「去配置此服务」：跳到模型服务页并点开那一行
     if (id.startsWith('prov-')) {
       providers.expand(id.slice('prov-'.length))
@@ -291,33 +331,8 @@ export function initSettingsCenter(deps: CenterDeps) {
     },
     /** 人口登记变化：不在村里的村民，子页一并删掉；村民组换到还在的人 */
     setResidents(list: { id: string; name: string; owner?: string }[]) {
-      owners.clear()
-      for (const r of list) if (r.owner) owners.set(r.id, r.owner)
-      // 普通账号只编辑自己投放的村民：别人的村民在目录里不出现，也进不去
-      residents = list.filter(mine).map((r) => ({ id: r.id, name: r.name }))
-      const present = new Set(residents.map((r) => r.id))
-      let removedCurrent = false
-      for (const [id, group] of residentPages) {
-        if (present.has(id)) continue
-        residentPages.delete(id)
-        bindings.delete(id)
-        for (const page of group) {
-          page.el.remove()
-          const index = pages.indexOf(page)
-          if (index >= 0) pages.splice(index, 1)
-          if (page.id === currentId) removedCurrent = true
-        }
-      }
-      if (current && !present.has(current.id)) current = null
-      if (!current) {
-        const selected = deps.selectedResident()
-        current = residents.find((r) => r.id === selected?.id) ?? residents[0] ?? null
-      }
-      syncResidentNav()
-      providers.render()
-      if (visible()) requestBindings()
-      if (removedCurrent) showPage(firstReachable().id)
-      else refreshDirty()
+      registered = list
+      fillResidents(list)
     },
     showPage,
     refreshDirty,
