@@ -17,6 +17,10 @@ export const INTENT_GROUP_AND_C2C = 1 << 25
 
 /** 心跳 ACK 收不到时的容忍次数，超过就重连。 */
 const MAX_MISSED_ACK = 2
+/** 重连间隔的上限：QQ 那边限流时只是一阵子，等下去了自然会好，别退到几小时。 */
+const MAX_WAIT_MS = 60_000
+/** 「接口调用超过频率限制」(100017) 这类错要慢慢来：一分钟一次，够快也不会再撞上去。 */
+const RATE_LIMIT = /100017|频率限制|too many requests?|rate limit/i
 
 export const OP = {
   DISPATCH: 0,
@@ -119,7 +123,7 @@ export function maskId(id) {
 /**
  * 一条连接。上层只关心 `onEvent(event)`，重连、心跳、Resume 都在里面。
  *
- * 返回 `{ start, stop }`；`start()` 一直挂着直到 `stop()` 或重试次数用尽。
+ * 返回 `{ start, stop }`；`start()` 一直挂着直到 `stop()`（或者调用方自己把 `maxAttempts` 限死）。
  */
 export function createGateway({
   token,
@@ -130,7 +134,7 @@ export function createGateway({
   onLog = () => {},
   onReady = () => {},
   WebSocketImpl = globalThis.WebSocket,
-  maxAttempts = 5,
+  maxAttempts = Infinity,
   sleep = defaultSleep,
 } = {}) {
   if (typeof WebSocketImpl !== 'function') throw new Error('这个 Node 没有 WebSocket')
@@ -152,10 +156,38 @@ export function createGateway({
   let sessionId = null
   let stopped = false
   let attempt = 0
+  let lastError = ''
+
+  /** 第 n 次失败后等多久：限流就固定一分钟，别的按 1、2、4…秒退避，最多一分钟。 */
+  const waitFor = (n, message) => {
+    if (RATE_LIMIT.test(message)) return MAX_WAIT_MS
+    return Math.min(MAX_WAIT_MS, 1000 * 2 ** Math.min(n - 1, 6))
+  }
 
   const clearHeartbeat = () => {
     if (heartbeat) clearInterval(heartbeat)
     heartbeat = null
+  }
+
+  /**
+   * 一次失败之后的重试。断线、取地址被限流、换票失败都走这里。
+   *
+   * 不永久放弃：QQ 那边限流只是一阵子（我们连续重启几次就会撞上），凭证配错了也能在
+   * 管理服务里改完就接上，不该逼人再重启一次进程。代价是日志：同一句错只记一次，
+   * 之后每十次记一次，免得把真事故淹掉。
+   */
+  const retry = (message) => {
+    if (stopped) return
+    const wait = waitFor(attempt, message)
+    if (message !== lastError || attempt % 10 === 0) {
+      lastError = message
+      onLog(`连网关失败：${message}；${Math.round(wait / 1000)} 秒后再试（第 ${attempt} 次）`)
+    }
+    if (attempt >= maxAttempts) {
+      onLog(`连续 ${attempt} 次没连上，放弃`)
+      return
+    }
+    void sleep(wait).then(connect)
   }
 
   const close = () => {
@@ -216,6 +248,7 @@ export function createGateway({
       if (name === 'READY') {
         sessionId = payload?.d?.session_id ?? null
         attempt = 0
+        lastError = ''
         onReady(payload?.d ?? {})
         onLog(`就绪：${payload?.d?.user?.username ?? '(无名)'}`)
         return
@@ -265,20 +298,10 @@ export function createGateway({
         clearHeartbeat()
         socket = null
         if (stopped) return
-        if (attempt >= maxAttempts) {
-          onLog(`连续 ${attempt} 次没连上，放弃`)
-          return
-        }
-        const wait = Math.min(30_000, 1000 * 2 ** (attempt - 1))
-        onLog(`${Math.round(wait / 1000)} 秒后重试`)
-        void sleep(wait).then(connect)
+        retry('连接断了')
       })
     } catch (error) {
-      onLog(`连网关失败：${error instanceof Error ? error.message : String(error)}`)
-      if (attempt >= maxAttempts) return
-      const wait = Math.min(30_000, 1000 * 2 ** (attempt - 1))
-      await sleep(wait)
-      if (!stopped) await connect()
+      retry(error instanceof Error ? error.message : String(error))
     }
   }
 
