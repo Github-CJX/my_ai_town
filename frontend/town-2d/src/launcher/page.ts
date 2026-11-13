@@ -645,7 +645,14 @@ function renderQq(data: QqBindings) {
 }
 
 async function loadQq() {
-  const data = await readQqBindings()
+  let data: QqBindings | null
+  try {
+    data = await readQqBindings()
+  } catch (error) {
+    // 别把读失败画成「没有接口」：401/500 要看得到原因，否则又是一个空下拉框
+    qqSay(`读不到 QQ 绑定：${error instanceof Error ? error.message : String(error)}`)
+    return
+  }
   if (!data) {
     qqSay('这个版本的管理服务还没有 QQ 绑定接口（要新版管理服务）。')
     return

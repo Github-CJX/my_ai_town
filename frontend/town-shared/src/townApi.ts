@@ -355,12 +355,32 @@ export type QqBindings = {
   pending: QqPending[]
 }
 
-/** 我的 agent 和它们的 QQ 绑定；管理服务还没装这一块（老版本）时返回 null */
+/**
+ * QQ 绑定接口在 `/api/qq` 下，不在 `/api/towns` 里（它们绑的是「谁的 QQ 找哪位村民」，
+ * 跟着账号走却不归小镇管），所以不能用 `home()`——它会把前缀拼成 `/api/towns/qq/binding`，
+ * 那样只会 404，网页上就成了「没有接口」+ 空下拉框。
+ */
+async function bot<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`/api/qq${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Town-Client': '1' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const data = await response.json().catch(() => null)
+  if (response.ok) return data as T
+  const error = Error(data?.error ?? `小镇服务返回 ${response.status}`)
+  Object.assign(error, { status: response.status })
+  if (data?.code) Object.assign(error, { code: data.code })
+  throw error
+}
+
+/** 我的 agent 和它们的 QQ 绑定；老版本管理服务（404，没这一块）时返回 null，别的错照抛 */
 export async function readQqBindings(): Promise<QqBindings | null> {
   try {
-    return await home<QqBindings>('/qq/binding')
-  } catch {
-    return null
+    return await bot<QqBindings>('/binding')
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return null
+    throw error
   }
 }
 
@@ -371,12 +391,12 @@ export function bindQq(body: {
   pending?: string
   town?: string
 }): Promise<QqBindings> {
-  return home('/qq/binding', body)
+  return bot('/binding', body)
 }
 
 /** 解开：之后那个 QQ 发来的话就当陌生号码，不理 */
 export function unbindQq(body: { agent: string; town?: string }): Promise<QqBindings> {
-  return home('/qq/unbind', body)
+  return bot('/unbind', body)
 }
 
 /** 某个小镇现在能用的村民模板：小镇没在运行时拿不到 */
